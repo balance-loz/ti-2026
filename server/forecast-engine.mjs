@@ -10,6 +10,13 @@ export const ROUND_ONE = [
   ["l1ga", "yandex"], ["liquid", "vg"], ["parivision", "resilience"], ["spirit", "xtreme"],
 ];
 
+export const SWISS_GROUPS = {
+  A: ["parivision", "nigma", "falcons", "og", "betboom", "lgd", "1w", "resilience"],
+  B: ["yandex", "xtreme", "liquid", "vg", "aurora", "gamerlegion", "spirit", "l1ga"],
+};
+export const SWISS_GROUP_BY_TEAM = Object.fromEntries(Object.entries(SWISS_GROUPS).flatMap(([group, ids]) => ids.map((id) => [id, group])));
+export const swissBucketKey = (id, wins, losses, round) => `${round <= 3 ? SWISS_GROUP_BY_TEAM[id] : "ALL"}:${wins}-${losses}`;
+
 const pairKey = (a, b) => [a, b].sort().join("|");
 const storedProbability = (a, b, answers) => {
   const key = pairKey(a, b); const value = answers[key];
@@ -102,7 +109,7 @@ export function runForecast(answers, iterations = 100000, seed = Math.floor(Math
       if (round === 1) ROUND_ONE.filter(([a, b]) => !occupied.has(a) && !occupied.has(b)).forEach(([a, b]) => play(a, b));
       else {
         const buckets = new Map();
-        for (const team of TEAMS.filter((item) => records[item.id].wins < 4 && records[item.id].losses < 4 && !occupied.has(item.id))) { const key = `${records[team.id].wins}-${records[team.id].losses}`; buckets.set(key, [...(buckets.get(key) || []), team.id]); }
+        for (const team of TEAMS.filter((item) => records[item.id].wins < 4 && records[item.id].losses < 4 && !occupied.has(item.id))) { const key = swissBucketKey(team.id, records[team.id].wins, records[team.id].losses, round); buckets.set(key, [...(buckets.get(key) || []), team.id]); }
         for (const ids of buckets.values()) pairBucket(ids, records, random).forEach(([a, b]) => play(a, b));
       }
     }
@@ -119,5 +126,5 @@ export function runForecast(answers, iterations = 100000, seed = Math.floor(Math
   const teams = TEAMS.map((team) => ({ ...team, qualify: 100 * (totals[team.id].direct + totals[team.id].viaPlayin) / iterations, direct: 100 * totals[team.id].direct / iterations, playin: 100 * totals[team.id].playin / iterations, viaPlayin: 100 * totals[team.id].viaPlayin / iterations, out: 100 * totals[team.id].out / iterations, avgWins: totals[team.id].wins / iterations, avgLosses: totals[team.id].losses / iterations })).sort((a, b) => b.qualify - a.qualify || b.direct - a.direct);
   const scenarios = [...scenarioCounts].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([signature, count]) => ({ ...JSON.parse(signature), probability: 100 * count / iterations }));
   const playinMatchups = [...matchupCounts].sort((a, b) => b[1].count - a[1].count).slice(0, 10).map(([key, value]) => { const [a, b] = key.split("|"); return { a, b, probability: 100 * value.count / iterations, aWinProbability: 100 * value.firstWins / value.count }; });
-  return { teams, scenarios, playinMatchups, iterations, seed, uniqueBrackets: bracketHashes.size, duplicateRate: 100 * (1 - bracketHashes.size / iterations) };
+  return { teams, scenarios, playinMatchups, iterations, seed, uniqueBrackets: bracketHashes.size, duplicateRate: 100 * (1 - bracketHashes.size / iterations), formatVersion: "hidden-groups-r1-r3-v1" };
 }

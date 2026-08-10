@@ -2,7 +2,17 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { completedSeriesFromMaps } from "../server/live-series.mjs";
-import { buildForecastSource, runForecast } from "../server/forecast-engine.mjs";
+import { buildForecastSource, ROUND_ONE, runForecast, SWISS_GROUPS, SWISS_GROUP_BY_TEAM, swissBucketKey } from "../server/forecast-engine.mjs";
+
+test("first three Swiss rounds are restricted to the revealed groups", () => {
+  const participants = [...SWISS_GROUPS.A, ...SWISS_GROUPS.B];
+  assert.equal(SWISS_GROUPS.A.length, 8);
+  assert.equal(SWISS_GROUPS.B.length, 8);
+  assert.equal(new Set(participants).size, 16);
+  for (const [teamA, teamB] of ROUND_ONE) assert.equal(SWISS_GROUP_BY_TEAM[teamA], SWISS_GROUP_BY_TEAM[teamB]);
+  assert.notEqual(swissBucketKey("1w", 1, 0, 2), swissBucketKey("aurora", 1, 0, 2));
+  assert.equal(swissBucketKey("1w", 2, 1, 4), swissBucketKey("aurora", 2, 1, 4));
+});
 
 test("statistics contain every TI matchup and calibrated methodology", async () => {
   const stats = JSON.parse(await readFile("public/team-stats.json", "utf8"));
@@ -63,5 +73,6 @@ test("server forecast can create an automatic snapshot payload", async () => {
   const result = runForecast(probabilities, 100, 123, { stats, matches: [] });
   assert.equal(result.teams.length, 16);
   assert.equal(result.iterations, 100);
+  assert.equal(result.formatVersion, "hidden-groups-r1-r3-v1");
   assert.equal(result.teams.filter((team) => team.qualify > 0).length > 0, true);
 });

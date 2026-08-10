@@ -104,6 +104,7 @@ type SimulationResult = {
   seed: number;
   uniqueBrackets: number;
   duplicateRate: number;
+  formatVersion?: string;
 };
 
 type LikelyRound = { opponent: string; won: boolean; fixed: boolean; probability: number } | null;
@@ -200,6 +201,13 @@ const ROUND_ONE: [string, string][] = [
   ["parivision", "resilience"],
   ["spirit", "xtreme"],
 ];
+
+const SWISS_GROUPS = {
+  A: ["parivision", "nigma", "falcons", "og", "betboom", "lgd", "1w", "resilience"],
+  B: ["yandex", "xtreme", "liquid", "vg", "aurora", "gamerlegion", "spirit", "l1ga"],
+} as const;
+const SWISS_GROUP_BY_TEAM = Object.fromEntries(Object.entries(SWISS_GROUPS).flatMap(([group, ids]) => ids.map((id) => [id, group]))) as Record<string, "A" | "B">;
+const swissBucketKey = (id: string, wins: number, losses: number, round: number) => `${round <= 3 ? SWISS_GROUP_BY_TEAM[id] : "ALL"}:${wins}-${losses}`;
 
 const ALL_PAIRS: [string, string][] = (() => {
   const firstRoundKeys = new Set(ROUND_ONE.map(([a, b]) => pairKey(a, b)));
@@ -485,7 +493,7 @@ function buildLikelyBracket(answers: AnswerMap, liveMatches: LiveMatch[]): Likel
     else {
       const buckets = new Map<string, string[]>();
       TEAMS.filter((team) => records[team.id].wins < 4 && records[team.id].losses < 4 && !occupied.has(team.id)).forEach((team) => {
-        const key = `${records[team.id].wins}-${records[team.id].losses}`;
+        const key = swissBucketKey(team.id, records[team.id].wins, records[team.id].losses, round);
         buckets.set(key, [...(buckets.get(key) ?? []), team.id]);
       });
       [...buckets.values()].forEach((ids) => deterministicPairs(ids, records, scores).forEach(([a, b]) => play(round, a, b)));
@@ -600,7 +608,7 @@ function runSimulation(
       const buckets = new Map<string, string[]>();
       active.forEach((team) => {
         const record = records[team.id];
-        const key = `${record.wins}-${record.losses}`;
+        const key = swissBucketKey(team.id, record.wins, record.losses, round);
         buckets.set(key, [...(buckets.get(key) ?? []), team.id]);
       });
 
@@ -696,7 +704,7 @@ function runSimulation(
       };
     });
 
-  return { teams, scenarios, playinMatchups, iterations, seed, uniqueBrackets: uniqueBracketHashes.size, duplicateRate: 100 * (1 - uniqueBracketHashes.size / iterations) };
+  return { teams, scenarios, playinMatchups, iterations, seed, uniqueBrackets: uniqueBracketHashes.size, duplicateRate: 100 * (1 - uniqueBracketHashes.size / iterations), formatVersion: "hidden-groups-r1-r3-v1" };
 }
 
 function TeamMark({ team, small = false }: { team: Team; small?: boolean }) {
@@ -1101,7 +1109,7 @@ export default function Home() {
           {snapshots.length ? <div className="snapshot-list">{snapshots.map((snapshot) => {
             const evaluation = snapshotEvaluation(snapshot, completedLiveMatches);
             return <details key={snapshot.id}>
-              <summary><time>{new Date(snapshot.created_at).toLocaleString("ru-RU")}</time><b>{snapshot.trigger === "manual_run" ? "ручной прогон" : snapshot.trigger.startsWith("pre_") ? "до начала раунда" : snapshot.trigger.startsWith("auto_") ? "после результата" : snapshot.trigger} · {snapshot.forecast_mode === "mixed" ? `смесь ${snapshot.opinion_weight}% мнения` : snapshot.forecast_mode === "stats" ? "только статистика" : "только мнение"}</b><span>{evaluation.count ? `${evaluation.correct}/${evaluation.count} верно` : "ждёт новых матчей"}</span></summary>
+              <summary><time>{new Date(snapshot.created_at).toLocaleString("ru-RU")}</time><b>{snapshot.trigger === "manual_run" ? "ручной прогон" : snapshot.trigger.startsWith("pre_") ? "до начала раунда" : snapshot.trigger.startsWith("auto_") ? "после результата" : snapshot.trigger} · {snapshot.forecast_mode === "mixed" ? `смесь ${snapshot.opinion_weight}% мнения` : snapshot.forecast_mode === "stats" ? "только статистика" : "только мнение"} · {snapshot.result.formatVersion === "hidden-groups-r1-r3-v1" ? "группы R1–R3" : "старый формат"}</b><span>{evaluation.count ? `${evaluation.correct}/${evaluation.count} верно` : "ждёт новых матчей"}</span></summary>
               <div className="snapshot-metrics">
                 <div><b>{snapshot.iterations.toLocaleString("ru-RU")}</b><span>прогонов</span></div>
                 <div><b>{snapshot.result.uniqueBrackets?.toLocaleString("ru-RU") ?? "—"}</b><span>уникальных путей</span></div>
@@ -1226,7 +1234,7 @@ export default function Home() {
             <p className="eyebrow">МОНТЕ-КАРЛО</p>
             <h3>Развилка каждого<br />следующего раунда</h3>
             <p className="muted">
-              Внутри одинакового счёта соперник выбирается случайно. Повторные встречи исключаются, пока это возможно.
+              В раундах 1–3 соперник с тем же счётом выбирается случайно только внутри своей группы. В раундах 4–5 группы объединяются. Повторные встречи исключаются, пока это возможно.
             </p>
             <ul>
               <li><span>01</span> Ваши точные вероятности</li>
@@ -1267,14 +1275,22 @@ export default function Home() {
           <span className="section-note">{result ? <>{result.iterations.toLocaleString("ru-RU")} независимых сеток · ~{result.uniqueBrackets.toLocaleString("ru-RU")} уникальных<br />погрешность до ±{samplingMargin(result.iterations).toFixed(2)} п.п.</> : "Готовим первый прогноз…"}</span>
         </div>
 
+        <div className="swiss-groups" aria-label="Скрытые группы первых трёх раундов">
+          {Object.entries(SWISS_GROUPS).map(([group, ids]) => <article key={group}>
+            <header><div><span>СКРЫТАЯ ГРУППА</span><b>{group === "A" ? "A" : "Б"}</b></div><small>только раунды 1–3</small></header>
+            <div>{ids.map((id) => <span key={id}><TeamMark team={getTeam(id)} small /><strong>{getTeam(id).name}</strong></span>)}</div>
+          </article>)}
+        </div>
+
         <div className="likely-bracket">
-          <div className="likely-bracket__head"><div><p className="eyebrow">ВЕРОЯТНЕЙШИЙ СЦЕНАРИЙ</p><h3>Одна конкретная сетка</h3></div><span>Фаворит выигрывает каждый матч; внутри одинакового счёта выбрана детерминированная жеребьёвка без реваншей. Фактические результаты отмечены точкой.</span></div>
+          <div className="likely-bracket__head"><div><p className="eyebrow">ВЕРОЯТНЕЙШИЙ СЦЕНАРИЙ</p><h3>Одна конкретная сетка</h3></div><span>Фаворит выигрывает каждый матч; R1–R3 жеребятся внутри скрытой группы, R4–R5 — среди всех команд с тем же счётом. Реванши исключаются, пока возможно. Фактические результаты отмечены точкой.</span></div>
           <div className="likely-bracket__scroll">
             <table>
-              <thead><tr><th>#</th><th>Команда</th><th>Счёт</th>{[1, 2, 3, 4, 5].map((round) => <th key={round}>Раунд {round}</th>)}<th>Итог</th></tr></thead>
+              <thead><tr><th>#</th><th>Команда</th><th>Группа</th><th>Счёт</th>{[1, 2, 3, 4, 5].map((round) => <th key={round}>Раунд {round}</th>)}<th>Итог</th></tr></thead>
               <tbody>{likelyBracket.rows.map((row, index) => <tr key={row.id} className={`likely-row likely-row--${row.status}`}>
                 <td>{index + 1}</td>
                 <td><TeamMark team={getTeam(row.id)} small /><strong>{getTeam(row.id).name}</strong></td>
+                <td><span className={`group-badge group-badge--${SWISS_GROUP_BY_TEAM[row.id].toLowerCase()}`}>{SWISS_GROUP_BY_TEAM[row.id] === "A" ? "A" : "Б"}</span></td>
                 <td><b>{row.wins}–{row.losses}</b></td>
                 {row.rounds.map((round, roundIndex) => <td key={roundIndex}>{round ? <span className={`round-opponent ${round.won ? "is-win" : "is-loss"} ${round.fixed ? "is-fixed" : ""}`} title={`${round.probability.toFixed(1)}% на ${getTeam(row.id).name}`}><TeamMark team={getTeam(round.opponent)} small />{getTeam(round.opponent).short}<i>{round.won ? "W" : "L"}</i></span> : <span className="round-empty">—</span>}</td>)}
                 <td><span className={`bracket-status bracket-status--${row.status}`}>{row.status === "direct" ? "ПЛЕЙ-ОФФ" : row.status === "playin" ? "СТЫК" : "ВЫЛЕТ"}</span></td>
