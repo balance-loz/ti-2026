@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-08-10T20:32:26.053Z",
+  "generatedAt": "2026-08-10T20:48:49.453Z",
   "provider": "OpenDota",
-  "periodStart": "2025-08-10T20:32:01.000Z",
+  "periodStart": "2025-08-10T20:48:48.000Z",
   "methodology": {
     "exactRosterOnly": false,
     "rosterWeights": {
@@ -95,22 +95,6 @@
           "sampleMatchId": 8930664368
         },
         {
-          "leagueId": 19656,
-          "name": "1win Essence I",
-          "included": true,
-          "overlap": 5,
-          "rosterWeight": 1,
-          "actual": [
-            86698277,
-            93618577,
-            136829091,
-            331855530,
-            346412363
-          ],
-          "games": 5,
-          "sampleMatchId": 8803798979
-        },
-        {
           "leagueId": 19696,
           "name": "DreamLeague Season 29",
           "included": true,
@@ -127,8 +111,8 @@
           "sampleMatchId": 8815912139
         },
         {
-          "leagueId": 19422,
-          "name": "ESL One Birmingham 2026",
+          "leagueId": 19656,
+          "name": "1win Essence I",
           "included": true,
           "overlap": 5,
           "rosterWeight": 1,
@@ -139,8 +123,8 @@
             331855530,
             346412363
           ],
-          "games": 23,
-          "sampleMatchId": 8749655300
+          "games": 5,
+          "sampleMatchId": 8803798979
         },
         {
           "leagueId": 19543,
@@ -159,8 +143,8 @@
           "sampleMatchId": 8779658823
         },
         {
-          "leagueId": 19269,
-          "name": "DreamLeague Season 28",
+          "leagueId": 19422,
+          "name": "ESL One Birmingham 2026",
           "included": true,
           "overlap": 5,
           "rosterWeight": 1,
@@ -171,8 +155,8 @@
             331855530,
             346412363
           ],
-          "games": 38,
-          "sampleMatchId": 8712056091
+          "games": 23,
+          "sampleMatchId": 8749655300
         },
         {
           "leagueId": 19435,
@@ -191,6 +175,22 @@
           "sampleMatchId": 8728298716
         },
         {
+          "leagueId": 19269,
+          "name": "DreamLeague Season 28",
+          "included": true,
+          "overlap": 5,
+          "rosterWeight": 1,
+          "actual": [
+            86698277,
+            93618577,
+            136829091,
+            331855530,
+            346412363
+          ],
+          "games": 38,
+          "sampleMatchId": 8712056091
+        },
+        {
           "leagueId": 19099,
           "name": "BLAST SLAM VI",
           "included": true,
@@ -205,6 +205,22 @@
           ],
           "games": 13,
           "sampleMatchId": 8683127512
+        },
+        {
+          "leagueId": 18988,
+          "name": "DreamLeague Season 27",
+          "included": true,
+          "overlap": 5,
+          "rosterWeight": 1,
+          "actual": [
+            86698277,
+            93618577,
+            136829091,
+            331855530,
+            346412363
+          ],
+          "games": 20,
+          "sampleMatchId": 8612387534
         },
         {
           "leagueId": 17420,
@@ -253,22 +269,6 @@
           ],
           "games": 19,
           "sampleMatchId": 8550292837
-        },
-        {
-          "leagueId": 18988,
-          "name": "DreamLeague Season 27",
-          "included": true,
-          "overlap": 5,
-          "rosterWeight": 1,
-          "actual": [
-            86698277,
-            93618577,
-            136829091,
-            331855530,
-            346412363
-          ],
-          "games": 20,
-          "sampleMatchId": 8612387534
         },
         {
           "leagueId": 18863,
@@ -8370,22 +8370,6 @@
       "proxyRosterGames": 46,
       "includedTournaments": [
         {
-          "leagueId": 20009,
-          "name": "1win Essence II",
-          "included": true,
-          "overlap": 5,
-          "rosterWeight": 1,
-          "actual": [
-            165564598,
-            172099728,
-            196878136,
-            317880638,
-            480412663
-          ],
-          "games": 16,
-          "sampleMatchId": 8930387649
-        },
-        {
           "leagueId": 19785,
           "name": "Esports World Cup 2026",
           "included": true,
@@ -8400,6 +8384,22 @@
           ],
           "games": 20,
           "sampleMatchId": 8904419709
+        },
+        {
+          "leagueId": 20009,
+          "name": "1win Essence II",
+          "included": true,
+          "overlap": 5,
+          "rosterWeight": 1,
+          "actual": [
+            165564598,
+            172099728,
+            196878136,
+            317880638,
+            480412663
+          ],
+          "games": 16,
+          "sampleMatchId": 8930387649
         },
         {
           "leagueId": 19101,
@@ -8418,22 +8418,6 @@
           "sampleMatchId": 8842245726
         },
         {
-          "leagueId": 19696,
-          "name": "DreamLeague Season 29",
-          "included": true,
-          "overlap": 5,
-          "rosterWeight": 1,
-          "actual": [
-            165564598,
-            172099728,
-            196878136,
-            317880638,
-            480412663
-          ],
-          "games": 25,
-          "sampleMatchId": 8821169334
-        },
-        {
           "leagueId": 19543,
           "name": "PGL Wallachia 2026 Season 8",
           "included": true,
@@ -8448,6 +8432,22 @@
           ],
           "games": 18,
           "sampleMatchId": 8787299097
+        },
+        {
+          "leagueId": 19696,
+          "name": "DreamLeague Season 29",
+          "included": true,
+          "overlap": 5,
+          "rosterWeight": 1,
+          "actual": [
+            165564598,
+            172099728,
+            196878136,
+            317880638,
+            480412663
+          ],
+          "games": 25,
+          "sampleMatchId": 8821169334
         },
         {
           "leagueId": 19448,
@@ -12613,22 +12613,6 @@
       "proxyRosterGames": 58,
       "includedTournaments": [
         {
-          "leagueId": 20009,
-          "name": "1win Essence II",
-          "included": true,
-          "overlap": 5,
-          "rosterWeight": 1,
-          "actual": [
-            10366616,
-            25907144,
-            100058342,
-            183719386,
-            898455820
-          ],
-          "games": 15,
-          "sampleMatchId": 8931183918
-        },
-        {
           "leagueId": 19785,
           "name": "Esports World Cup 2026",
           "included": true,
@@ -12643,6 +12627,22 @@
           ],
           "games": 12,
           "sampleMatchId": 8900623530
+        },
+        {
+          "leagueId": 20009,
+          "name": "1win Essence II",
+          "included": true,
+          "overlap": 5,
+          "rosterWeight": 1,
+          "actual": [
+            10366616,
+            25907144,
+            100058342,
+            183719386,
+            898455820
+          ],
+          "games": 15,
+          "sampleMatchId": 8931183918
         },
         {
           "leagueId": 19101,
@@ -19576,22 +19576,6 @@
       "proxyRosterGames": 0,
       "includedTournaments": [
         {
-          "leagueId": 19892,
-          "name": "The International 2026 - Regional Qualifier Europe",
-          "included": true,
-          "overlap": 5,
-          "rosterWeight": 1,
-          "actual": [
-            92487440,
-            123787715,
-            140251702,
-            145065875,
-            320017600
-          ],
-          "games": 14,
-          "sampleMatchId": 8871085894
-        },
-        {
           "leagueId": 19699,
           "name": "Road To EWC 2026 Regional Qualifiers",
           "included": true,
@@ -19606,6 +19590,22 @@
           ],
           "games": 7,
           "sampleMatchId": 8836750303
+        },
+        {
+          "leagueId": 19892,
+          "name": "The International 2026 - Regional Qualifier Europe",
+          "included": true,
+          "overlap": 5,
+          "rosterWeight": 1,
+          "actual": [
+            92487440,
+            123787715,
+            140251702,
+            145065875,
+            320017600
+          ],
+          "games": 14,
+          "sampleMatchId": 8871085894
         }
       ],
       "excludedTournaments": [],
@@ -19913,22 +19913,6 @@
       "proxyRosterGames": 62,
       "includedTournaments": [
         {
-          "leagueId": 19785,
-          "name": "Esports World Cup 2026",
-          "included": true,
-          "overlap": 4,
-          "rosterWeight": 0.25,
-          "actual": [
-            81306398,
-            105045291,
-            177203952,
-            292921272,
-            1026694469
-          ],
-          "games": 14,
-          "sampleMatchId": 8898117600
-        },
-        {
           "leagueId": 20009,
           "name": "1win Essence II",
           "included": true,
@@ -19943,6 +19927,22 @@
           ],
           "games": 6,
           "sampleMatchId": 8927232410
+        },
+        {
+          "leagueId": 19785,
+          "name": "Esports World Cup 2026",
+          "included": true,
+          "overlap": 4,
+          "rosterWeight": 0.25,
+          "actual": [
+            81306398,
+            105045291,
+            177203952,
+            292921272,
+            1026694469
+          ],
+          "games": 14,
+          "sampleMatchId": 8898117600
         },
         {
           "leagueId": 19891,
@@ -25374,22 +25374,6 @@
       "proxyRosterGames": 28,
       "includedTournaments": [
         {
-          "leagueId": 19785,
-          "name": "Esports World Cup 2026",
-          "included": true,
-          "overlap": 5,
-          "rosterWeight": 1,
-          "actual": [
-            101356886,
-            111620041,
-            138880576,
-            152168157,
-            210053851
-          ],
-          "games": 12,
-          "sampleMatchId": 8900882416
-        },
-        {
           "leagueId": 20009,
           "name": "1win Essence II",
           "included": true,
@@ -25404,6 +25388,22 @@
           ],
           "games": 8,
           "sampleMatchId": 8925564849
+        },
+        {
+          "leagueId": 19785,
+          "name": "Esports World Cup 2026",
+          "included": true,
+          "overlap": 5,
+          "rosterWeight": 1,
+          "actual": [
+            101356886,
+            111620041,
+            138880576,
+            152168157,
+            210053851
+          ],
+          "games": 12,
+          "sampleMatchId": 8900882416
         },
         {
           "leagueId": 19892,
@@ -26325,22 +26325,6 @@
           "sampleMatchId": 8893253595
         },
         {
-          "leagueId": 19101,
-          "name": "BLAST SLAM VII",
-          "included": true,
-          "overlap": 4,
-          "rosterWeight": 0.25,
-          "actual": [
-            100594231,
-            155494381,
-            324277900,
-            355168766,
-            431770905
-          ],
-          "games": 13,
-          "sampleMatchId": 8831571711
-        },
-        {
           "leagueId": 19894,
           "name": "The International 2026 - Regional Qualifier Southeast Asia",
           "included": true,
@@ -26355,6 +26339,22 @@
           ],
           "games": 11,
           "sampleMatchId": 8863091025
+        },
+        {
+          "leagueId": 19101,
+          "name": "BLAST SLAM VII",
+          "included": true,
+          "overlap": 4,
+          "rosterWeight": 0.25,
+          "actual": [
+            100594231,
+            155494381,
+            324277900,
+            355168766,
+            431770905
+          ],
+          "games": 13,
+          "sampleMatchId": 8831571711
         },
         {
           "leagueId": 19448,
@@ -33855,22 +33855,6 @@
       "proxyRosterGames": 0,
       "includedTournaments": [
         {
-          "leagueId": 19575,
-          "name": "ESL challenger China powered By ACL",
-          "included": true,
-          "overlap": 5,
-          "rosterWeight": 1,
-          "actual": [
-            145957968,
-            150961567,
-            170896543,
-            249835593,
-            315272623
-          ],
-          "games": 13,
-          "sampleMatchId": 8796537475
-        },
-        {
           "leagueId": 19893,
           "name": "The International 2026 - Regional Qualifier China",
           "included": true,
@@ -33885,6 +33869,22 @@
           ],
           "games": 6,
           "sampleMatchId": 8856318986
+        },
+        {
+          "leagueId": 19575,
+          "name": "ESL challenger China powered By ACL",
+          "included": true,
+          "overlap": 5,
+          "rosterWeight": 1,
+          "actual": [
+            145957968,
+            150961567,
+            170896543,
+            249835593,
+            315272623
+          ],
+          "games": 13,
+          "sampleMatchId": 8796537475
         },
         {
           "leagueId": 19448,
@@ -44319,22 +44319,6 @@
       "proxyRosterGames": 186,
       "includedTournaments": [
         {
-          "leagueId": 19785,
-          "name": "Esports World Cup 2026",
-          "included": true,
-          "overlap": 5,
-          "rosterWeight": 1,
-          "actual": [
-            56351509,
-            93817671,
-            103735745,
-            171262902,
-            312436974
-          ],
-          "games": 17,
-          "sampleMatchId": 8903789784
-        },
-        {
           "leagueId": 19101,
           "name": "BLAST SLAM VII",
           "included": true,
@@ -44349,6 +44333,22 @@
           ],
           "games": 25,
           "sampleMatchId": 8842845018
+        },
+        {
+          "leagueId": 19785,
+          "name": "Esports World Cup 2026",
+          "included": true,
+          "overlap": 5,
+          "rosterWeight": 1,
+          "actual": [
+            56351509,
+            93817671,
+            103735745,
+            171262902,
+            312436974
+          ],
+          "games": 17,
+          "sampleMatchId": 8903789784
         },
         {
           "leagueId": 19543,
@@ -44431,22 +44431,6 @@
           "sampleMatchId": 8691428241
         },
         {
-          "leagueId": 18988,
-          "name": "DreamLeague Season 27",
-          "included": true,
-          "overlap": 4,
-          "rosterWeight": 0.25,
-          "actual": [
-            93817671,
-            103735745,
-            171262902,
-            195108598,
-            312436974
-          ],
-          "games": 27,
-          "sampleMatchId": 8615531269
-        },
-        {
           "leagueId": 19239,
           "name": "FISSURE Universe Episode 8",
           "included": true,
@@ -44461,6 +44445,22 @@
           ],
           "games": 10,
           "sampleMatchId": 8673330227
+        },
+        {
+          "leagueId": 18988,
+          "name": "DreamLeague Season 27",
+          "included": true,
+          "overlap": 4,
+          "rosterWeight": 0.25,
+          "actual": [
+            93817671,
+            103735745,
+            171262902,
+            195108598,
+            312436974
+          ],
+          "games": 27,
+          "sampleMatchId": 8615531269
         },
         {
           "leagueId": 17420,
@@ -49040,7 +49040,7 @@
       }
     },
     "l1ga|vg": {
-      "probabilityA": 28.4,
+      "probabilityA": 28.5,
       "mapProbabilityA": 35.2,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.1,
@@ -49049,7 +49049,7 @@
       "rosterReliability": 1,
       "uncertainty": 0.16,
       "featureContributions": {
-        "commonOpponentsPp": -21.6,
+        "commonOpponentsPp": -21.5,
         "headToHeadPp": 0,
         "rosterPp": 0
       }
@@ -49695,7 +49695,7 @@
       "uncertainty": 0.14,
       "featureContributions": {
         "commonOpponentsPp": 25.4,
-        "headToHeadPp": -2.7,
+        "headToHeadPp": -2.6,
         "rosterPp": 0
       }
     },
