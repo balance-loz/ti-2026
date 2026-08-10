@@ -3,8 +3,15 @@ services:
     build: .
     command: npm start -- --hostname 0.0.0.0 --port 3000
     restart: unless-stopped
+    environment:
+      SITE_URL: ${SITE_URL:-http://159.194.202.215}
     volumes:
       - stats:/app/public
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
   api:
     build: .
     command: node server/api.mjs
@@ -18,10 +25,18 @@ services:
       TI_LEAGUE_ID: ${TI_LEAGUE_ID:-19719}
       LIVE_SYNC_ENABLED: ${LIVE_SYNC_ENABLED:-true}
       LIVE_SYNC_INTERVAL_MINUTES: ${LIVE_SYNC_INTERVAL_MINUTES:-10}
+      AUTO_SNAPSHOT_ITERATIONS: ${AUTO_SNAPSHOT_ITERATIONS:-100000}
+      TI_PLAYIN_START: ${TI_PLAYIN_START:-2026-08-17T00:00:00+08:00}
+      TI_PLAYOFF_START: ${TI_PLAYOFF_START:-2026-08-20T00:00:00+08:00}
     volumes:
       - state:/app/data
       - stats:/app/public
       - opendota-cache:/app/work/opendota-cache
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
   proxy:
     image: nginx:1.27-alpine
     restart: unless-stopped

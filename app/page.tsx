@@ -7,6 +7,7 @@ type Team = {
   name: string;
   short: string;
   color: string;
+  logo: string;
 };
 
 type AnswerMap = Record<string, number>;
@@ -105,6 +106,14 @@ type SimulationResult = {
   duplicateRate: number;
 };
 
+type LikelyRound = { opponent: string; won: boolean; fixed: boolean; probability: number } | null;
+type LikelyBracket = {
+  rows: { id: string; wins: number; losses: number; status: "direct" | "playin" | "out"; rounds: LikelyRound[] }[];
+  playins: { a: string; b: string; winner: string; probabilityA: number }[];
+};
+type LikelyPlayoffMatch = { label: string; a: string; b: string; winner: string; probabilityA: number; format: "BO3" | "BO5" };
+type LikelyPlayoff = { qualifiers: string[]; stages: { name: string; matches: LikelyPlayoffMatch[] }[] };
+
 type LiveMatch = {
   id: number;
   stage: string;
@@ -117,6 +126,7 @@ type LiveMatch = {
   predicted_probability: number | null;
   scheduled_at: string | null;
   created_at: string;
+  updated_at: string;
 };
 
 type LiveSyncState = {
@@ -124,12 +134,14 @@ type LiveSyncState = {
   leagueId: number;
   intervalMinutes: number;
   running: boolean;
+  autoForecastRunning: boolean;
   lastSync: null | {
     ok: boolean;
     maps?: number;
     completedSeries?: number;
     inserted?: number;
     updated?: number;
+    unknownTeamIds?: number[];
     error?: string;
     updatedAt: string;
   };
@@ -160,22 +172,22 @@ type ServerState = {
 };
 
 const TEAMS: Team[] = [
-  { id: "1w", name: "1w", short: "1W", color: "#f1f4f7" },
-  { id: "aurora", name: "Aurora", short: "AU", color: "#19d3cb" },
-  { id: "betboom", name: "BETBOOM", short: "BB", color: "#ff384f" },
-  { id: "falcons", name: "Falcons", short: "FL", color: "#6bd263" },
-  { id: "gamerlegion", name: "GamerLegion", short: "GL", color: "#94b9c7" },
-  { id: "l1ga", name: "L1ga", short: "L1", color: "#4bfa6d" },
-  { id: "lgd", name: "LGD", short: "LG", color: "#e32a4d" },
-  { id: "liquid", name: "Liquid", short: "TL", color: "#5f83d8" },
-  { id: "nigma", name: "Nigma", short: "NG", color: "#939aa7" },
-  { id: "og", name: "OG", short: "OG", color: "#a2c974" },
-  { id: "parivision", name: "PARIVISION", short: "PV", color: "#20d8c3" },
-  { id: "resilience", name: "Resilience", short: "RS", color: "#ec4a52" },
-  { id: "spirit", name: "Spirit", short: "SP", color: "#d8dee7" },
-  { id: "vg", name: "VG", short: "VG", color: "#c9b78d" },
-  { id: "xtreme", name: "Xtreme", short: "XT", color: "#dce3ea" },
-  { id: "yandex", name: "Yandex", short: "YX", color: "#ff514f" },
+  { id: "1w", name: "1w", short: "1W", color: "#f1f4f7", logo: "/team-logos/1w.webp" },
+  { id: "aurora", name: "Aurora", short: "AU", color: "#19d3cb", logo: "/team-logos/aurora.webp" },
+  { id: "betboom", name: "BETBOOM", short: "BB", color: "#ff384f", logo: "/team-logos/betboom.webp" },
+  { id: "falcons", name: "Falcons", short: "FL", color: "#6bd263", logo: "/team-logos/falcons.jpg" },
+  { id: "gamerlegion", name: "GamerLegion", short: "GL", color: "#94b9c7", logo: "/team-logos/gamerlegion.webp" },
+  { id: "l1ga", name: "L1ga", short: "L1", color: "#4bfa6d", logo: "/team-logos/l1ga.webp" },
+  { id: "lgd", name: "LGD", short: "LG", color: "#e32a4d", logo: "/team-logos/lgd.webp" },
+  { id: "liquid", name: "Liquid", short: "TL", color: "#5f83d8", logo: "/team-logos/liquid.webp" },
+  { id: "nigma", name: "Nigma", short: "NG", color: "#939aa7", logo: "/team-logos/nigma.webp" },
+  { id: "og", name: "OG", short: "OG", color: "#a2c974", logo: "/team-logos/og.webp" },
+  { id: "parivision", name: "PARIVISION", short: "PV", color: "#20d8c3", logo: "/team-logos/parivision.webp" },
+  { id: "resilience", name: "Resilience", short: "RS", color: "#ec4a52", logo: "/team-logos/resilience.webp" },
+  { id: "spirit", name: "Spirit", short: "SP", color: "#d8dee7", logo: "/team-logos/spirit.webp" },
+  { id: "vg", name: "VG", short: "VG", color: "#c9b78d", logo: "/team-logos/vg.webp" },
+  { id: "xtreme", name: "Xtreme", short: "XT", color: "#dce3ea", logo: "/team-logos/xtreme.webp" },
+  { id: "yandex", name: "Yandex", short: "YX", color: "#ff514f", logo: "/team-logos/yandex.webp" },
 ];
 
 const ROUND_ONE: [string, string][] = [
@@ -281,7 +293,7 @@ function mixedAnswers(answers: AnswerMap, model: StatisticalModel | null, opinio
 function applyLiveEvidence(source: AnswerMap, matches: LiveMatch[]) {
   const strength = Object.fromEntries(TEAMS.map((team) => [team.id, 0])) as Record<string, number>;
   const direct = new Map<string, number>();
-  for (const match of matches.filter((item) => item.stage === "swiss" && item.winner)) {
+  for (const match of matches.filter((item) => item.winner)) {
     const p = storedProbability(match.team_a, match.team_b, source) ?? 50;
     const outcome = match.winner === match.team_a ? 1 : 0;
     const surprise = outcome - p / 100;
@@ -328,7 +340,7 @@ function predictionExplanation(
 }
 
 function snapshotEvaluation(snapshot: PredictionSnapshot, matches: LiveMatch[]) {
-  const future = matches.filter((match) => match.winner && Date.parse(match.created_at) > Date.parse(snapshot.created_at));
+  const future = matches.filter((match) => match.winner && Date.parse(match.updated_at || match.created_at) > Date.parse(snapshot.created_at));
   let correct = 0; let brier = 0; let logLoss = 0;
   for (const match of future) {
     const pA = (storedProbability(match.team_a, match.team_b, snapshot.probabilities) ?? 50) / 100;
@@ -434,6 +446,82 @@ function pairBucket(
   }
 
   return best;
+}
+
+function deterministicPairs(ids: string[], records: Record<string, { wins: number; losses: number; opponents: Set<string> }>, scores: Record<string, number>) {
+  const ordered = [...ids].sort((a, b) => scores[b] - scores[a] || a.localeCompare(b));
+  const solve = (remaining: string[]): { pairs: [string, string][]; cost: number } => {
+    if (!remaining.length) return { pairs: [], cost: 0 };
+    const first = remaining[0]; let best: { pairs: [string, string][]; cost: number } | null = null;
+    for (let index = 1; index < remaining.length; index += 1) {
+      const second = remaining[index];
+      const rest = remaining.filter((_, position) => position !== 0 && position !== index);
+      const tail = solve(rest);
+      const cost = tail.cost + (records[first].opponents.has(second) ? 1000 : 0) + Math.abs(scores[first] - scores[second]);
+      if (!best || cost < best.cost) best = { pairs: [[first, second], ...tail.pairs], cost };
+    }
+    return best ?? { pairs: [], cost: 0 };
+  };
+  return solve(ordered).pairs;
+}
+
+function buildLikelyBracket(answers: AnswerMap, liveMatches: LiveMatch[]): LikelyBracket {
+  const scores = teamScores(answers);
+  const records = Object.fromEntries(TEAMS.map((team) => [team.id, { wins: 0, losses: 0, opponents: new Set<string>(), rounds: Array<LikelyRound>(5).fill(null) }])) as Record<string, { wins: number; losses: number; opponents: Set<string>; rounds: LikelyRound[] }>;
+  const play = (round: number, a: string, b: string, fixedWinner?: string | null, savedProbabilityA?: number | null) => {
+    const probabilityA = savedProbabilityA ?? storedProbability(a, b, answers) ?? 50;
+    const winner = fixedWinner === a || fixedWinner === b ? fixedWinner : probabilityA >= 50 ? a : b;
+    const loser = winner === a ? b : a;
+    records[winner].wins += 1; records[loser].losses += 1;
+    records[a].opponents.add(b); records[b].opponents.add(a);
+    records[a].rounds[round - 1] = { opponent: b, won: winner === a, fixed: Boolean(fixedWinner), probability: probabilityA };
+    records[b].rounds[round - 1] = { opponent: a, won: winner === b, fixed: Boolean(fixedWinner), probability: 100 - probabilityA };
+  };
+  for (let round = 1; round <= 5; round += 1) {
+    const known = liveMatches.filter((match) => match.stage === "swiss" && match.round === round);
+    const occupied = new Set<string>();
+    for (const match of known) if (records[match.team_a] && records[match.team_b]) { play(round, match.team_a, match.team_b, match.winner, match.predicted_probability); occupied.add(match.team_a); occupied.add(match.team_b); }
+    if (round === 1) ROUND_ONE.filter(([a, b]) => !occupied.has(a) && !occupied.has(b)).forEach(([a, b]) => play(round, a, b));
+    else {
+      const buckets = new Map<string, string[]>();
+      TEAMS.filter((team) => records[team.id].wins < 4 && records[team.id].losses < 4 && !occupied.has(team.id)).forEach((team) => {
+        const key = `${records[team.id].wins}-${records[team.id].losses}`;
+        buckets.set(key, [...(buckets.get(key) ?? []), team.id]);
+      });
+      [...buckets.values()].forEach((ids) => deterministicPairs(ids, records, scores).forEach(([a, b]) => play(round, a, b)));
+    }
+  }
+  const buchholz = (id: string) => [...records[id].opponents].reduce((sum, opponent) => sum + records[opponent].wins, 0);
+  const upper = TEAMS.filter((team) => records[team.id].wins === 3).map((team) => team.id).sort((a, b) => buchholz(b) - buchholz(a) || scores[b] - scores[a]);
+  const lower = TEAMS.filter((team) => records[team.id].wins === 2).map((team) => team.id).sort((a, b) => buchholz(a) - buchholz(b) || scores[a] - scores[b]);
+  const playins = upper.map((a, index) => { const b = lower[index]; const actual = liveMatches.find((match) => match.stage === "playin" && match.winner && ((match.team_a === a && match.team_b === b) || (match.team_a === b && match.team_b === a))); const probabilityA = actual ? (actual.team_a === a ? actual.predicted_probability : actual.predicted_probability === null ? null : 100 - actual.predicted_probability) ?? (storedProbability(a, b, answers) ?? 50) : storedProbability(a, b, answers) ?? 50; return { a, b, winner: actual?.winner ?? (probabilityA >= 50 ? a : b), probabilityA }; });
+  const rows = TEAMS.map((team) => ({ id: team.id, wins: records[team.id].wins, losses: records[team.id].losses, status: (records[team.id].wins === 4 ? "direct" : records[team.id].losses === 4 ? "out" : "playin") as "direct" | "playin" | "out", rounds: records[team.id].rounds }))
+    .sort((a, b) => (a.status === "direct" ? 0 : a.status === "playin" ? 1 : 2) - (b.status === "direct" ? 0 : b.status === "playin" ? 1 : 2) || b.wins - a.wins || a.losses - b.losses || scores[b.id] - scores[a.id]);
+  return { rows, playins };
+}
+
+function buildLikelyPlayoff(swiss: LikelyBracket, answers: AnswerMap, liveMatches: LiveMatch[]): LikelyPlayoff {
+  const direct = swiss.rows.filter((row) => row.status === "direct").map((row) => row.id);
+  const qualifiers = [...direct, ...swiss.playins.map((match) => match.winner)].slice(0, 8);
+  const versus = (label: string, a: string, b: string, format: "BO3" | "BO5" = "BO3"): LikelyPlayoffMatch => {
+    const actual = liveMatches.find((match) => match.stage === "playoff" && ((match.team_a === a && match.team_b === b) || (match.team_a === b && match.team_b === a)));
+    const saved = actual?.predicted_probability === null || actual?.predicted_probability === undefined ? null : actual.team_a === a ? actual.predicted_probability : 100 - actual.predicted_probability;
+    const probabilityA = saved ?? storedProbability(a, b, answers) ?? 50;
+    return { label, a, b, winner: actual?.winner ?? (probabilityA >= 50 ? a : b), probabilityA, format };
+  };
+  if (qualifiers.length < 8) return { qualifiers, stages: [] };
+  const knownOpening = liveMatches.filter((match) => match.stage === "playoff" && match.round === 1).slice(0, 4);
+  const openingPairs = knownOpening.length === 4 ? knownOpening.map((match) => [match.team_a, match.team_b] as [string, string]) : [[qualifiers[0], qualifiers[7]], [qualifiers[3], qualifiers[4]], [qualifiers[1], qualifiers[6]], [qualifiers[2], qualifiers[5]]] as [string, string][];
+  const uq = openingPairs.map(([a, b], index) => versus(`UB QF ${index + 1}`, a, b));
+  const loser = (match: LikelyPlayoffMatch) => match.winner === match.a ? match.b : match.a;
+  const us = [versus("UB SF 1", uq[0].winner, uq[1].winner), versus("UB SF 2", uq[2].winner, uq[3].winner)];
+  const lr1 = [versus("LB R1 1", loser(uq[0]), loser(uq[1])), versus("LB R1 2", loser(uq[2]), loser(uq[3]))];
+  const lr2 = [versus("LB R2 1", lr1[0].winner, loser(us[1])), versus("LB R2 2", lr1[1].winner, loser(us[0]))];
+  const uf = versus("UB FINAL", us[0].winner, us[1].winner);
+  const ls = versus("LB SF", lr2[0].winner, lr2[1].winner);
+  const lf = versus("LB FINAL", ls.winner, loser(uf));
+  const gf = versus("GRAND FINAL", uf.winner, lf.winner, "BO5");
+  return { qualifiers, stages: [{ name: "Верхняя сетка · 1/4", matches: uq }, { name: "Верхняя 1/2 · Нижняя R1", matches: [...us, ...lr1] }, { name: "Финалы сеток", matches: [...lr2, uf, ls, lf] }, { name: "Гранд-финал", matches: [gf] }] };
 }
 
 function runSimulation(
@@ -545,10 +633,12 @@ function runSimulation(
       .sort((a, b) => buchholz(b) - buchholz(a) || scores[b] - scores[a] || a.localeCompare(b));
     const lower = TEAMS.filter((team) => records[team.id].wins === 2).map((team) => team.id)
       .sort((a, b) => buchholz(a) - buchholz(b) || scores[a] - scores[b] || b.localeCompare(a));
+    const completedPlayins = (options.liveMatches ?? []).filter((match) => match.stage === "playin" && match.winner);
 
     upper.forEach((upperTeam, index) => {
       const lowerTeam = lower[index];
-      const winner = sampleWinner(upperTeam, lowerTeam);
+      const actual = completedPlayins.find((match) => (match.team_a === upperTeam && match.team_b === lowerTeam) || (match.team_a === lowerTeam && match.team_b === upperTeam));
+      const winner = actual?.winner ?? sampleWinner(upperTeam, lowerTeam);
       const loser = winner === upperTeam ? lowerTeam : upperTeam;
       totals[winner].viaPlayin += 1;
       totals[loser].out += 1;
@@ -614,9 +704,11 @@ function TeamMark({ team, small = false }: { team: Team; small?: boolean }) {
     <span
       className={`team-mark ${small ? "team-mark--small" : ""}`}
       style={{ "--team-color": team.color } as React.CSSProperties}
-      aria-hidden="true"
+      title={team.name}
     >
-      {team.short}
+      {/* Logos are tiny local WebP assets; framework image processing would add more overhead than it saves. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={team.logo} alt="" />
     </span>
   );
 }
@@ -644,6 +736,8 @@ export default function Home() {
   const [matchTeamA, setMatchTeamA] = useState(ROUND_ONE[0][0]);
   const [matchTeamB, setMatchTeamB] = useState(ROUND_ONE[0][1]);
   const [matchWinner, setMatchWinner] = useState("");
+  const [matchStage, setMatchStage] = useState<"swiss" | "playin" | "playoff">("swiss");
+  const [historyTeamId, setHistoryTeamId] = useState("spirit");
   const previousLiveSignature = useRef<string | null>(null);
 
   const currentPair = ALL_PAIRS[questionIndex];
@@ -662,8 +756,21 @@ export default function Home() {
   const liveMatches = useMemo(() => serverState?.matches ?? [], [serverState?.matches]);
   const completedLiveMatches = useMemo(() => liveMatches.filter((match) => match.winner), [liveMatches]);
   const scheduledLiveMatches = useMemo(() => liveMatches.filter((match) => !match.winner), [liveMatches]);
+  const forecastSource = useMemo(() => {
+    const base = forecastMode === "stats" ? statisticalAnswers(stats) : forecastMode === "mixed" ? mixedAnswers(answers, stats, opinionWeight) : completePersonalAnswers(answers);
+    return applyLiveEvidence(base, completedLiveMatches);
+  }, [answers, completedLiveMatches, forecastMode, opinionWeight, stats]);
+  const likelyBracket = useMemo(() => buildLikelyBracket(forecastSource, liveMatches), [forecastSource, liveMatches]);
+  const likelyPlayoff = useMemo(() => buildLikelyPlayoff(likelyBracket, forecastSource, liveMatches), [forecastSource, likelyBracket, liveMatches]);
   const liveResultSignature = completedLiveMatches.map((match) => `${match.id}:${match.winner}:${match.score_a}:${match.score_b}`).join(";");
-  const snapshots = serverState?.snapshots ?? [];
+  const snapshots = useMemo(() => serverState?.snapshots ?? [], [serverState?.snapshots]);
+  const historyPoints = useMemo(() => [...snapshots].reverse().slice(-16).map((snapshot) => ({
+    id: snapshot.id,
+    createdAt: snapshot.created_at,
+    trigger: snapshot.trigger,
+    qualify: snapshot.result.teams.find((team) => team.id === historyTeamId)?.qualify ?? 0,
+    completed: snapshot.completed_match_count,
+  })), [historyTeamId, snapshots]);
   const currentExplanation = predictionExplanation(currentPair[0], currentPair[1], answers, stats, forecastMode, opinionWeight, completedLiveMatches);
   const predictionScore = completedLiveMatches.reduce((total, match) => {
     const pA = match.predicted_probability ?? storedProbability(match.team_a, match.team_b, mixedAnswers(answers, stats, opinionWeight)) ?? 50;
@@ -843,12 +950,21 @@ export default function Home() {
     await loadServerState();
   };
 
+  const prepareRoundOne = async () => {
+    setAdminMessage("Сохраняю восемь матчей первого раунда и предматчевые вероятности…");
+    const response = await fetch("/api/admin/rounds/prepare", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ round: 1 }) });
+    if (!response.ok) { setAdminMessage("Не удалось подготовить первый раунд."); return; }
+    const summary = await response.json() as { inserted: number };
+    setAdminMessage(summary.inserted ? `Первый раунд подготовлен: сохранено ${summary.inserted} матчей и создан контрольный снимок.` : "Первый раунд уже был подготовлен — дубликаты не созданы.");
+    await loadServerState();
+  };
+
   const addLiveMatch = async (event: React.FormEvent) => {
     event.preventDefault();
     const baseSource = forecastMode === "stats" ? statisticalAnswers(stats) : forecastMode === "mixed" ? mixedAnswers(answers, stats, opinionWeight) : answers;
     const source = applyLiveEvidence(baseSource, completedLiveMatches);
     const predictedProbability = (storedProbability(matchTeamA, matchTeamB, source) ?? 50);
-    const response = await fetch("/api/admin/matches", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stage: "swiss", round: matchRound, teamA: matchTeamA, teamB: matchTeamB, winner: matchWinner, predictedProbability }) });
+    const response = await fetch("/api/admin/matches", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stage: matchStage, round: matchRound, teamA: matchTeamA, teamB: matchTeamB, winner: matchWinner, predictedProbability }) });
     if (!response.ok) { setAdminMessage("Матч не сохранён: проверьте команды и раунд."); return; }
     setAdminMessage(matchWinner ? "Фактический результат сохранён и будет зафиксирован во всех следующих прогонах." : "Матч запланирован: вероятность до начала сохранена, OpenDota подставит результат автоматически.");
     await loadServerState();
@@ -949,36 +1065,43 @@ export default function Home() {
           <span>{serverState.liveSync.enabled ? `автопроверка каждые ${serverState.liveSync.intervalMinutes} мин.` : "автопроверка выключена"}</span>
           <span>{serverState.liveSync.running ? "проверяется сейчас" : serverState.liveSync.lastSync ? `${serverState.liveSync.lastSync.ok ? "последняя проверка" : "ошибка"}: ${new Date(serverState.liveSync.lastSync.updatedAt).toLocaleString("ru-RU")}` : "ещё не проверялось"}</span>
         </p>}
+        {serverState?.liveSync.lastSync?.unknownTeamIds?.length ? <p className="sync-warning">В OpenDota появились неизвестные team ID: {serverState.liveSync.lastSync.unknownTeamIds.join(", ")}. Эти карты пока не записаны — требуется проверить соответствие команды.</p> : null}
         {serverAvailable ? (
           serverState?.isAdmin ? (
             <div className="admin-grid">
               <form className="admin-match-form" onSubmit={addLiveMatch}>
-                <label>Раунд<input type="number" min="1" max="5" value={matchRound} onChange={(event) => setMatchRound(Number(event.target.value))} /></label>
+                <label>Стадия<select value={matchStage} onChange={(event) => setMatchStage(event.target.value as "swiss" | "playin" | "playoff")}><option value="swiss">Швейцарка</option><option value="playin">Стыки</option><option value="playoff">Плей-офф</option></select></label>
+                <label>Раунд<input type="number" min="1" max="20" value={matchRound} onChange={(event) => setMatchRound(Number(event.target.value))} /></label>
                 <label>Команда A<select value={matchTeamA} onChange={(event) => setMatchTeamA(event.target.value)}>{TEAMS.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label>
                 <label>Команда B<select value={matchTeamB} onChange={(event) => setMatchTeamB(event.target.value)}>{TEAMS.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label>
                 <label>Результат<select value={matchWinner} onChange={(event) => setMatchWinner(event.target.value)}><option value="">Ещё не сыгран</option><option value={matchTeamA}>Победа {getTeam(matchTeamA).name}</option><option value={matchTeamB}>Победа {getTeam(matchTeamB).name}</option></select></label>
                 <button className="primary-button" type="submit">{matchWinner ? "Зафиксировать результат" : "Сохранить до матча"}</button>
               </form>
-              <div className="admin-actions"><button onClick={syncLiveResults} disabled={serverState.liveSync.running}>{serverState.liveSync.running ? "Проверяю TI…" : "Проверить результаты TI"}</button><button onClick={refreshStats} disabled={serverState.refreshRunning}>{serverState.refreshRunning ? "Статистика обновляется…" : "Подтянуть свежую статистику"}</button><button onClick={logout}>Выйти из админки</button></div>
+              <div className="admin-actions"><button onClick={prepareRoundOne}>Подготовить раунд 1</button><button onClick={syncLiveResults} disabled={serverState.liveSync.running}>{serverState.liveSync.running ? "Проверяю TI…" : "Проверить результаты TI"}</button><button onClick={refreshStats} disabled={serverState.refreshRunning}>{serverState.refreshRunning ? "Статистика обновляется…" : "Подтянуть свежую статистику"}</button><button onClick={logout}>Выйти из админки</button></div>
             </div>
           ) : (
             <form className="admin-login" onSubmit={login}><input type="text" value={adminUsername} onChange={(event) => setAdminUsername(event.target.value)} placeholder="Логин" autoComplete="username" /><input type="password" value={adminPassword} onChange={(event) => setAdminPassword(event.target.value)} placeholder="Пароль администратора" autoComplete="current-password" /><button type="submit">Войти для редактирования</button><span>Просмотр доступен всем; изменения защищены.</span></form>
           )
         ) : <p className="local-mode">Локальный режим: серверное API не запущено, редактирование и автосохранение работают только в этом браузере.</p>}
         {adminMessage && <p className="admin-message">{adminMessage}</p>}
-        {scheduledLiveMatches.length > 0 && <div className="scheduled-results"><b>ОЖИДАЮТ РЕЗУЛЬТАТА</b>{scheduledLiveMatches.map((match) => <span key={match.id}>R{match.round} · {getTeam(match.team_a).name} — {getTeam(match.team_b).name} · прогноз до матча {Math.round(match.predicted_probability ?? 50)}%</span>)}</div>}
+        {scheduledLiveMatches.length > 0 && <div className="scheduled-results"><b>ОЖИДАЮТ РЕЗУЛЬТАТА</b>{scheduledLiveMatches.map((match) => <span key={match.id}>{match.stage === "swiss" ? "SW" : match.stage === "playin" ? "PI" : "PO"} R{match.round} · {getTeam(match.team_a).name} — {getTeam(match.team_b).name} · прогноз до матча {Math.round(match.predicted_probability ?? 50)}%</span>)}</div>}
         {completedLiveMatches.length > 0 && <div className="live-results">{completedLiveMatches.map((match) => {
           const pA = match.predicted_probability ?? 50;
           const predicted = pA >= 50 ? match.team_a : match.team_b;
           const correct = predicted === match.winner;
-          return <div key={match.id}><span>R{match.round}</span><strong>{getTeam(match.team_a).name} — {getTeam(match.team_b).name}</strong><b>{getTeam(match.winner!).name}</b><i className={correct ? "is-correct" : "is-wrong"}>{correct ? "ПРОГНОЗ ВЕРЕН" : "ОШИБКА"}</i></div>;
+          const explanation = predictionExplanation(match.team_a, match.team_b, answers, stats, forecastMode, opinionWeight, completedLiveMatches.filter((item) => item.id < match.id));
+          return <article key={match.id} className="live-result-card"><div><span>{match.stage === "swiss" ? "SW" : match.stage === "playin" ? "PI" : "PO"} R{match.round}</span><strong><TeamMark team={getTeam(match.team_a)} small />{getTeam(match.team_a).name} — {getTeam(match.team_b).name}<TeamMark team={getTeam(match.team_b)} small /></strong><b>{match.score_a ?? "?"}–{match.score_b ?? "?"} · {getTeam(match.winner!).name}</b><i className={correct ? "is-correct" : "is-wrong"}>{correct ? "ПРОГНОЗ ВЕРЕН" : "ОШИБКА"}</i></div><details><summary>До матча: {getTeam(match.team_a).name} {pA.toFixed(1)}% · показать факторы</summary><div>{explanation.items.map((item) => <span key={item.label}><b>{item.label}</b><em>{item.value >= 0 ? "+" : ""}{item.value.toFixed(1)} п.п.</em><small>{item.text}</small></span>)}</div></details></article>;
         })}</div>}
         <div className="prediction-history">
           <div className="prediction-history__head"><div><p className="eyebrow">ИСТОРИЯ МОДЕЛИ</p><h3>Что модель думала до результатов</h3></div><span>{snapshots.length} сохранённых прогонов</span></div>
+          {historyPoints.length > 0 && <div className="history-chart">
+            <div className="history-chart__controls"><label>Динамика команды<select value={historyTeamId} onChange={(event) => setHistoryTeamId(event.target.value)}>{TEAMS.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label><span>Шанс попасть в плей-офф после каждого сохранённого состояния модели</span></div>
+            <div className="history-chart__bars">{historyPoints.map((point) => <div key={point.id} title={`${new Date(point.createdAt).toLocaleString("ru-RU")} · ${point.qualify.toFixed(1)}% · ${point.completed} результатов`}><b>{point.qualify.toFixed(0)}%</b><i style={{ height: `${Math.max(3, point.qualify)}%` }} /><small>{point.completed ? `+${point.completed}M` : "PRE"}</small></div>)}</div>
+          </div>}
           {snapshots.length ? <div className="snapshot-list">{snapshots.map((snapshot) => {
             const evaluation = snapshotEvaluation(snapshot, completedLiveMatches);
             return <details key={snapshot.id}>
-              <summary><time>{new Date(snapshot.created_at).toLocaleString("ru-RU")}</time><b>{snapshot.forecast_mode === "mixed" ? `смесь ${snapshot.opinion_weight}% мнения` : snapshot.forecast_mode === "stats" ? "только статистика" : "только мнение"}</b><span>{evaluation.count ? `${evaluation.correct}/${evaluation.count} верно` : "ждёт новых матчей"}</span></summary>
+              <summary><time>{new Date(snapshot.created_at).toLocaleString("ru-RU")}</time><b>{snapshot.trigger === "manual_run" ? "ручной прогон" : snapshot.trigger.startsWith("pre_") ? "до начала раунда" : snapshot.trigger.startsWith("auto_") ? "после результата" : snapshot.trigger} · {snapshot.forecast_mode === "mixed" ? `смесь ${snapshot.opinion_weight}% мнения` : snapshot.forecast_mode === "stats" ? "только статистика" : "только мнение"}</b><span>{evaluation.count ? `${evaluation.correct}/${evaluation.count} верно` : "ждёт новых матчей"}</span></summary>
               <div className="snapshot-metrics">
                 <div><b>{snapshot.iterations.toLocaleString("ru-RU")}</b><span>прогонов</span></div>
                 <div><b>{snapshot.result.uniqueBrackets?.toLocaleString("ru-RU") ?? "—"}</b><span>уникальных путей</span></div>
@@ -1143,6 +1266,29 @@ export default function Home() {
           <div><p>РЕЗУЛЬТАТ СИМУЛЯЦИИ</p><h2>Куда попадёт команда</h2></div>
           <span className="section-note">{result ? <>{result.iterations.toLocaleString("ru-RU")} независимых сеток · ~{result.uniqueBrackets.toLocaleString("ru-RU")} уникальных<br />погрешность до ±{samplingMargin(result.iterations).toFixed(2)} п.п.</> : "Готовим первый прогноз…"}</span>
         </div>
+
+        <div className="likely-bracket">
+          <div className="likely-bracket__head"><div><p className="eyebrow">ВЕРОЯТНЕЙШИЙ СЦЕНАРИЙ</p><h3>Одна конкретная сетка</h3></div><span>Фаворит выигрывает каждый матч; внутри одинакового счёта выбрана детерминированная жеребьёвка без реваншей. Фактические результаты отмечены точкой.</span></div>
+          <div className="likely-bracket__scroll">
+            <table>
+              <thead><tr><th>#</th><th>Команда</th><th>Счёт</th>{[1, 2, 3, 4, 5].map((round) => <th key={round}>Раунд {round}</th>)}<th>Итог</th></tr></thead>
+              <tbody>{likelyBracket.rows.map((row, index) => <tr key={row.id} className={`likely-row likely-row--${row.status}`}>
+                <td>{index + 1}</td>
+                <td><TeamMark team={getTeam(row.id)} small /><strong>{getTeam(row.id).name}</strong></td>
+                <td><b>{row.wins}–{row.losses}</b></td>
+                {row.rounds.map((round, roundIndex) => <td key={roundIndex}>{round ? <span className={`round-opponent ${round.won ? "is-win" : "is-loss"} ${round.fixed ? "is-fixed" : ""}`} title={`${round.probability.toFixed(1)}% на ${getTeam(row.id).name}`}><TeamMark team={getTeam(round.opponent)} small />{getTeam(round.opponent).short}<i>{round.won ? "W" : "L"}</i></span> : <span className="round-empty">—</span>}</td>)}
+                <td><span className={`bracket-status bracket-status--${row.status}`}>{row.status === "direct" ? "ПЛЕЙ-ОФФ" : row.status === "playin" ? "СТЫК" : "ВЫЛЕТ"}</span></td>
+              </tr>)}</tbody>
+            </table>
+          </div>
+          <div className="likely-playins"><b>ВЕРОЯТНЕЙШИЕ СТЫКИ</b>{likelyBracket.playins.map((match) => <div key={`${match.a}-${match.b}`}><span><TeamMark team={getTeam(match.a)} small />{getTeam(match.a).name}</span><em>{match.probabilityA.toFixed(0)}% : {(100 - match.probabilityA).toFixed(0)}%</em><span>{getTeam(match.b).name}<TeamMark team={getTeam(match.b)} small /></span><strong>→ {getTeam(match.winner).name}</strong></div>)}</div>
+        </div>
+
+        {likelyPlayoff.stages.length > 0 && <div className="likely-playoff">
+          <div className="likely-playoff__head"><div><p className="eyebrow">ПРОГНОЗ ПЛЕЙ-ОФФ</p><h3>Double elimination до чемпиона</h3></div><span>Предварительная сетка из восьми вероятнейших участников. Посев будет автоматически заменён фактическим, когда организаторы опубликуют пары. Все серии BO3, гранд-финал BO5.</span></div>
+          <div className="likely-playoff__grid">{likelyPlayoff.stages.map((stage) => <section key={stage.name}><h4>{stage.name}</h4>{stage.matches.map((match) => <article key={match.label}><header><span>{match.label}</span><b>{match.format}</b></header><div className={match.winner === match.a ? "is-winner" : ""}><TeamMark team={getTeam(match.a)} small /><strong>{getTeam(match.a).name}</strong><em>{match.probabilityA.toFixed(0)}%</em></div><div className={match.winner === match.b ? "is-winner" : ""}><TeamMark team={getTeam(match.b)} small /><strong>{getTeam(match.b).name}</strong><em>{(100 - match.probabilityA).toFixed(0)}%</em></div></article>)}</section>)}</div>
+          <p className="likely-champion">Вероятнейший чемпион: <TeamMark team={getTeam(likelyPlayoff.stages.at(-1)!.matches[0].winner)} small /><b>{getTeam(likelyPlayoff.stages.at(-1)!.matches[0].winner).name}</b></p>
+        </div>}
 
         <div className="forecast-filters" role="group" aria-label="Фильтр прогноза">
           {(["all", "direct", "playin", "out"] as const).map((filter) => (

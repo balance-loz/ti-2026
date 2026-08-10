@@ -13,12 +13,12 @@ export function completedSeriesFromMaps(maps, teams = OPENDOTA_TEAMS) {
     const direTeam = teams.get(Number(map.dire_team_id));
     if (!radiantTeam || !direTeam || radiantTeam === direTeam || !map.series_id) continue;
     const key = String(map.series_id);
-    const series = grouped.get(key) || { seriesId: key, teamA: radiantTeam, teamB: direTeam, winsA: 0, winsB: 0, startTime: Number(map.start_time), mapIds: [] };
+    const series = grouped.get(key) || { seriesId: key, teamA: radiantTeam, teamB: direTeam, winsA: 0, winsB: 0, startTime: Number(map.start_time), seriesType: Number(map.series_type || 1), mapIds: [] };
     const winner = map.radiant_win === true ? radiantTeam : direTeam;
     if (winner === series.teamA) series.winsA += 1; else series.winsB += 1;
     series.startTime = Math.min(series.startTime, Number(map.start_time));
     series.mapIds.push(Number(map.match_id));
     grouped.set(key, series);
   }
-  return [...grouped.values()].filter((series) => Math.max(series.winsA, series.winsB) >= 2).sort((a, b) => a.startTime - b.startTime);
+  return [...grouped.values()].filter((series) => Math.max(series.winsA, series.winsB) >= (series.seriesType === 2 ? 3 : 2)).sort((a, b) => a.startTime - b.startTime);
 }

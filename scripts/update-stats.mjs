@@ -10,6 +10,7 @@ const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 const HALF_LIFE_DAYS = 45;
 const ROSTER_WEIGHTS = { 5: 1, 4: 0.25, 3: 0.07 };
 const REQUEST_GAP_MS = 1100;
+const LIVE_TI_LEAGUE_ID = Number(process.env.TI_LEAGUE_ID || 19719);
 
 const ROSTER_PROJECTIONS = {
   lgd: {
@@ -205,7 +206,10 @@ async function collectTeam(team, cutoffSeconds) {
     return apiJson(`/teams/${openDotaId}/matches`, listFile, 6 * 60 * 60 * 1000);
   }));
   const all = [...new Map(lists.flat().map((match) => [Number(match.match_id), match])).values()];
-  const recent = all.filter((match) => Number(match.start_time) >= cutoffSeconds);
+  // Current TI results are injected once by the live model with a deliberately
+  // high weight. Excluding that league here prevents the same evidence from
+  // being counted a second time after a statistics refresh.
+  const recent = all.filter((match) => Number(match.start_time) >= cutoffSeconds && Number(match.leagueid || 0) !== LIVE_TI_LEAGUE_ID);
   const groups = new Map();
   for (const match of recent) {
     const key = String(match.leagueid || 0);
@@ -467,6 +471,7 @@ async function main() {
       tournamentRosterCheck: "newest map sampled once per team and tournament",
       tournamentRejectedBelowThreeOfFive: true,
       recencyHalfLifeDays: HALF_LIFE_DAYS,
+      liveLeagueExcludedFromBaseline: LIVE_TI_LEAGUE_ID,
       model: "series-level recency-weighted Bradley-Terry; 5/5, 4/5 and 3/5 roster evidence; regularized direct matchup residual; Bo3 conversion; uncertainty exported for Monte Carlo",
       rosterProjection: "When a TI roster has no official games, a four-player historical core is shrunk toward 50% by its reliability coefficient.",
     },

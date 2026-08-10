@@ -1,10 +1,11 @@
 import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
-import { completedSeriesFromMaps } from "./live-series.mjs";
+import { completedSeriesFromMaps, OPENDOTA_TEAMS } from "./live-series.mjs";
+import { buildForecastSource, ROUND_ONE, runForecast } from "./forecast-engine.mjs";
 
 const PORT = Number(process.env.API_PORT || 3001);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "data");
@@ -17,6 +18,9 @@ const TI_LEAGUE_ID = Number(process.env.TI_LEAGUE_ID || 19719);
 const LIVE_SYNC_ENABLED = process.env.LIVE_SYNC_ENABLED !== "false";
 const LIVE_SYNC_INTERVAL_MINUTES = Math.max(2, Number(process.env.LIVE_SYNC_INTERVAL_MINUTES || 10));
 const OPENDOTA_API_URL = process.env.OPENDOTA_API_URL || "https://api.opendota.com/api";
+const AUTO_SNAPSHOT_ITERATIONS = Math.max(10_000, Number(process.env.AUTO_SNAPSHOT_ITERATIONS || 100_000));
+const TI_PLAYIN_START = Date.parse(process.env.TI_PLAYIN_START || "2026-08-17T00:00:00+08:00") / 1000;
+const TI_PLAYOFF_START = Date.parse(process.env.TI_PLAYOFF_START || "2026-08-20T00:00:00+08:00") / 1000;
 
 mkdirSync(DATA_DIR, { recursive: true });
 const db = new DatabaseSync(DB_PATH);
@@ -67,6 +71,9 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_prediction_snapshots_created_at
   ON prediction_snapshots(created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_matches_stage_round ON matches(stage, round);
+  CREATE INDEX IF NOT EXISTS idx_matches_scheduled ON matches(stage, winner, team_a, team_b) WHERE winner IS NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_matches_source_match_id ON matches(source_match_id) WHERE source_match_id IS NOT NULL;
   CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -77,6 +84,8 @@ db.exec("PRAGMA optimize");
 
 let refreshProcess = null;
 let liveSyncPromise = null;
+let autoForecastRunning = false;
+let autoSnapshotTimer = null;
 const loginAttempts = new Map();
 const json = (res, status, value) => {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -132,12 +141,58 @@ function publicState() {
   try { lastSync = liveSyncRow ? { ...JSON.parse(liveSyncRow.value), updatedAt: liveSyncRow.updated_at } : null; } catch { lastSync = null; }
   return {
     answers, matches, snapshots, refresh, refreshRunning: Boolean(refreshProcess),
-    liveSync: { enabled: LIVE_SYNC_ENABLED, leagueId: TI_LEAGUE_ID, intervalMinutes: LIVE_SYNC_INTERVAL_MINUTES, running: Boolean(liveSyncPromise), lastSync },
+    liveSync: { enabled: LIVE_SYNC_ENABLED, leagueId: TI_LEAGUE_ID, intervalMinutes: LIVE_SYNC_INTERVAL_MINUTES, running: Boolean(liveSyncPromise), lastSync, autoForecastRunning },
   };
 }
 
 function audit(kind, payload) {
   db.prepare("INSERT INTO events(kind, payload, created_at) VALUES (?, ?, ?)").run(kind, JSON.stringify(payload), now());
+}
+
+function forecastConfig() {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'forecast_config'").get();
+  if (row) try { return JSON.parse(row.value); } catch { /* use defaults */ }
+  const snapshot = db.prepare("SELECT forecast_mode, opinion_weight FROM prediction_snapshots ORDER BY id DESC LIMIT 1").get();
+  return { forecastMode: snapshot?.forecast_mode || "mixed", opinionWeight: Number(snapshot?.opinion_weight ?? 50) };
+}
+
+function currentForecast() {
+  const answers = Object.fromEntries(db.prepare("SELECT pair_key, probability FROM answers").all().map((row) => [row.pair_key, row.probability]));
+  const matches = db.prepare("SELECT * FROM matches ORDER BY round, id").all();
+  const stats = JSON.parse(readFileSync(path.resolve("public/team-stats.json"), "utf8"));
+  const config = forecastConfig();
+  const probabilities = buildForecastSource({ answers, stats, matches, mode: config.forecastMode, opinionWeight: config.opinionWeight });
+  return { answers, matches, stats, config, probabilities };
+}
+
+function saveAutomaticSnapshot(trigger) {
+  if (autoForecastRunning) return null;
+  autoForecastRunning = true;
+  try {
+    const { matches, stats, config, probabilities } = currentForecast();
+    const completedMatchCount = matches.filter((match) => match.winner).length;
+    const previous = trigger.startsWith("auto_")
+      ? db.prepare("SELECT id FROM prediction_snapshots WHERE trigger LIKE 'auto_%' AND completed_match_count = ? ORDER BY id DESC LIMIT 1").get(completedMatchCount)
+      : db.prepare("SELECT id FROM prediction_snapshots WHERE trigger = ? AND completed_match_count = ? ORDER BY id DESC LIMIT 1").get(trigger, completedMatchCount);
+    if (previous) return Number(previous.id);
+    const seed = Math.floor(Date.now() % 0xffffffff);
+    const result = runForecast(probabilities, AUTO_SNAPSHOT_ITERATIONS, seed, { matches, stats });
+    const stamp = now();
+    const inserted = db.prepare(`INSERT INTO prediction_snapshots(trigger, forecast_mode, opinion_weight, iterations, seed, completed_match_count, model_generated_at, probabilities_json, result_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(trigger, config.forecastMode, Number(config.opinionWeight), result.iterations, result.seed, completedMatchCount, stats.generatedAt || null, JSON.stringify(probabilities), JSON.stringify(result), stamp);
+    const id = Number(inserted.lastInsertRowid);
+    audit("automatic_snapshot_saved", { id, trigger, completedMatchCount });
+    return id;
+  } finally { autoForecastRunning = false; }
+}
+
+function queueAutomaticSnapshot(trigger, delay = 100) {
+  if (autoSnapshotTimer) clearTimeout(autoSnapshotTimer);
+  autoSnapshotTimer = setTimeout(() => {
+    autoSnapshotTimer = null;
+    try { saveAutomaticSnapshot(trigger); } catch (error) { console.error("Automatic forecast failed:", error); audit("automatic_snapshot_failed", { trigger, error: error instanceof Error ? error.message : String(error) }); }
+  }, delay);
+  autoSnapshotTimer.unref();
 }
 
 function probabilityBefore(teamA, teamB, timestamp) {
@@ -155,10 +210,20 @@ function probabilityBefore(teamA, teamB, timestamp) {
 function persistLiveSeries(series) {
   const sourceMatchId = `opendota:${TI_LEAGUE_ID}:${series.seriesId}`;
   if (db.prepare("SELECT id FROM matches WHERE source_match_id = ?").get(sourceMatchId)) return "unchanged";
-  const scheduled = db.prepare(`SELECT * FROM matches
-    WHERE stage = 'swiss' AND winner IS NULL AND ((team_a = ? AND team_b = ?) OR (team_a = ? AND team_b = ?))
-    ORDER BY round, id LIMIT 1`).get(series.teamA, series.teamB, series.teamB, series.teamA);
+  const stage = series.startTime >= TI_PLAYOFF_START ? "playoff" : series.startTime >= TI_PLAYIN_START ? "playin" : "swiss";
   const winner = series.winsA > series.winsB ? series.teamA : series.teamB;
+  const manualResult = db.prepare(`SELECT * FROM matches WHERE stage = ? AND source_match_id IS NULL AND winner = ?
+    AND ((team_a = ? AND team_b = ?) OR (team_a = ? AND team_b = ?)) ORDER BY id DESC LIMIT 1`).get(stage, winner, series.teamA, series.teamB, series.teamB, series.teamA);
+  if (manualResult) {
+    const scoreA = manualResult.team_a === series.teamA ? series.winsA : series.winsB;
+    const scoreB = manualResult.team_b === series.teamB ? series.winsB : series.winsA;
+    db.prepare("UPDATE matches SET score_a = ?, score_b = ?, source_match_id = ?, scheduled_at = COALESCE(scheduled_at, ?), updated_at = ? WHERE id = ?")
+      .run(scoreA, scoreB, sourceMatchId, new Date(series.startTime * 1000).toISOString(), now(), manualResult.id);
+    return "updated";
+  }
+  const scheduled = db.prepare(`SELECT * FROM matches
+    WHERE stage = ? AND winner IS NULL AND ((team_a = ? AND team_b = ?) OR (team_a = ? AND team_b = ?))
+    ORDER BY round, id LIMIT 1`).get(stage, series.teamA, series.teamB, series.teamB, series.teamA);
   const stamp = now();
   if (scheduled) {
     const scoreA = scheduled.team_a === series.teamA ? series.winsA : series.winsB;
@@ -167,13 +232,13 @@ function persistLiveSeries(series) {
       .run(winner, scoreA, scoreB, sourceMatchId, new Date(series.startTime * 1000).toISOString(), stamp, scheduled.id);
     return "updated";
   }
-  const appearances = db.prepare("SELECT team_a, team_b FROM matches WHERE stage = 'swiss' AND winner IS NOT NULL").all();
+  const appearances = db.prepare("SELECT team_a, team_b FROM matches WHERE stage = ? AND winner IS NOT NULL").all(stage);
   const playedA = appearances.filter((match) => match.team_a === series.teamA || match.team_b === series.teamA).length;
   const playedB = appearances.filter((match) => match.team_a === series.teamB || match.team_b === series.teamB).length;
-  const round = Math.min(5, Math.max(playedA, playedB) + 1);
+  const round = Math.max(playedA, playedB) + 1;
   const predictedProbability = probabilityBefore(series.teamA, series.teamB, series.startTime);
   db.prepare(`INSERT INTO matches(stage, round, team_a, team_b, winner, score_a, score_b, scheduled_at, source_match_id, predicted_probability, created_at, updated_at)
-    VALUES ('swiss', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(round, series.teamA, series.teamB, winner, series.winsA, series.winsB, new Date(series.startTime * 1000).toISOString(), sourceMatchId, predictedProbability, stamp, stamp);
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(stage, round, series.teamA, series.teamB, winner, series.winsA, series.winsB, new Date(series.startTime * 1000).toISOString(), sourceMatchId, predictedProbability, stamp, stamp);
   return "inserted";
 }
 
@@ -190,14 +255,15 @@ async function syncLiveMatches(trigger = "timer") {
       const maps = await response.json();
       if (!Array.isArray(maps)) throw new Error("OpenDota returned an invalid payload");
       const series = completedSeriesFromMaps(maps);
-      const summary = { ok: true, trigger, startedAt, maps: maps.length, completedSeries: series.length, inserted: 0, updated: 0, unchanged: 0 };
+      const unknownTeamIds = [...new Set(maps.flatMap((map) => [Number(map.radiant_team_id), Number(map.dire_team_id)]).filter((id) => id && !OPENDOTA_TEAMS.has(id)))];
+      const summary = { ok: true, trigger, startedAt, maps: maps.length, completedSeries: series.length, unknownTeamIds, inserted: 0, updated: 0, unchanged: 0 };
       db.exec("BEGIN");
       try {
         for (const item of series) summary[persistLiveSeries(item)] += 1;
         db.exec("COMMIT");
       } catch (error) { db.exec("ROLLBACK"); throw error; }
       db.prepare("INSERT INTO settings(key,value,updated_at) VALUES ('live_sync',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").run(JSON.stringify(summary), now());
-      if (summary.inserted || summary.updated) audit("live_sync_results", summary);
+      if (summary.inserted || summary.updated) { audit("live_sync_results", summary); queueAutomaticSnapshot("auto_live_result"); }
       return summary;
     } catch (error) {
       const summary = { ok: false, trigger, startedAt, error: error instanceof Error ? error.message : String(error) };
@@ -258,14 +324,28 @@ const server = createServer(async (req, res) => {
       if (req.method === "POST" && url.pathname === "/api/admin/matches") {
         const data = await body(req);
         const validTeams = /^[a-z0-9]+$/;
-        if (!validTeams.test(data.teamA) || !validTeams.test(data.teamB) || data.teamA === data.teamB || !(data.round >= 1 && data.round <= 20)) return json(res, 400, { error: "invalid_match" });
+        const stage = ["swiss", "playin", "playoff"].includes(data.stage) ? data.stage : null;
+        if (!stage || !validTeams.test(data.teamA) || !validTeams.test(data.teamB) || data.teamA === data.teamB || !(data.round >= 1 && data.round <= 20)) return json(res, 400, { error: "invalid_match" });
         const winner = data.winner || null;
         if (winner && winner !== data.teamA && winner !== data.teamB) return json(res, 400, { error: "invalid_winner" });
         const stamp = now();
+        if (winner) {
+          const scheduled = db.prepare(`SELECT id FROM matches WHERE stage = ? AND round = ? AND winner IS NULL
+            AND ((team_a = ? AND team_b = ?) OR (team_a = ? AND team_b = ?)) ORDER BY id LIMIT 1`).get(stage, data.round, data.teamA, data.teamB, data.teamB, data.teamA);
+          if (scheduled) {
+            db.prepare(`UPDATE matches SET winner = ?, score_a = ?, score_b = ?, scheduled_at = COALESCE(scheduled_at, ?),
+              source_match_id = COALESCE(source_match_id, ?), predicted_probability = COALESCE(predicted_probability, ?), updated_at = ? WHERE id = ?`)
+              .run(winner, data.scoreA ?? null, data.scoreB ?? null, data.scheduledAt || null, data.sourceMatchId || null, data.predictedProbability ?? null, stamp, scheduled.id);
+            audit("match_completed", { id: Number(scheduled.id), ...data });
+            queueAutomaticSnapshot("auto_manual_result", 100);
+            return json(res, 200, { ok: true, id: Number(scheduled.id), updated: true });
+          }
+        }
         const result = db.prepare(`INSERT INTO matches(stage, round, team_a, team_b, winner, score_a, score_b, scheduled_at, source_match_id, predicted_probability, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-          .run(data.stage || "swiss", data.round, data.teamA, data.teamB, winner, data.scoreA ?? null, data.scoreB ?? null, data.scheduledAt || null, data.sourceMatchId || null, data.predictedProbability ?? null, stamp, stamp);
+          .run(stage, data.round, data.teamA, data.teamB, winner, data.scoreA ?? null, data.scoreB ?? null, data.scheduledAt || null, data.sourceMatchId || null, data.predictedProbability ?? null, stamp, stamp);
         audit("match_added", { id: Number(result.lastInsertRowid), ...data });
+        queueAutomaticSnapshot(winner ? "auto_manual_result" : `pre_${stage}_${data.round}`, winner ? 100 : 5_000);
         return json(res, 201, { ok: true, id: Number(result.lastInsertRowid) });
       }
       if (req.method === "POST" && url.pathname === "/api/admin/snapshots") {
@@ -275,8 +355,35 @@ const server = createServer(async (req, res) => {
         const inserted = db.prepare(`INSERT INTO prediction_snapshots(trigger, forecast_mode, opinion_weight, iterations, seed, completed_match_count, model_generated_at, probabilities_json, result_json, created_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(data.trigger || "manual_run", data.forecastMode || "mixed", Number(data.opinionWeight || 0), data.iterations, data.seed, Number(data.completedMatchCount || 0), data.modelGeneratedAt || null, JSON.stringify(data.probabilities), JSON.stringify(data.result), stamp);
+        db.prepare("INSERT INTO settings(key,value,updated_at) VALUES ('forecast_config',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")
+          .run(JSON.stringify({ forecastMode: data.forecastMode || "mixed", opinionWeight: Number(data.opinionWeight || 0) }), stamp);
         audit("snapshot_saved", { id: Number(inserted.lastInsertRowid), trigger: data.trigger || "manual_run" });
         return json(res, 201, { ok: true, id: Number(inserted.lastInsertRowid) });
+      }
+      if (req.method === "POST" && url.pathname === "/api/admin/rounds/prepare") {
+        const data = await body(req);
+        const round = Number(data.round || 1);
+        if (round !== 1) return json(res, 400, { error: "only_round_one_is_known" });
+        const { probabilities } = currentForecast();
+        const insert = db.prepare(`INSERT INTO matches(stage, round, team_a, team_b, winner, predicted_probability, created_at, updated_at)
+          VALUES ('swiss', 1, ?, ?, NULL, ?, ?, ?)`);
+        let inserted = 0;
+        const stamp = now();
+        db.exec("BEGIN");
+        try {
+          for (const [teamA, teamB] of ROUND_ONE) {
+            const existing = db.prepare("SELECT id FROM matches WHERE stage = 'swiss' AND round = 1 AND ((team_a = ? AND team_b = ?) OR (team_a = ? AND team_b = ?)) LIMIT 1").get(teamA, teamB, teamB, teamA);
+            if (existing) continue;
+            const key = [teamA, teamB].sort().join("|");
+            const stored = probabilities[key] ?? 50;
+            const predictedProbability = key.startsWith(`${teamA}|`) ? stored : 100 - stored;
+            insert.run(teamA, teamB, predictedProbability, stamp, stamp); inserted += 1;
+          }
+          db.exec("COMMIT");
+        } catch (error) { db.exec("ROLLBACK"); throw error; }
+        audit("round_prepared", { round, inserted });
+        if (inserted) queueAutomaticSnapshot("pre_round_1");
+        return json(res, 200, { ok: true, round, inserted });
       }
       if (req.method === "DELETE" && url.pathname.startsWith("/api/admin/matches/")) {
         const id = Number(url.pathname.split("/").at(-1));
