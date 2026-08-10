@@ -4,6 +4,7 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 import { mkdirSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { completedSeriesFromMaps } from "./live-series.mjs";
 
 const PORT = Number(process.env.API_PORT || 3001);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "data");
@@ -12,6 +13,10 @@ const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
 const COOKIE_SECURE = process.env.COOKIE_SECURE === "true";
 const SESSION_DAYS = 30;
+const TI_LEAGUE_ID = Number(process.env.TI_LEAGUE_ID || 19719);
+const LIVE_SYNC_ENABLED = process.env.LIVE_SYNC_ENABLED !== "false";
+const LIVE_SYNC_INTERVAL_MINUTES = Math.max(2, Number(process.env.LIVE_SYNC_INTERVAL_MINUTES || 10));
+const OPENDOTA_API_URL = process.env.OPENDOTA_API_URL || "https://api.opendota.com/api";
 
 mkdirSync(DATA_DIR, { recursive: true });
 const db = new DatabaseSync(DB_PATH);
@@ -71,6 +76,7 @@ db.exec(`
 db.exec("PRAGMA optimize");
 
 let refreshProcess = null;
+let liveSyncPromise = null;
 const loginAttempts = new Map();
 const json = (res, status, value) => {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -121,11 +127,86 @@ function publicState() {
   const refresh = db.prepare("SELECT value, updated_at FROM settings WHERE key = 'last_refresh'").get() || null;
   const snapshots = db.prepare("SELECT id, trigger, forecast_mode, opinion_weight, iterations, seed, completed_match_count, model_generated_at, probabilities_json, result_json, created_at FROM prediction_snapshots ORDER BY id DESC LIMIT 50").all()
     .map((row) => ({ ...row, probabilities: JSON.parse(row.probabilities_json), result: JSON.parse(row.result_json), probabilities_json: undefined, result_json: undefined }));
-  return { answers, matches, snapshots, refresh, refreshRunning: Boolean(refreshProcess) };
+  const liveSyncRow = db.prepare("SELECT value, updated_at FROM settings WHERE key = 'live_sync'").get() || null;
+  let lastSync = null;
+  try { lastSync = liveSyncRow ? { ...JSON.parse(liveSyncRow.value), updatedAt: liveSyncRow.updated_at } : null; } catch { lastSync = null; }
+  return {
+    answers, matches, snapshots, refresh, refreshRunning: Boolean(refreshProcess),
+    liveSync: { enabled: LIVE_SYNC_ENABLED, leagueId: TI_LEAGUE_ID, intervalMinutes: LIVE_SYNC_INTERVAL_MINUTES, running: Boolean(liveSyncPromise), lastSync },
+  };
 }
 
 function audit(kind, payload) {
   db.prepare("INSERT INTO events(kind, payload, created_at) VALUES (?, ?, ?)").run(kind, JSON.stringify(payload), now());
+}
+
+function probabilityBefore(teamA, teamB, timestamp) {
+  const snapshot = db.prepare("SELECT probabilities_json FROM prediction_snapshots WHERE created_at <= ? ORDER BY created_at DESC LIMIT 1").get(new Date(timestamp * 1000).toISOString());
+  if (!snapshot) return null;
+  try {
+    const probabilities = JSON.parse(snapshot.probabilities_json);
+    const key = [teamA, teamB].sort().join("|");
+    const stored = probabilities[key];
+    if (!Number.isFinite(stored)) return null;
+    return key.startsWith(`${teamA}|`) ? stored : 100 - stored;
+  } catch { return null; }
+}
+
+function persistLiveSeries(series) {
+  const sourceMatchId = `opendota:${TI_LEAGUE_ID}:${series.seriesId}`;
+  if (db.prepare("SELECT id FROM matches WHERE source_match_id = ?").get(sourceMatchId)) return "unchanged";
+  const scheduled = db.prepare(`SELECT * FROM matches
+    WHERE stage = 'swiss' AND winner IS NULL AND ((team_a = ? AND team_b = ?) OR (team_a = ? AND team_b = ?))
+    ORDER BY round, id LIMIT 1`).get(series.teamA, series.teamB, series.teamB, series.teamA);
+  const winner = series.winsA > series.winsB ? series.teamA : series.teamB;
+  const stamp = now();
+  if (scheduled) {
+    const scoreA = scheduled.team_a === series.teamA ? series.winsA : series.winsB;
+    const scoreB = scheduled.team_b === series.teamB ? series.winsB : series.winsA;
+    db.prepare("UPDATE matches SET winner = ?, score_a = ?, score_b = ?, source_match_id = ?, scheduled_at = COALESCE(scheduled_at, ?), updated_at = ? WHERE id = ?")
+      .run(winner, scoreA, scoreB, sourceMatchId, new Date(series.startTime * 1000).toISOString(), stamp, scheduled.id);
+    return "updated";
+  }
+  const appearances = db.prepare("SELECT team_a, team_b FROM matches WHERE stage = 'swiss' AND winner IS NOT NULL").all();
+  const playedA = appearances.filter((match) => match.team_a === series.teamA || match.team_b === series.teamA).length;
+  const playedB = appearances.filter((match) => match.team_a === series.teamB || match.team_b === series.teamB).length;
+  const round = Math.min(5, Math.max(playedA, playedB) + 1);
+  const predictedProbability = probabilityBefore(series.teamA, series.teamB, series.startTime);
+  db.prepare(`INSERT INTO matches(stage, round, team_a, team_b, winner, score_a, score_b, scheduled_at, source_match_id, predicted_probability, created_at, updated_at)
+    VALUES ('swiss', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(round, series.teamA, series.teamB, winner, series.winsA, series.winsB, new Date(series.startTime * 1000).toISOString(), sourceMatchId, predictedProbability, stamp, stamp);
+  return "inserted";
+}
+
+async function syncLiveMatches(trigger = "timer") {
+  if (liveSyncPromise) return liveSyncPromise;
+  liveSyncPromise = (async () => {
+    const startedAt = now();
+    try {
+      const response = await fetch(`${OPENDOTA_API_URL}/leagues/${TI_LEAGUE_ID}/matches`, {
+        headers: { "user-agent": "ti-2026-predictor/1.0 (github.com/balance-loz/ti-2026)" },
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!response.ok) throw new Error(`OpenDota HTTP ${response.status}`);
+      const maps = await response.json();
+      if (!Array.isArray(maps)) throw new Error("OpenDota returned an invalid payload");
+      const series = completedSeriesFromMaps(maps);
+      const summary = { ok: true, trigger, startedAt, maps: maps.length, completedSeries: series.length, inserted: 0, updated: 0, unchanged: 0 };
+      db.exec("BEGIN");
+      try {
+        for (const item of series) summary[persistLiveSeries(item)] += 1;
+        db.exec("COMMIT");
+      } catch (error) { db.exec("ROLLBACK"); throw error; }
+      db.prepare("INSERT INTO settings(key,value,updated_at) VALUES ('live_sync',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").run(JSON.stringify(summary), now());
+      if (summary.inserted || summary.updated) audit("live_sync_results", summary);
+      return summary;
+    } catch (error) {
+      const summary = { ok: false, trigger, startedAt, error: error instanceof Error ? error.message : String(error) };
+      db.prepare("INSERT INTO settings(key,value,updated_at) VALUES ('live_sync',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").run(JSON.stringify(summary), now());
+      audit("live_sync_failed", summary);
+      throw error;
+    } finally { liveSyncPromise = null; }
+  })();
+  return liveSyncPromise;
 }
 
 const server = createServer(async (req, res) => {
@@ -217,6 +298,11 @@ const server = createServer(async (req, res) => {
         audit("refresh_started", {});
         return json(res, 202, { ok: true });
       }
+      if (req.method === "POST" && url.pathname === "/api/admin/live/sync") {
+        if (liveSyncPromise) return json(res, 409, { error: "live_sync_running" });
+        const result = await syncLiveMatches("manual");
+        return json(res, 200, result);
+      }
     }
     return json(res, 404, { error: "not_found" });
   } catch (error) {
@@ -225,4 +311,10 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, "0.0.0.0", () => console.log(`TI Predictor API listening on ${PORT}; database ${DB_PATH}`));
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`TI Predictor API listening on ${PORT}; database ${DB_PATH}`);
+  if (LIVE_SYNC_ENABLED) {
+    setTimeout(() => void syncLiveMatches("startup").catch((error) => console.error("Initial live sync failed:", error.message)), 5_000).unref();
+    setInterval(() => void syncLiveMatches("timer").catch((error) => console.error("Live sync failed:", error.message)), LIVE_SYNC_INTERVAL_MINUTES * 60_000).unref();
+  }
+});

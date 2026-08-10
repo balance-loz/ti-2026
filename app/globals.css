@@ -326,6 +326,10 @@ footer a { color: #aab1bc; }
 .admin-grid { display: grid; gap: 12px; }
 .admin-match-form label { display: grid; gap: 6px; color: #87909d; font: 700 8px var(--font-geist-mono); text-transform: uppercase; }
 .admin-message, .local-mode { color: #bec7d2; font-size: 11px; }
+.live-sync-status { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 16px 0 0; padding: 10px 12px; border: 1px solid #2d3845; color: #8f9bab; font: 9px var(--font-geist-mono); text-transform: uppercase; }
+.live-sync-status b { color: var(--acid); }
+.scheduled-results { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 18px; padding: 12px; border: 1px solid #3a4655; color: #aab5c2; font: 9px var(--font-geist-mono); }
+.scheduled-results > b { color: #d3ff3f; }
 .live-results { margin-top: 20px; border-top: 1px solid var(--line); }
 .live-results > div { display: grid; grid-template-columns: 35px 1fr 130px 110px; gap: 12px; align-items: center; padding: 11px 0; border-bottom: 1px solid var(--line); font-size: 10px; }
 .live-results span { color: #76808d; font-family: var(--font-geist-mono); }

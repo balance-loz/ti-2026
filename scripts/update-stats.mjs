@@ -146,10 +146,6 @@ async function apiJson(endpoint, cacheFile, maxAgeMs = Infinity) {
   throw new Error(`${endpoint}: retry limit reached`);
 }
 
-function sameIds(actual, expected) {
-  return actual.length === expected.length && actual.every((id, index) => id === expected[index]);
-}
-
 function rosterOverlap(actual, expected) {
   const wanted = new Set(expected);
   return actual.filter((id) => wanted.has(id)).length;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Team = {
   id: string;
@@ -115,7 +115,24 @@ type LiveMatch = {
   score_a: number | null;
   score_b: number | null;
   predicted_probability: number | null;
+  scheduled_at: string | null;
   created_at: string;
+};
+
+type LiveSyncState = {
+  enabled: boolean;
+  leagueId: number;
+  intervalMinutes: number;
+  running: boolean;
+  lastSync: null | {
+    ok: boolean;
+    maps?: number;
+    completedSeries?: number;
+    inserted?: number;
+    updated?: number;
+    error?: string;
+    updatedAt: string;
+  };
 };
 
 type PredictionSnapshot = {
@@ -139,6 +156,7 @@ type ServerState = {
   isAdmin: boolean;
   refreshRunning: boolean;
   refresh: { value: string; updated_at: string } | null;
+  liveSync: LiveSyncState;
 };
 
 const TEAMS: Team[] = [
@@ -625,7 +643,8 @@ export default function Home() {
   const [matchRound, setMatchRound] = useState(1);
   const [matchTeamA, setMatchTeamA] = useState(ROUND_ONE[0][0]);
   const [matchTeamB, setMatchTeamB] = useState(ROUND_ONE[0][1]);
-  const [matchWinner, setMatchWinner] = useState(ROUND_ONE[0][0]);
+  const [matchWinner, setMatchWinner] = useState("");
+  const previousLiveSignature = useRef<string | null>(null);
 
   const currentPair = ALL_PAIRS[questionIndex];
   const teamA = getTeam(currentPair[0]);
@@ -640,8 +659,10 @@ export default function Home() {
   const selectedTeam = selectedTeamId ? getTeam(selectedTeamId) : null;
   const selectedTeamStats = selectedTeamId ? stats?.teams[selectedTeamId] : null;
   const canEdit = !serverAvailable || Boolean(serverState?.isAdmin);
-  const liveMatches = serverState?.matches ?? [];
-  const completedLiveMatches = liveMatches.filter((match) => match.winner);
+  const liveMatches = useMemo(() => serverState?.matches ?? [], [serverState?.matches]);
+  const completedLiveMatches = useMemo(() => liveMatches.filter((match) => match.winner), [liveMatches]);
+  const scheduledLiveMatches = useMemo(() => liveMatches.filter((match) => !match.winner), [liveMatches]);
+  const liveResultSignature = completedLiveMatches.map((match) => `${match.id}:${match.winner}:${match.score_a}:${match.score_b}`).join(";");
   const snapshots = serverState?.snapshots ?? [];
   const currentExplanation = predictionExplanation(currentPair[0], currentPair[1], answers, stats, forecastMode, opinionWeight, completedLiveMatches);
   const predictionScore = completedLiveMatches.reduce((total, match) => {
@@ -665,6 +686,8 @@ export default function Home() {
         const backup = JSON.parse(fallback) as AnswerMap;
         if (Object.keys(backup).length > 0) parsed = backup;
       }
+      // Initial hydration from browser storage is intentionally performed once.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAnswers(parsed);
       const firstUnanswered = ALL_PAIRS.findIndex(([a, b]) => parsed[pairKey(a, b)] === undefined);
       const initialIndex = firstUnanswered === -1 ? 0 : firstUnanswered;
@@ -691,7 +714,13 @@ export default function Home() {
     }
   };
 
-  useEffect(() => { void loadServerState(); }, []);
+  useEffect(() => {
+    // The first request and subsequent interval synchronize an external API state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadServerState();
+    const timer = window.setInterval(() => void loadServerState(), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     fetch("/team-stats.json")
@@ -709,6 +738,19 @@ export default function Home() {
     }
     window.localStorage.setItem("ti26-forecast-answers", serialized);
   }, [answers, answersLoaded]);
+
+  useEffect(() => {
+    if (!answersLoaded || previousLiveSignature.current === liveResultSignature) return;
+    previousLiveSignature.current = liveResultSignature;
+    if (!liveResultSignature) return;
+    const baseSource = forecastMode === "stats" ? statisticalAnswers(stats) : forecastMode === "mixed" ? mixedAnswers(answers, stats, opinionWeight) : answers;
+    const source = applyLiveEvidence(baseSource, completedLiveMatches);
+    const timer = window.setTimeout(() => {
+      setResult(runSimulation(source, iterationCount, undefined, { liveMatches, statisticalModel: stats }));
+      setAdminMessage("Прогноз автоматически пересчитан с учётом результатов TI.");
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [answers, answersLoaded, completedLiveMatches, forecastMode, iterationCount, liveMatches, liveResultSignature, opinionWeight, stats]);
 
   useEffect(() => {
     if (!selectedTeamId) return;
@@ -792,6 +834,15 @@ export default function Home() {
     await loadServerState();
   };
 
+  const syncLiveResults = async () => {
+    setAdminMessage("Проверяю новые результаты TI в OpenDota…");
+    const response = await fetch("/api/admin/live/sync", { method: "POST" });
+    if (!response.ok) { setAdminMessage("Не удалось синхронизировать результаты или проверка уже идёт."); return; }
+    const summary = await response.json() as { inserted: number; updated: number };
+    setAdminMessage(summary.inserted || summary.updated ? `Получено новых результатов: ${summary.inserted + summary.updated}.` : "Новых завершённых серий пока нет.");
+    await loadServerState();
+  };
+
   const addLiveMatch = async (event: React.FormEvent) => {
     event.preventDefault();
     const baseSource = forecastMode === "stats" ? statisticalAnswers(stats) : forecastMode === "mixed" ? mixedAnswers(answers, stats, opinionWeight) : answers;
@@ -799,7 +850,7 @@ export default function Home() {
     const predictedProbability = (storedProbability(matchTeamA, matchTeamB, source) ?? 50);
     const response = await fetch("/api/admin/matches", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stage: "swiss", round: matchRound, teamA: matchTeamA, teamB: matchTeamB, winner: matchWinner, predictedProbability }) });
     if (!response.ok) { setAdminMessage("Матч не сохранён: проверьте команды и раунд."); return; }
-    setAdminMessage("Фактический результат сохранён и будет зафиксирован во всех следующих прогонах.");
+    setAdminMessage(matchWinner ? "Фактический результат сохранён и будет зафиксирован во всех следующих прогонах." : "Матч запланирован: вероятность до начала сохранена, OpenDota подставит результат автоматически.");
     await loadServerState();
   };
 
@@ -893,23 +944,29 @@ export default function Home() {
           <div className="live-score"><b>{completedLiveMatches.length}</b><span>результатов внесено</span><b>{completedLiveMatches.length ? `${predictionScore}/${completedLiveMatches.length}` : "—"}</b><span>угадано до матча</span></div>
         </div>
         <p className="muted">Сыгранные матчи фиксируются как факт, поэтому симулятор больше не разыгрывает уже невозможные ветки. Сохранённая до результата вероятность используется для честной проверки точности.</p>
+        {serverState?.liveSync && <p className="live-sync-status">
+          <b>OpenDota · лига {serverState.liveSync.leagueId}</b>
+          <span>{serverState.liveSync.enabled ? `автопроверка каждые ${serverState.liveSync.intervalMinutes} мин.` : "автопроверка выключена"}</span>
+          <span>{serverState.liveSync.running ? "проверяется сейчас" : serverState.liveSync.lastSync ? `${serverState.liveSync.lastSync.ok ? "последняя проверка" : "ошибка"}: ${new Date(serverState.liveSync.lastSync.updatedAt).toLocaleString("ru-RU")}` : "ещё не проверялось"}</span>
+        </p>}
         {serverAvailable ? (
           serverState?.isAdmin ? (
             <div className="admin-grid">
               <form className="admin-match-form" onSubmit={addLiveMatch}>
                 <label>Раунд<input type="number" min="1" max="5" value={matchRound} onChange={(event) => setMatchRound(Number(event.target.value))} /></label>
-                <label>Команда A<select value={matchTeamA} onChange={(event) => { setMatchTeamA(event.target.value); setMatchWinner(event.target.value); }}>{TEAMS.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label>
+                <label>Команда A<select value={matchTeamA} onChange={(event) => setMatchTeamA(event.target.value)}>{TEAMS.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label>
                 <label>Команда B<select value={matchTeamB} onChange={(event) => setMatchTeamB(event.target.value)}>{TEAMS.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label>
-                <label>Победитель<select value={matchWinner} onChange={(event) => setMatchWinner(event.target.value)}><option value={matchTeamA}>{getTeam(matchTeamA).name}</option><option value={matchTeamB}>{getTeam(matchTeamB).name}</option></select></label>
-                <button className="primary-button" type="submit">Зафиксировать результат</button>
+                <label>Результат<select value={matchWinner} onChange={(event) => setMatchWinner(event.target.value)}><option value="">Ещё не сыгран</option><option value={matchTeamA}>Победа {getTeam(matchTeamA).name}</option><option value={matchTeamB}>Победа {getTeam(matchTeamB).name}</option></select></label>
+                <button className="primary-button" type="submit">{matchWinner ? "Зафиксировать результат" : "Сохранить до матча"}</button>
               </form>
-              <div className="admin-actions"><button onClick={refreshStats} disabled={serverState.refreshRunning}>{serverState.refreshRunning ? "Статистика обновляется…" : "Подтянуть свежую статистику"}</button><button onClick={logout}>Выйти из админки</button></div>
+              <div className="admin-actions"><button onClick={syncLiveResults} disabled={serverState.liveSync.running}>{serverState.liveSync.running ? "Проверяю TI…" : "Проверить результаты TI"}</button><button onClick={refreshStats} disabled={serverState.refreshRunning}>{serverState.refreshRunning ? "Статистика обновляется…" : "Подтянуть свежую статистику"}</button><button onClick={logout}>Выйти из админки</button></div>
             </div>
           ) : (
             <form className="admin-login" onSubmit={login}><input type="text" value={adminUsername} onChange={(event) => setAdminUsername(event.target.value)} placeholder="Логин" autoComplete="username" /><input type="password" value={adminPassword} onChange={(event) => setAdminPassword(event.target.value)} placeholder="Пароль администратора" autoComplete="current-password" /><button type="submit">Войти для редактирования</button><span>Просмотр доступен всем; изменения защищены.</span></form>
           )
         ) : <p className="local-mode">Локальный режим: серверное API не запущено, редактирование и автосохранение работают только в этом браузере.</p>}
         {adminMessage && <p className="admin-message">{adminMessage}</p>}
+        {scheduledLiveMatches.length > 0 && <div className="scheduled-results"><b>ОЖИДАЮТ РЕЗУЛЬТАТА</b>{scheduledLiveMatches.map((match) => <span key={match.id}>R{match.round} · {getTeam(match.team_a).name} — {getTeam(match.team_b).name} · прогноз до матча {Math.round(match.predicted_probability ?? 50)}%</span>)}</div>}
         {completedLiveMatches.length > 0 && <div className="live-results">{completedLiveMatches.map((match) => {
           const pA = match.predicted_probability ?? 50;
           const predicted = pA >= 50 ? match.team_a : match.team_b;

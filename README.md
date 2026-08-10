@@ -41,6 +41,8 @@ Dev-сервер интерфейса не проксирует API автома
 
 ## Развёртывание на VPS по IP
 
+Полная пошаговая инструкция для чистого Ubuntu-сервера: [docs/UBUNTU_DEPLOY.md](docs/UBUNTU_DEPLOY.md).
+
 Установите Docker и Git, затем:
 
 ```bash
