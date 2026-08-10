@@ -8,6 +8,7 @@ import path from "node:path";
 const PORT = Number(process.env.API_PORT || 3001);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "data");
 const DB_PATH = path.join(DATA_DIR, "ti-predictor.sqlite");
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
 const COOKIE_SECURE = process.env.COOKIE_SECURE === "true";
 const SESSION_DAYS = 30;
@@ -138,7 +139,9 @@ const server = createServer(async (req, res) => {
       const history = (loginAttempts.get(ip) || []).filter((stamp) => Date.now() - stamp < 15 * 60_000);
       if (history.length >= 8) return json(res, 429, { error: "too_many_attempts" });
       const data = await body(req);
-      const valid = ADMIN_PASSWORD && safeEqual(passwordDigest(String(data.password || "")), passwordDigest(ADMIN_PASSWORD));
+      const validUsername = safeEqual(String(data.username || ""), ADMIN_USERNAME);
+      const validPassword = ADMIN_PASSWORD && safeEqual(passwordDigest(String(data.password || "")), passwordDigest(ADMIN_PASSWORD));
+      const valid = validUsername && validPassword;
       if (!valid) {
         history.push(Date.now()); loginAttempts.set(ip, history);
         return json(res, 401, { error: "invalid_credentials" });

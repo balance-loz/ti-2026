@@ -619,6 +619,7 @@ export default function Home() {
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [serverState, setServerState] = useState<ServerState | null>(null);
   const [serverAvailable, setServerAvailable] = useState(false);
+  const [adminUsername, setAdminUsername] = useState("admin");
   const [adminPassword, setAdminPassword] = useState("");
   const [adminMessage, setAdminMessage] = useState("");
   const [matchRound, setMatchRound] = useState(1);
@@ -775,7 +776,7 @@ export default function Home() {
 
   const login = async (event: React.FormEvent) => {
     event.preventDefault();
-    const response = await fetch("/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: adminPassword }) });
+    const response = await fetch("/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: adminUsername, password: adminPassword }) });
     if (!response.ok) { setAdminMessage("Неверный пароль или слишком много попыток."); return; }
     setAdminPassword(""); setAdminMessage("Режим администратора включён."); await loadServerState();
   };
@@ -905,7 +906,7 @@ export default function Home() {
               <div className="admin-actions"><button onClick={refreshStats} disabled={serverState.refreshRunning}>{serverState.refreshRunning ? "Статистика обновляется…" : "Подтянуть свежую статистику"}</button><button onClick={logout}>Выйти из админки</button></div>
             </div>
           ) : (
-            <form className="admin-login" onSubmit={login}><input type="password" value={adminPassword} onChange={(event) => setAdminPassword(event.target.value)} placeholder="Пароль администратора" autoComplete="current-password" /><button type="submit">Войти для редактирования</button><span>Просмотр доступен всем; изменения защищены.</span></form>
+            <form className="admin-login" onSubmit={login}><input type="text" value={adminUsername} onChange={(event) => setAdminUsername(event.target.value)} placeholder="Логин" autoComplete="username" /><input type="password" value={adminPassword} onChange={(event) => setAdminPassword(event.target.value)} placeholder="Пароль администратора" autoComplete="current-password" /><button type="submit">Войти для редактирования</button><span>Просмотр доступен всем; изменения защищены.</span></form>
           )
         ) : <p className="local-mode">Локальный режим: серверное API не запущено, редактирование и автосохранение работают только в этом браузере.</p>}
         {adminMessage && <p className="admin-message">{adminMessage}</p>}
