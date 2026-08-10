@@ -21,6 +21,8 @@ test("statistics contain every TI matchup and calibrated methodology", async () 
   assert.equal(Object.keys(stats.pairwise).length, 120);
   assert.equal(stats.methodology.recencyHalfLifeDays, 45);
   assert.deepEqual(stats.methodology.rosterWeights, { 3: 0.07, 4: 0.25, 5: 1 });
+  assert.equal(stats.methodology.directMatchPriorSeries, 6);
+  assert.equal(stats.methodology.ratingL2Penalty, 0.025);
   for (const pair of Object.values(stats.pairwise)) {
     assert.ok(pair.probabilityA >= 7 && pair.probabilityA <= 93);
     assert.ok(pair.uncertainty > 0);
@@ -84,8 +86,18 @@ test("server forecast can create an automatic snapshot payload", async () => {
   const result = runForecast(probabilities, 100, 123, { stats, matches: [] });
   assert.equal(result.teams.length, 16);
   assert.equal(result.iterations, 100);
-  assert.equal(result.formatVersion, "hidden-groups-r1-r3-v1");
+  assert.equal(result.formatVersion, "hidden-groups-r1-r3-playoff-v2");
   assert.equal(result.teams.filter((team) => team.qualify > 0).length > 0, true);
+  assert.equal(result.scenarios[0].direct40.length, 1);
+  assert.equal(result.scenarios[0].direct41.length, 2);
+  assert.equal(result.scenarios[0].via.length, 5);
+  assert.equal(result.playoffScenarios.length, 3);
+  assert.ok(result.playoffScenarios.every((scenario) => new Set([scenario.champion, scenario.runnerUp, scenario.third]).size === 3));
+  assert.ok(result.uniqueTournamentPaths <= result.iterations);
+  assert.ok(result.uniqueSwissPaths <= result.iterations);
+  assert.ok(result.uniqueSwissOutcomes <= result.iterations);
+  assert.ok(result.uniquePlayoffPodiums <= result.iterations);
+  assert.ok(result.uniqueFinalOutcomes <= result.iterations);
   const total = (field) => Math.round(result.teams.reduce((sum, team) => sum + team[field], 0));
   assert.deepEqual({ direct: total("direct"), playinWin: total("viaPlayin"), playinLoss: total("playinLoss"), swissOut: total("swissOut") }, { direct: 300, playinWin: 500, playinLoss: 500, swissOut: 300 });
   for (const team of result.teams) assert.ok(Math.abs(team.direct + team.viaPlayin + team.playinLoss + team.swissOut - 100) < 0.001);

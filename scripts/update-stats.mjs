@@ -9,6 +9,9 @@ const OUTPUT = path.join(ROOT, "public", "team-stats.json");
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 const HALF_LIFE_DAYS = 45;
 const ROSTER_WEIGHTS = { 5: 1, 4: 0.25, 3: 0.07 };
+const DIRECT_MATCH_PRIOR_SERIES = 6;
+const RATING_L2_PENALTY = 0.025;
+const SERIES_INFORMATION = { singleMap: 0.6, multiMapBase: 0.72, decisiveBonus: 0.28 };
 const REQUEST_GAP_MS = 1100;
 const LIVE_TI_LEAGUE_ID = Number(process.env.TI_LEAGUE_ID || 19719);
 
@@ -326,7 +329,7 @@ function collapseToSeries(games) {
       ...series,
       targetScore: series.wins / Math.max(1, maps),
       rosterWeight: series.mapWeights.reduce((sum, value) => sum + value, 0) / series.mapWeights.length,
-      seriesInformation: maps === 1 ? 0.6 : 0.72 + 0.28 * decisive,
+      seriesInformation: maps === 1 ? SERIES_INFORMATION.singleMap : SERIES_INFORMATION.multiMapBase + SERIES_INFORMATION.decisiveBonus * decisive,
     };
   });
 }
@@ -343,7 +346,7 @@ function fitBradleyTerry(seriesList, targetLineups) {
   }));
 
   for (let iteration = 0; iteration < 700; iteration += 1) {
-    const gradient = Object.fromEntries([...nodes].map((node) => [node, -0.025 * ratings[node]]));
+    const gradient = Object.fromEntries([...nodes].map((node) => [node, -RATING_L2_PENALTY * ratings[node]]));
     for (const game of weighted) {
       const a = game.targetLineup;
       const b = game.opponentLineup;
@@ -433,7 +436,7 @@ async function main() {
         directGames += game.weight;
         directWins += game.weight * (isForward ? game.targetScore : 1 - game.targetScore);
       }
-      const priorGames = 6;
+      const priorGames = DIRECT_MATCH_PRIOR_SERIES;
       const mapProbability = (indirectMap * priorGames + directWins) / (priorGames + directGames);
       const seriesProbability = mapProbability * mapProbability * (3 - 2 * mapProbability);
       const sampleA = weighted.filter((game) => game.targetLineup === lineupA).reduce((sum, game) => sum + game.weight, 0);
@@ -471,6 +474,9 @@ async function main() {
       tournamentRosterCheck: "newest map sampled once per team and tournament",
       tournamentRejectedBelowThreeOfFive: true,
       recencyHalfLifeDays: HALF_LIFE_DAYS,
+      directMatchPriorSeries: DIRECT_MATCH_PRIOR_SERIES,
+      ratingL2Penalty: RATING_L2_PENALTY,
+      seriesInformation: SERIES_INFORMATION,
       liveLeagueExcludedFromBaseline: LIVE_TI_LEAGUE_ID,
       model: "series-level recency-weighted Bradley-Terry; 5/5, 4/5 and 3/5 roster evidence; regularized direct matchup residual; Bo3 conversion; uncertainty exported for Monte Carlo",
       rosterProjection: "When a TI roster has no official games, a four-player historical core is shrunk toward 50% by its reliability coefficient.",

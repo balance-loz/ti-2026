@@ -68,7 +68,13 @@ type StatisticalModel = {
   generatedAt: string;
   periodStart: string;
   totals: { uniqueAcceptedGames: number };
-  methodology: { recencyHalfLifeDays: number };
+  methodology: {
+    recencyHalfLifeDays: number;
+    rosterWeights?: Record<string, number>;
+    directMatchPriorSeries?: number;
+    ratingL2Penalty?: number;
+    seriesInformation?: { singleMap: number; multiMapBase: number; decisiveBonus: number };
+  };
   teams: Record<string, StatisticalTeam>;
   pairwise: Record<string, StatisticalPair>;
 };
@@ -89,8 +95,16 @@ type ForecastOutcome = "direct" | "playinWin" | "playinLoss" | "swissOut";
 
 type Scenario = {
   probability: number;
-  direct: string[];
+  direct40: string[];
+  direct41: string[];
   via: string[];
+};
+
+type PlayoffScenario = {
+  probability: number;
+  champion: string;
+  runnerUp: string;
+  third: string;
 };
 
 type PlayinMatchup = {
@@ -103,11 +117,19 @@ type PlayinMatchup = {
 type SimulationResult = {
   teams: TeamForecast[];
   scenarios: Scenario[];
+  playoffScenarios: PlayoffScenario[];
   playinMatchups: PlayinMatchup[];
   iterations: number;
   seed: number;
   uniqueBrackets: number;
   duplicateRate: number;
+  uniqueSwissPaths?: number;
+  swissDuplicateRate?: number;
+  uniqueTournamentPaths?: number;
+  tournamentDuplicateRate?: number;
+  uniqueSwissOutcomes?: number;
+  uniquePlayoffPodiums?: number;
+  uniqueFinalOutcomes?: number;
   formatVersion?: string;
 };
 
@@ -221,6 +243,10 @@ const SWISS_GROUPS = {
 } as const;
 const SWISS_GROUP_BY_TEAM = Object.fromEntries(Object.entries(SWISS_GROUPS).flatMap(([group, ids]) => ids.map((id) => [id, group]))) as Record<string, "A" | "B">;
 const swissBucketKey = (id: string, wins: number, losses: number, round: number) => `${round <= 3 ? SWISS_GROUP_BY_TEAM[id] : "ALL"}:${wins}-${losses}`;
+const PERSONAL_INFERENCE_SCALE = 0.78;
+const LIVE_GLOBAL_WEIGHT = 0.35;
+const LIVE_REMATCH_WEIGHT = 0.15;
+const TOURNAMENT_FORM_SD = 0.16;
 
 const ALL_PAIRS: [string, string][] = (() => {
   const firstRoundKeys = new Set(ROUND_ONE.map(([a, b]) => pairKey(a, b)));
@@ -320,11 +346,11 @@ function applyLiveEvidence(source: AnswerMap, matches: LiveMatch[]) {
     const surprise = outcome - p / 100;
     // One TI series is deliberately worth roughly several ordinary historical
     // series: it measures the current lineup, patch and tournament conditions.
-    strength[match.team_a] += surprise * 0.9;
-    strength[match.team_b] -= surprise * 0.9;
+    strength[match.team_a] += surprise * LIVE_GLOBAL_WEIGHT;
+    strength[match.team_b] -= surprise * LIVE_GLOBAL_WEIGHT;
     const key = pairKey(match.team_a, match.team_b);
     const oriented = key.startsWith(`${match.team_a}|`) ? surprise : -surprise;
-    direct.set(key, (direct.get(key) ?? 0) + oriented * 0.45);
+    direct.set(key, (direct.get(key) ?? 0) + oriented * LIVE_REMATCH_WEIGHT);
   }
   return Object.fromEntries(ALL_PAIRS.map(([a, b]) => {
     const key = pairKey(a, b);
@@ -352,12 +378,13 @@ function predictionExplanation(
   const pair = model?.pairwise[pairKey(a, b)];
   const orientation = pairKey(a, b).startsWith(`${a}|`) ? 1 : -1;
   const items = [];
-  if (stat !== undefined) items.push({ label: "Общие соперники + свежесть", value: orientation * (pair?.featureContributions?.commonOpponentsPp ?? (stat - 50)), text: `${getTeam(a).short} ${stat.toFixed(1)}% по рейтингу свежих серий` });
-  if (pair) items.push({ label: "Личные встречи", value: orientation * (pair.featureContributions?.headToHeadPp ?? 0), text: pair.directEffectiveGames >= 0.75 ? `учтён вес ${pair.directEffectiveGames.toFixed(1)} свежих серий` : "данных мало — H2H почти не двигает прогноз" });
-  if (pair) items.push({ label: "Состав и надёжность", value: orientation * (pair.featureContributions?.rosterPp ?? 0), text: `${pair.modelEffectiveGames.toFixed(1)} эффективных серий · доверие ${pair.confidence === "high" ? "высокое" : pair.confidence === "medium" ? "среднее" : "низкое"}` });
+  if (mode !== "personal" && stat !== undefined) items.push({ label: "Общие соперники + свежесть", value: orientation * (pair?.featureContributions?.commonOpponentsPp ?? (stat - 50)), text: `${getTeam(a).short} ${stat.toFixed(1)}% · половина веса матча теряется за ${model?.methodology.recencyHalfLifeDays ?? 45} дней` });
+  if (mode !== "personal" && pair) items.push({ label: "Личные встречи", value: orientation * (pair.featureContributions?.headToHeadPp ?? 0), text: pair.directEffectiveGames >= 0.75 ? `эффективный вес ${pair.directEffectiveGames.toFixed(1)} серий · prior ${model?.methodology.directMatchPriorSeries ?? 6} серий не даёт H2H переобучиться` : `вес меньше 0.75 серии · prior ${model?.methodology.directMatchPriorSeries ?? 6}, поэтому влияние почти нулевое` });
+  if (mode !== "personal" && pair) items.push({ label: "Состав и надёжность", value: orientation * (pair.featureContributions?.rosterPp ?? 0), text: `${pair.modelEffectiveGames.toFixed(1)} эффективных серий · веса 5/5=${model?.methodology.rosterWeights?.["5"] ?? 1}, 4/5=${model?.methodology.rosterWeights?.["4"] ?? 0.25}, 3/5=${model?.methodology.rosterWeights?.["3"] ?? 0.07}` });
+  if (mode === "personal" && personal !== undefined) items.push({ label: "Твоё мнение", value: personal - 50, text: "применено напрямую; неоценённые пары достраиваются из среднего рейтинга твоих ответов" });
   if (mode === "mixed" && personal !== undefined && stat !== undefined) items.push({ label: "Твоё мнение", value: (personal - stat) * opinionWeight / 100, text: `${opinionWeight}% смеси: сдвиг ${((personal - stat) * opinionWeight / 100).toFixed(1)} п.п.` });
-  if (liveMatches.length) items.push({ label: "Матчи текущего TI", value: afterLive - beforeLive, text: `${liveMatches.length} сыгранных серий: сдвиг ${(afterLive - beforeLive).toFixed(1)} п.п.` });
-  return { beforeLive, afterLive, items };
+  if (liveMatches.length) items.push({ label: "Матчи текущего TI", value: afterLive - beforeLive, text: `${liveMatches.length} серий · общий коэффициент ${LIVE_GLOBAL_WEIGHT}, повторная личная встреча +${LIVE_REMATCH_WEIGHT}` });
+  return { beforeLive, afterLive, items, coefficients: { recencyHalfLifeDays: model?.methodology.recencyHalfLifeDays ?? 45, directPrior: model?.methodology.directMatchPriorSeries ?? 6, rosterWeights: model?.methodology.rosterWeights ?? { 5: 1, 4: 0.25, 3: 0.07 }, personalWeight: mode === "mixed" ? opinionWeight / 100 : mode === "personal" ? 1 : 0, liveGlobal: LIVE_GLOBAL_WEIGHT, liveRematch: LIVE_REMATCH_WEIGHT, uncertainty: pair?.uncertainty ?? 0.07, formShock: TOURNAMENT_FORM_SD, inferenceScale: PERSONAL_INFERENCE_SCALE } };
 }
 
 function snapshotEvaluation(snapshot: PredictionSnapshot, matches: LiveMatch[]) {
@@ -446,7 +473,7 @@ function matchupProbability(
 ) {
   const exact = storedProbability(a, b, answers);
   if (exact !== undefined) return exact / 100;
-  const estimated = 1 / (1 + Math.exp(-(scores[a] - scores[b]) * 0.78));
+  const estimated = 1 / (1 + Math.exp(-(scores[a] - scores[b]) * PERSONAL_INFERENCE_SCALE));
   return Math.min(0.9, Math.max(0.1, estimated));
 }
 
@@ -610,8 +637,11 @@ function runSimulation(
     { direct: number; playin: number; viaPlayin: number; playinLoss: number; swissOut: number; out: number; wins: number; losses: number }
   >;
   const scenarioCounts = new Map<string, number>();
+  const playoffScenarioCounts = new Map<string, number>();
   const matchupCounts = new Map<string, { count: number; firstWins: number }>();
-  const uniqueBracketHashes = new Set<number>();
+  const uniqueSwissPathHashes = new Set<string>();
+  const uniqueTournamentPathHashes = new Set<string>();
+  const uniqueFinalOutcomes = new Set<string>();
 
   for (let iteration = 0; iteration < iterations; iteration += 1) {
     const pathParts: string[] = [];
@@ -628,7 +658,7 @@ function runSimulation(
 
     // A team's tournament form is a latent shock: it is sampled once and then
     // consistently affects all of that team's matches in this simulated bracket.
-    const formShock = Object.fromEntries(TEAMS.map((team) => [team.id, normalRandom(random) * 0.16]));
+    const formShock = Object.fromEntries(TEAMS.map((team) => [team.id, normalRandom(random) * TOURNAMENT_FORM_SD]));
     const sampleWinner = (a: string, b: string) => {
       const base = matchupProbability(a, b, answers, scores);
       const stat = options.statisticalModel?.pairwise[pairKey(a, b)];
@@ -678,7 +708,8 @@ function runSimulation(
     };
     for (let round = 1; round <= 5; round += 1) playRound(round);
 
-    const direct: string[] = [];
+    const direct40: string[] = [];
+    const direct41: string[] = [];
     const via: string[] = [];
     TEAMS.forEach((team) => {
       const record = records[team.id];
@@ -687,7 +718,7 @@ function runSimulation(
       aggregate.losses += record.losses;
       if (record.wins === 4) {
         aggregate.direct += 1;
-        direct.push(team.id);
+        (record.losses === 0 ? direct40 : direct41).push(team.id);
       } else if (record.losses === 4) {
         aggregate.out += 1;
         aggregate.swissOut += 1;
@@ -723,15 +754,49 @@ function runSimulation(
       matchupCounts.set(key, current);
     });
 
-    const signature = JSON.stringify({ direct: direct.sort(), via: via.sort() });
+    const signature = JSON.stringify({ direct40: direct40.sort(), direct41: direct41.sort(), via: via.sort() });
     scenarioCounts.set(signature, (scenarioCounts.get(signature) ?? 0) + 1);
-    let hash = 2166136261;
-    const pathSignature = pathParts.join(";");
-    for (let index = 0; index < pathSignature.length; index += 1) {
-      hash ^= pathSignature.charCodeAt(index);
-      hash = Math.imul(hash, 16777619);
-    }
-    uniqueBracketHashes.add(hash >>> 0);
+
+    const compactHash = (value: string) => {
+      let first = 2166136261; let second = 2246822519;
+      for (let index = 0; index < value.length; index += 1) {
+        const code = value.charCodeAt(index);
+        first = Math.imul(first ^ code, 16777619);
+        second = Math.imul(second ^ code, 3266489917);
+      }
+      return `${first >>> 0}:${second >>> 0}`;
+    };
+    uniqueSwissPathHashes.add(compactHash(pathParts.join(";")));
+
+    const directSeeds = [...direct40, ...direct41.sort((a, b) => scores[b] - scores[a])];
+    const viaSeeds = [...via].sort((a, b) => scores[b] - scores[a]);
+    const qualifiers = [...directSeeds, ...viaSeeds];
+    const knownPlayoff = (options.liveMatches ?? []).filter((match) => match.stage === "playoff");
+    const knownOpening = knownPlayoff.filter((match) => match.round === 1).slice(0, 4);
+    const openingPairs = knownOpening.length === 4
+      ? knownOpening.map((match) => [match.team_a, match.team_b] as [string, string])
+      : [[qualifiers[0], qualifiers[7]], [qualifiers[3], qualifiers[4]], [qualifiers[1], qualifiers[6]], [qualifiers[2], qualifiers[5]]] as [string, string][];
+    const playoffSeries = (label: string, a: string, b: string) => {
+      const actual = knownPlayoff.find((match) => match.winner && ((match.team_a === a && match.team_b === b) || (match.team_a === b && match.team_b === a)));
+      const winner = actual?.winner ?? sampleWinner(a, b);
+      pathParts.push(`PO:${label}:${pairKey(a, b)}>${winner}`);
+      return { a, b, winner, loser: winner === a ? b : a };
+    };
+    const uq = openingPairs.map(([a, b], index) => playoffSeries(`UQ${index + 1}`, a, b));
+    const us1 = playoffSeries("US1", uq[0].winner, uq[1].winner);
+    const us2 = playoffSeries("US2", uq[2].winner, uq[3].winner);
+    const lr11 = playoffSeries("LR11", uq[0].loser, uq[1].loser);
+    const lr12 = playoffSeries("LR12", uq[2].loser, uq[3].loser);
+    const lr21 = playoffSeries("LR21", lr11.winner, us2.loser);
+    const lr22 = playoffSeries("LR22", lr12.winner, us1.loser);
+    const uf = playoffSeries("UF", us1.winner, us2.winner);
+    const ls = playoffSeries("LS", lr21.winner, lr22.winner);
+    const lf = playoffSeries("LF", ls.winner, uf.loser);
+    const gf = playoffSeries("GF", uf.winner, lf.winner);
+    const playoffSignature = JSON.stringify({ champion: gf.winner, runnerUp: gf.loser, third: lf.loser });
+    playoffScenarioCounts.set(playoffSignature, (playoffScenarioCounts.get(playoffSignature) ?? 0) + 1);
+    uniqueFinalOutcomes.add(`${signature}|${playoffSignature}`);
+    uniqueTournamentPathHashes.add(compactHash(pathParts.join(";")));
   }
 
   const teams = TEAMS.map((team) => ({
@@ -755,6 +820,11 @@ function runSimulation(
       probability: (count / iterations) * 100,
     })) as Scenario[];
 
+  const playoffScenarios = [...playoffScenarioCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([signature, count]) => ({ ...JSON.parse(signature), probability: (count / iterations) * 100 })) as PlayoffScenario[];
+
   const playinMatchups = [...matchupCounts.entries()]
     .sort((a, b) => b[1].count - a[1].count)
     .slice(0, 10)
@@ -768,7 +838,9 @@ function runSimulation(
       };
     });
 
-  return { teams, scenarios, playinMatchups, iterations, seed, uniqueBrackets: uniqueBracketHashes.size, duplicateRate: 100 * (1 - uniqueBracketHashes.size / iterations), formatVersion: "hidden-groups-r1-r3-v1" };
+  const swissDuplicateRate = 100 * (1 - uniqueSwissPathHashes.size / iterations);
+  const tournamentDuplicateRate = 100 * (1 - uniqueTournamentPathHashes.size / iterations);
+  return { teams, scenarios, playoffScenarios, playinMatchups, iterations, seed, uniqueBrackets: uniqueTournamentPathHashes.size, duplicateRate: tournamentDuplicateRate, uniqueSwissPaths: uniqueSwissPathHashes.size, swissDuplicateRate, uniqueTournamentPaths: uniqueTournamentPathHashes.size, tournamentDuplicateRate, uniqueSwissOutcomes: scenarioCounts.size, uniquePlayoffPodiums: playoffScenarioCounts.size, uniqueFinalOutcomes: uniqueFinalOutcomes.size, formatVersion: "hidden-groups-r1-r3-playoff-v2" };
 }
 
 function TeamMark({ team, small = false }: { team: Team; small?: boolean }) {
@@ -785,11 +857,33 @@ function TeamMark({ team, small = false }: { team: Team; small?: boolean }) {
   );
 }
 
-function PlayoffMatchCard({ match }: { match: LikelyPlayoffMatch }) {
+function MatchupBreakdown({ a, explanation, open = false, compact = false }: { a: string; explanation: ReturnType<typeof predictionExplanation>; open?: boolean; compact?: boolean }) {
+  const coefficients = explanation.coefficients;
+  return <details className={`model-explanation matchup-breakdown ${compact ? "matchup-breakdown--compact" : ""}`} open={open}>
+    <summary>Почему модель дала {explanation.afterLive.toFixed(1)}% на {getTeam(a).name}</summary>
+    <div className="matchup-breakdown__body">
+      <div className="explanation-total"><b>{getTeam(a).short} {explanation.afterLive.toFixed(1)}%</b><span>итог после всех применимых поправок</span></div>
+      {explanation.items.map((item) => <div className="explanation-row" key={item.label}><div><strong>{item.label}</strong><small>{item.text}</small></div><span className={item.value >= 0 ? "positive" : "negative"}>{item.value >= 0 ? "+" : ""}{item.value.toFixed(1)} п.п.</span></div>)}
+      <div className="coefficient-grid">
+        <span><b>{coefficients.recencyHalfLifeDays} дн.</b>полураспад свежести</span>
+        <span><b>{coefficients.directPrior}</b>prior серий для H2H</span>
+        <span><b>{coefficients.rosterWeights["5"]} / {coefficients.rosterWeights["4"]} / {coefficients.rosterWeights["3"]}</b>веса составов 5/5 · 4/5 · 3/5</span>
+        <span><b>{coefficients.personalWeight.toFixed(2)}</b>вес твоего мнения</span>
+        <span><b>{coefficients.liveGlobal} + {coefficients.liveRematch}</b>TI: общая форма + реванш</span>
+        <span><b>σ {coefficients.formShock} + {coefficients.uncertainty.toFixed(3)}</b>форма турнира + неопределённость пары</span>
+        <span><b>{coefficients.inferenceScale}</b>перенос мнения на неоценённые пары</span>
+      </div>
+      <p>Коэффициент применяется только при наличии соответствующих данных. Сдвиги показаны в процентных пунктах; случайная форма и неопределённость меняют отдельные симуляции, поэтому не входят в детерминированную сумму выше.</p>
+    </div>
+  </details>;
+}
+
+function PlayoffMatchCard({ match, explanation }: { match: LikelyPlayoffMatch; explanation: ReturnType<typeof predictionExplanation> }) {
   return <article className="playoff-match">
     <header><span>{match.label}</span><b>{match.format}</b></header>
     <div className={match.winner === match.a ? "is-winner" : ""}><TeamMark team={getTeam(match.a)} small /><strong>{getTeam(match.a).name}</strong><em>{match.probabilityA.toFixed(0)}%</em></div>
     <div className={match.winner === match.b ? "is-winner" : ""}><TeamMark team={getTeam(match.b)} small /><strong>{getTeam(match.b).name}</strong><em>{(100 - match.probabilityA).toFixed(0)}%</em></div>
+    <MatchupBreakdown a={match.a} explanation={explanation} compact />
   </article>;
 }
 
@@ -851,6 +945,7 @@ export default function Home() {
     return ordered.map((match, index) => ({ match, ...matchEvaluation(ordered.slice(0, index + 1)) })).slice(-24);
   }, [completedLiveMatches]);
   const currentExplanation = predictionExplanation(currentPair[0], currentPair[1], answers, stats, forecastMode, opinionWeight, completedLiveMatches);
+  const explainMatchup = (a: string, b: string) => predictionExplanation(a, b, answers, stats, forecastMode, opinionWeight, completedLiveMatches);
   const likelyOutcomes = useMemo(() => result ? likelyOutcomePartition(result.teams) : {}, [result]);
   const filteredTeams = useMemo(() => {
     if (!result) return [];
@@ -1188,7 +1283,7 @@ export default function Home() {
           {snapshots.length ? <div className="snapshot-list">{snapshots.map((snapshot) => {
             const evaluation = snapshotEvaluation(snapshot, completedLiveMatches);
             return <details key={snapshot.id}>
-              <summary><time>{new Date(snapshot.created_at).toLocaleString("ru-RU")}</time><b>{snapshot.trigger === "manual_run" ? "ручной прогон" : snapshot.trigger.startsWith("pre_") ? "до начала раунда" : snapshot.trigger.startsWith("auto_pairing_") ? "после публикации пар" : snapshot.trigger.startsWith("auto_") ? "после результата" : snapshot.trigger} · {snapshot.forecast_mode === "mixed" ? `смесь ${snapshot.opinion_weight}% мнения` : snapshot.forecast_mode === "stats" ? "только статистика" : "только мнение"} · {snapshot.result.formatVersion === "hidden-groups-r1-r3-v1" ? "группы R1–R3" : "старый формат"}</b><span>{evaluation.count ? `${evaluation.correct}/${evaluation.count} верно` : "ждёт новых матчей"}</span></summary>
+              <summary><time>{new Date(snapshot.created_at).toLocaleString("ru-RU")}</time><b>{snapshot.trigger === "manual_run" ? "ручной прогон" : snapshot.trigger.startsWith("pre_") ? "до начала раунда" : snapshot.trigger.startsWith("auto_pairing_") ? "после публикации пар" : snapshot.trigger.startsWith("auto_") ? "после результата" : snapshot.trigger} · {snapshot.forecast_mode === "mixed" ? `смесь ${snapshot.opinion_weight}% мнения` : snapshot.forecast_mode === "stats" ? "только статистика" : "только мнение"} · {snapshot.result.formatVersion === "hidden-groups-r1-r3-playoff-v2" ? "Swiss + плей-офф" : snapshot.result.formatVersion === "hidden-groups-r1-r3-v1" ? "группы R1–R3" : "старый формат"}</b><span>{evaluation.count ? `${evaluation.correct}/${evaluation.count} верно` : "ждёт новых матчей"}</span></summary>
               <div className="snapshot-metrics">
                 <div><b>{snapshot.iterations.toLocaleString("ru-RU")}</b><span>прогонов</span></div>
                 <div><b>{snapshot.result.uniqueBrackets?.toLocaleString("ru-RU") ?? "—"}</b><span>уникальных путей</span></div>
@@ -1273,17 +1368,7 @@ export default function Home() {
                   </>
                 ) : <span>Статистическая оценка загружается…</span>}
               </div>
-              <details className="model-explanation" open>
-                <summary>Почему модель дала {currentExplanation.afterLive.toFixed(1)}% на {teamA.name}</summary>
-                <div className="explanation-total"><b>{teamA.short} {currentExplanation.afterLive.toFixed(1)}%</b><span>итог после всех поправок</span></div>
-                {currentExplanation.items.map((item) => (
-                  <div className="explanation-row" key={item.label}>
-                    <div><strong>{item.label}</strong><small>{item.text}</small></div>
-                    <span className={item.value >= 0 ? "positive" : "negative"}>{item.value >= 0 ? "+" : ""}{item.value.toFixed(1)}</span>
-                  </div>
-                ))}
-                <p>Это объяснимая рейтинговая модель, а не нейросеть-чёрный ящик: каждый сдвиг можно проследить до матчей, веса состава или выбранной тобой смеси.</p>
-              </details>
+              <MatchupBreakdown a={currentPair[0]} explanation={currentExplanation} open />
             </div>
 
             <div className="card-actions">
@@ -1341,7 +1426,7 @@ export default function Home() {
               <span>{isCalculating ? "···" : "↗"}</span>
             </button>
             <small>Каждый запуск использует новую независимую случайную выборку. Максимальная статистическая погрешность при {iterationCount.toLocaleString("ru-RU")} прогонах — около ±{samplingMargin(iterationCount).toFixed(2)} п.п.</small>
-            {result && <small className="stats-meta">Уникальных среди прогонов: {result.uniqueBrackets.toLocaleString("ru-RU")} ({(100 - result.duplicateRate).toFixed(1)}%) · повторов {result.duplicateRate.toFixed(1)}%. Более строгие правила уменьшают число допустимых путей; повторы нужны для оценки их вероятности.</small>}
+            {result && <small className="stats-meta">Итоговых восьмёрок Swiss: {result.uniqueSwissOutcomes?.toLocaleString("ru-RU") ?? "—"}; вариантов подиума: {result.uniquePlayoffPodiums?.toLocaleString("ru-RU") ?? "—"}; полных итогов «восьмёрка + подиум»: {result.uniqueFinalOutcomes?.toLocaleString("ru-RU") ?? "—"}. Детальных путей всего турнира: {(result.uniqueTournamentPaths ?? result.uniqueBrackets).toLocaleString("ru-RU")} из {result.iterations.toLocaleString("ru-RU")} ({(100 - (result.tournamentDuplicateRate ?? result.duplicateRate)).toFixed(3)}%). Это разные метрики: один итог может быть достигнут множеством разных жеребьёвок и результатов по раундам.</small>}
             {stats && <small className="stats-meta">{stats.totals.uniqueAcceptedGames} карт · одна контрольная карта на турнир · половина веса за {stats.methodology.recencyHalfLifeDays} дней</small>}
           </aside>
         </div>
@@ -1351,7 +1436,7 @@ export default function Home() {
         <div className="section-heading section-heading--light">
           <span className="step-number">02</span>
           <div><p>РЕЗУЛЬТАТ СИМУЛЯЦИИ</p><h2>Куда попадёт команда</h2></div>
-          <span className="section-note">{result ? <>{result.iterations.toLocaleString("ru-RU")} независимых сеток · ~{result.uniqueBrackets.toLocaleString("ru-RU")} уникальных<br />погрешность до ±{samplingMargin(result.iterations).toFixed(2)} п.п.</> : "Готовим первый прогноз…"}</span>
+          <span className="section-note">{result ? <>{result.iterations.toLocaleString("ru-RU")} независимых полных турниров · {(result.uniqueTournamentPaths ?? result.uniqueBrackets).toLocaleString("ru-RU")} уникальных путей<br />погрешность вероятностей до ±{samplingMargin(result.iterations).toFixed(2)} п.п.</> : "Готовим первый прогноз…"}</span>
         </div>
 
         <div className="swiss-groups" aria-label="Скрытые группы первых трёх раундов">
@@ -1383,15 +1468,15 @@ export default function Home() {
           <div className="likely-playoff__head"><div><p className="eyebrow">ПРОГНОЗ ПЛЕЙ-ОФФ</p><h3>Double elimination до чемпиона</h3></div><span>Предварительная сетка из восьми вероятнейших участников. Посев будет автоматически заменён фактическим, когда организаторы опубликуют пары. Все серии BO3, гранд-финал BO5.</span></div>
           <div className="playoff-bracket" aria-label="Сетка плей-офф double elimination">
             <div className="playoff-bracket__canvas">
-              <section className="playoff-stage playoff-stage--uq"><h4>1/4 финала</h4>{[1, 2, 3, 4].map((number) => <PlayoffMatchCard key={number} match={playoffMatches[`UB QF ${number}`]} />)}</section>
-              <section className="playoff-stage playoff-stage--us"><h4>Полуфинал верхней сетки</h4>{[1, 2].map((number) => <PlayoffMatchCard key={number} match={playoffMatches[`UB SF ${number}`]} />)}</section>
-              <section className="playoff-stage playoff-stage--uf"><h4>Финал верхней сетки</h4><PlayoffMatchCard match={playoffMatches["UB FINAL"]} /></section>
-              <section className="playoff-stage playoff-stage--gf"><h4>Гранд-финал</h4><PlayoffMatchCard match={playoffMatches["GRAND FINAL"]} /></section>
+              <section className="playoff-stage playoff-stage--uq"><h4>1/4 финала</h4>{[1, 2, 3, 4].map((number) => { const match = playoffMatches[`UB QF ${number}`]; return <PlayoffMatchCard key={number} match={match} explanation={explainMatchup(match.a, match.b)} />; })}</section>
+              <section className="playoff-stage playoff-stage--us"><h4>Полуфинал верхней сетки</h4>{[1, 2].map((number) => { const match = playoffMatches[`UB SF ${number}`]; return <PlayoffMatchCard key={number} match={match} explanation={explainMatchup(match.a, match.b)} />; })}</section>
+              <section className="playoff-stage playoff-stage--uf"><h4>Финал верхней сетки</h4><PlayoffMatchCard match={playoffMatches["UB FINAL"]} explanation={explainMatchup(playoffMatches["UB FINAL"].a, playoffMatches["UB FINAL"].b)} /></section>
+              <section className="playoff-stage playoff-stage--gf"><h4>Гранд-финал</h4><PlayoffMatchCard match={playoffMatches["GRAND FINAL"]} explanation={explainMatchup(playoffMatches["GRAND FINAL"].a, playoffMatches["GRAND FINAL"].b)} /></section>
               <div className="playoff-bracket__divider" />
-              <section className="playoff-stage playoff-stage--lr1"><h4>Нижняя сетка · Раунд 1</h4>{[1, 2].map((number) => <PlayoffMatchCard key={number} match={playoffMatches[`LB R1 ${number}`]} />)}</section>
-              <section className="playoff-stage playoff-stage--lr2"><h4>Нижняя сетка · Раунд 2</h4>{[1, 2].map((number) => <PlayoffMatchCard key={number} match={playoffMatches[`LB R2 ${number}`]} />)}</section>
-              <section className="playoff-stage playoff-stage--ls"><h4>Полуфинал нижней сетки</h4><PlayoffMatchCard match={playoffMatches["LB SF"]} /></section>
-              <section className="playoff-stage playoff-stage--lf"><h4>Финал нижней сетки</h4><PlayoffMatchCard match={playoffMatches["LB FINAL"]} /></section>
+              <section className="playoff-stage playoff-stage--lr1"><h4>Нижняя сетка · Раунд 1</h4>{[1, 2].map((number) => { const match = playoffMatches[`LB R1 ${number}`]; return <PlayoffMatchCard key={number} match={match} explanation={explainMatchup(match.a, match.b)} />; })}</section>
+              <section className="playoff-stage playoff-stage--lr2"><h4>Нижняя сетка · Раунд 2</h4>{[1, 2].map((number) => { const match = playoffMatches[`LB R2 ${number}`]; return <PlayoffMatchCard key={number} match={match} explanation={explainMatchup(match.a, match.b)} />; })}</section>
+              <section className="playoff-stage playoff-stage--ls"><h4>Полуфинал нижней сетки</h4><PlayoffMatchCard match={playoffMatches["LB SF"]} explanation={explainMatchup(playoffMatches["LB SF"].a, playoffMatches["LB SF"].b)} /></section>
+              <section className="playoff-stage playoff-stage--lf"><h4>Финал нижней сетки</h4><PlayoffMatchCard match={playoffMatches["LB FINAL"]} explanation={explainMatchup(playoffMatches["LB FINAL"].a, playoffMatches["LB FINAL"].b)} /></section>
             </div>
           </div>
           <p className="likely-champion">Вероятнейший чемпион: <TeamMark team={getTeam(likelyPlayoff.stages.at(-1)!.matches[0].winner)} small /><b>{getTeam(likelyPlayoff.stages.at(-1)!.matches[0].winner).name}</b></p>
@@ -1453,6 +1538,7 @@ export default function Home() {
                     </div>
                     <div className="playin-meter"><span style={{ width: `${matchup.aWinProbability}%` }} /></div>
                     <div className="playin-odds"><b>{matchup.aWinProbability.toFixed(0)}%</b><span>ШАНС В СТЫКЕ</span><b>{(100 - matchup.aWinProbability).toFixed(0)}%</b></div>
+                    <MatchupBreakdown a={matchup.a} explanation={explainMatchup(matchup.a, matchup.b)} compact />
                   </article>
                 );
               })}
@@ -1465,15 +1551,35 @@ export default function Home() {
             <div className="scenario-intro">
               <p className="eyebrow">ТОП-3 СЦЕНАРИЯ</p>
               <h3>Самые частые<br />финальные расклады</h3>
-              <p>Точное сочетание трёх команд, прошедших напрямую, и пяти победителей стыков — итоговая восьмёрка плей-офф.</p>
+              <p>Точное сочетание команды 4–0, двух команд 4–1 и пяти победителей стыков — итоговая восьмёрка плей-офф.</p>
             </div>
             {result.scenarios.map((scenario, index) => (
-              <article className="scenario-card" key={`${scenario.direct.join("-")}-${scenario.via.join("-")}`}>
+              <article className="scenario-card" key={`${scenario.direct40.join("-")}-${scenario.direct41.join("-")}-${scenario.via.join("-")}`}>
                 <header><span>0{index + 1}</span><b>{scenario.probability.toFixed(2)}%</b></header>
-                <p>НАПРЯМУЮ</p>
-                <div>{scenario.direct.map((id) => <span className="team-chip team-chip--green" key={id}><TeamMark team={getTeam(id)} small />{getTeam(id).name}</span>)}</div>
+                <p>4–0 · БЕЗ ПОРАЖЕНИЙ</p>
+                <div>{scenario.direct40.map((id) => <span className="team-chip team-chip--lime" key={id}><TeamMark team={getTeam(id)} small />{getTeam(id).name}</span>)}</div>
+                <p>4–1 · НАПРЯМУЮ</p>
+                <div>{scenario.direct41.map((id) => <span className="team-chip team-chip--green" key={id}><TeamMark team={getTeam(id)} small />{getTeam(id).name}</span>)}</div>
                 <p>ЧЕРЕЗ СТЫК</p>
                 <div>{scenario.via.map((id) => <span className="team-chip team-chip--amber" key={id}><TeamMark team={getTeam(id)} small />{getTeam(id).name}</span>)}</div>
+              </article>
+            ))}
+          </div>
+        )}
+
+        {result?.playoffScenarios?.length > 0 && (
+          <div className="scenario-grid scenario-grid--playoff">
+            <div className="scenario-intro">
+              <p className="eyebrow">ТОП-3 ПЛЕЙ-ОФФ</p>
+              <h3>Самые частые<br />подиумы турнира</h3>
+              <p>Точное сочетание чемпиона, финалиста и третьего места после полной double-elimination сетки.</p>
+            </div>
+            {result.playoffScenarios.map((scenario, index) => (
+              <article className="scenario-card playoff-scenario-card" key={`${scenario.champion}-${scenario.runnerUp}-${scenario.third}`}>
+                <header><span>0{index + 1}</span><b>{scenario.probability.toFixed(2)}%</b></header>
+                <p>ЧЕМПИОН</p><div><span className="team-chip team-chip--lime"><TeamMark team={getTeam(scenario.champion)} small />{getTeam(scenario.champion).name}</span></div>
+                <p>ФИНАЛИСТ</p><div><span className="team-chip team-chip--green"><TeamMark team={getTeam(scenario.runnerUp)} small />{getTeam(scenario.runnerUp).name}</span></div>
+                <p>ТРЕТЬЕ МЕСТО</p><div><span className="team-chip team-chip--amber"><TeamMark team={getTeam(scenario.third)} small />{getTeam(scenario.third).name}</span></div>
               </article>
             ))}
           </div>

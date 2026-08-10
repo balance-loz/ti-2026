@@ -12,6 +12,13 @@
     "tournamentRosterCheck": "newest map sampled once per team and tournament",
     "tournamentRejectedBelowThreeOfFive": true,
     "recencyHalfLifeDays": 45,
+    "directMatchPriorSeries": 6,
+    "ratingL2Penalty": 0.025,
+    "seriesInformation": {
+      "singleMap": 0.6,
+      "multiMapBase": 0.72,
+      "decisiveBonus": 0.28
+    },
     "model": "series-level recency-weighted Bradley-Terry; 5/5, 4/5 and 3/5 roster evidence; regularized direct matchup residual; Bo3 conversion; uncertainty exported for Monte Carlo",
     "rosterProjection": "When a TI roster has no official games, a four-player historical core is shrunk toward 50% by its reliability coefficient."
   },

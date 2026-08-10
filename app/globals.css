@@ -248,24 +248,24 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border: 5px s
 .likely-playoff__head h3 { margin: 7px 0 0; color: #151a16; font-size: clamp(30px, 3.2vw, 38px); line-height: 1.08; letter-spacing: -.045em; }
 .likely-playoff__head > span { color: #4d544c; font-size: 12px; line-height: 1.55; }
 .playoff-bracket { overflow-x: auto; padding: 4px 0 8px; }
-.playoff-bracket__canvas { position: relative; display: grid; grid-template-columns: 205px 215px 205px 215px 205px; grid-template-rows: 398px 1px 276px; column-gap: 32px; min-width: 1173px; padding: 14px; border: 1px solid #b7b9b1; background: linear-gradient(90deg, rgba(88,92,99,.09) 0 18.4%, transparent 18.4% 40.2%, rgba(88,92,99,.09) 40.2% 59.9%, transparent 59.9% 81.6%, rgba(88,92,99,.09) 81.6%); }
+.playoff-bracket__canvas { position: relative; display: grid; grid-template-columns: repeat(5, 215px); grid-template-rows: 550px 1px 350px; column-gap: 32px; min-width: 1249px; padding: 14px; border: 1px solid #b7b9b1; background: linear-gradient(90deg, rgba(88,92,99,.09) 0 18.4%, transparent 18.4% 40.2%, rgba(88,92,99,.09) 40.2% 59.9%, transparent 59.9% 81.6%, rgba(88,92,99,.09) 81.6%); }
 .playoff-bracket__divider { grid-column: 1 / -2; grid-row: 2; align-self: center; height: 1px; background: #aeb1aa; }
 .playoff-stage { position: relative; min-width: 0; }
 .playoff-stage h4 { min-height: 32px; margin: 0; color: #3f463e; font: 800 10px/1.3 var(--font-geist-mono); text-transform: uppercase; }
 .playoff-stage--uq { grid-column: 1; grid-row: 1; }
-.playoff-stage--us { grid-column: 2; grid-row: 1; padding-top: 57px; }
-.playoff-stage--uf { grid-column: 4; grid-row: 1; padding-top: 151px; }
-.playoff-stage--gf { grid-column: 5; grid-row: 1 / 4; padding-top: 278px; }
+.playoff-stage--us { grid-column: 2; grid-row: 1; padding-top: 65px; }
+.playoff-stage--uf { grid-column: 3; grid-row: 1; padding-top: 186px; }
+.playoff-stage--gf { grid-column: 5; grid-row: 1 / 4; padding-top: 416px; }
 .playoff-stage--lr1 { grid-column: 1; grid-row: 3; padding-top: 12px; }
 .playoff-stage--lr2 { grid-column: 2; grid-row: 3; padding-top: 12px; }
-.playoff-stage--ls { grid-column: 3; grid-row: 3; padding-top: 79px; }
-.playoff-stage--lf { grid-column: 4; grid-row: 3; padding-top: 79px; }
+.playoff-stage--ls { grid-column: 3; grid-row: 3; padding-top: 95px; }
+.playoff-stage--lf { grid-column: 4; grid-row: 3; padding-top: 95px; }
 .playoff-match { position: relative; z-index: 1; margin: 0 0 13px; border: 1px solid #bfc1ba; background: #f2f0e9; box-shadow: 0 1px 0 rgba(255,255,255,.5); }
 .playoff-match::after { content: ""; position: absolute; top: 50%; left: 100%; width: 33px; border-top: 1px solid #747d74; }
 .playoff-stage--gf .playoff-match::after { display: none; }
 .playoff-stage--uq .playoff-match { margin-bottom: 14px; }
-.playoff-stage--us .playoff-match:first-of-type { margin-bottom: 102px; }
-.playoff-stage--lr1 .playoff-match:first-of-type, .playoff-stage--lr2 .playoff-match:first-of-type { margin-bottom: 36px; }
+.playoff-stage--us .playoff-match:first-of-type { margin-bottom: 126px; }
+.playoff-stage--lr1 .playoff-match:first-of-type, .playoff-stage--lr2 .playoff-match:first-of-type { margin-bottom: 50px; }
 .playoff-match header { display: flex; justify-content: space-between; padding: 6px 8px; border-bottom: 1px solid #ccc9c0; color: #454c44; font: 750 10px var(--font-geist-mono); }
 .playoff-match > div { display: grid; grid-template-columns: 27px 1fr 37px; gap: 7px; align-items: center; min-height: 34px; padding: 4px 7px; color: #4e554d; font-size: 11px; }
 .playoff-match > div + div { border-top: 1px solid #d5d2c9; }
@@ -273,10 +273,10 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border: 5px s
 .playoff-match .team-mark { width: 24px; height: 24px; }
 .playoff-match strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .playoff-match em { color: #414941; font: normal 800 10px var(--font-geist-mono); text-align: right; }
-.playoff-stage--uq::after, .playoff-stage--us::after { content: ""; position: absolute; right: -16px; border-right: 1px solid #929990; }
-.playoff-stage--uq::after { top: 78px; height: 286px; }
-.playoff-stage--us::after { top: 130px; height: 174px; }
-.playoff-stage--lr1::after, .playoff-stage--lr2::after { content: ""; position: absolute; right: -17px; top: 105px; height: 126px; border-right: 1px solid #747d74; }
+.playoff-stage--uf .playoff-match::after { width: 280px; }
+.playoff-stage--uq .playoff-match:nth-of-type(1)::before, .playoff-stage--uq .playoff-match:nth-of-type(3)::before, .playoff-stage--us .playoff-match:first-of-type::before, .playoff-stage--lr2 .playoff-match:first-of-type::before { content: ""; position: absolute; top: 50%; right: -17px; height: 130px; border-right: 1px solid #747d74; }
+.playoff-stage--us .playoff-match:first-of-type::before { height: 242px; }
+.playoff-stage--lr2 .playoff-match:first-of-type::before { height: 166px; }
 .likely-champion { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin: 15px 0 0; color: #74776f; font-size: 10px; }
 .likely-champion b { color: #3e6135; font-size: 14px; }
 .forecast-filters { display: flex; gap: 4px; margin-bottom: 15px; }
@@ -333,8 +333,11 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border: 5px s
 .team-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 9px 6px 6px; border: 1px solid #c2bfb6; background: #f7f5ee; font-size: 11px; font-weight: 650; }
 .team-chip .team-mark { width: 20px; height: 20px; color: var(--ink); border-color: transparent; background: transparent; box-shadow: none; font-size: 7px; }
 .team-chip--green { border-left: 2px solid #64b458; }
+.team-chip--lime { border-left: 2px solid #9ccf36; background: #eef4dc; }
 .team-chip--amber { border-left: 2px solid #d9a439; }
 .team-chip--red { border-left: 2px solid #df5963; }
+.scenario-grid--playoff { margin-top: 28px; }
+.playoff-scenario-card { min-height: 250px; }
 
 .format-section { padding-top: 100px; padding-bottom: 110px; }
 .round-grid { display: grid; grid-template-columns: repeat(2, 1fr); border-top: 1px solid var(--line); }
@@ -443,7 +446,15 @@ button:disabled, input:disabled { cursor: not-allowed; opacity: .5; }
 .explanation-total b { color: var(--lime); font: 800 18px var(--font-geist-mono); }.explanation-total span { color: #a1abb8; font-size: 10px; }
 .explanation-row > div { display: grid; gap: 3px; }.explanation-row strong { font-size: 11px; }.explanation-row small { color: #a0aab7; font-size: 10px; line-height: 1.45; }
 .explanation-row > span { min-width: 50px; text-align: right; font: 800 12px var(--font-geist-mono); }.explanation-row .positive { color: #7bdc72; }.explanation-row .negative { color: #ff7180; }
-.model-explanation > p { margin: 0; padding: 12px 14px; border-top: 1px solid #29313d; color: #a2acb8; font-size: 10px; line-height: 1.55; }
+.matchup-breakdown__body > p { margin: 0; padding: 12px 14px; border-top: 1px solid #29313d; color: #a2acb8; font-size: 10px; line-height: 1.55; }
+.coefficient-grid { display: grid; grid-template-columns: repeat(2, 1fr); border-top: 1px solid #29313d; }
+.coefficient-grid span { display: grid; gap: 3px; min-width: 0; padding: 9px 14px; border-right: 1px solid #29313d; border-bottom: 1px solid #29313d; color: #98a3b1; font: 600 9px/1.4 var(--font-geist-mono); }
+.coefficient-grid span:nth-child(even) { border-right: 0; }
+.coefficient-grid b { color: #dce4ec; font-size: 10px; }
+.matchup-breakdown--compact { position: relative; z-index: 5; margin: 0; border: 0; border-top: 1px solid #d2cfc6; background: #e6e3da; }
+.matchup-breakdown--compact summary { padding: 7px 8px; overflow: hidden; color: #4b544c; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.matchup-breakdown--compact .matchup-breakdown__body { position: absolute; top: 100%; left: -1px; z-index: 40; width: 390px; border: 1px solid #303947; background: #111720; box-shadow: 0 18px 45px rgba(13,18,24,.35); color: #dce4ec; }
+.playoff-match:has(.matchup-breakdown[open]), .playin-match:has(.matchup-breakdown[open]) { z-index: 35; }
 .prediction-history { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--line); }
 .prediction-history__head { display: flex; justify-content: space-between; align-items: end; gap: 20px; }.prediction-history__head h3 { margin: 5px 0 0; font-size: 22px; }.prediction-history__head > span { color: #a0aab7; font: 700 10px var(--font-geist-mono); text-transform: uppercase; }
 .history-chart { margin-top: 16px; padding: 15px; border: 1px solid #303845; background: #10151c; }
