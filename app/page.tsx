@@ -721,6 +721,14 @@ function TeamMark({ team, small = false }: { team: Team; small?: boolean }) {
   );
 }
 
+function PlayoffMatchCard({ match }: { match: LikelyPlayoffMatch }) {
+  return <article className="playoff-match">
+    <header><span>{match.label}</span><b>{match.format}</b></header>
+    <div className={match.winner === match.a ? "is-winner" : ""}><TeamMark team={getTeam(match.a)} small /><strong>{getTeam(match.a).name}</strong><em>{match.probabilityA.toFixed(0)}%</em></div>
+    <div className={match.winner === match.b ? "is-winner" : ""}><TeamMark team={getTeam(match.b)} small /><strong>{getTeam(match.b).name}</strong><em>{(100 - match.probabilityA).toFixed(0)}%</em></div>
+  </article>;
+}
+
 export default function Home() {
   const [answers, setAnswers] = useState<AnswerMap>({});
   const [questionIndex, setQuestionIndex] = useState(0);
@@ -770,6 +778,7 @@ export default function Home() {
   }, [answers, completedLiveMatches, forecastMode, opinionWeight, stats]);
   const likelyBracket = useMemo(() => buildLikelyBracket(forecastSource, liveMatches), [forecastSource, liveMatches]);
   const likelyPlayoff = useMemo(() => buildLikelyPlayoff(likelyBracket, forecastSource, liveMatches), [forecastSource, likelyBracket, liveMatches]);
+  const playoffMatches = useMemo(() => Object.fromEntries(likelyPlayoff.stages.flatMap((stage) => stage.matches).map((match) => [match.label, match])) as Record<string, LikelyPlayoffMatch>, [likelyPlayoff]);
   const liveResultSignature = completedLiveMatches.map((match) => `${match.id}:${match.winner}:${match.score_a}:${match.score_b}`).join(";");
   const snapshots = useMemo(() => serverState?.snapshots ?? [], [serverState?.snapshots]);
   const historyPoints = useMemo(() => [...snapshots].reverse().slice(-16).map((snapshot) => ({
@@ -1262,7 +1271,7 @@ export default function Home() {
               <span>{isCalculating ? "···" : "↗"}</span>
             </button>
             <small>Каждый запуск использует новую независимую случайную выборку. Максимальная статистическая погрешность при {iterationCount.toLocaleString("ru-RU")} прогонах — около ±{samplingMargin(iterationCount).toFixed(2)} п.п.</small>
-            {result && <small className="stats-meta">Примерно {result.uniqueBrackets.toLocaleString("ru-RU")} уникальных полных путей · повторов {result.duplicateRate.toFixed(1)}%. Повторы нужны для оценки вероятности, а не являются ошибкой.</small>}
+            {result && <small className="stats-meta">Уникальных среди прогонов: {result.uniqueBrackets.toLocaleString("ru-RU")} ({(100 - result.duplicateRate).toFixed(1)}%) · повторов {result.duplicateRate.toFixed(1)}%. Более строгие правила уменьшают число допустимых путей; повторы нужны для оценки их вероятности.</small>}
             {stats && <small className="stats-meta">{stats.totals.uniqueAcceptedGames} карт · одна контрольная карта на турнир · половина веса за {stats.methodology.recencyHalfLifeDays} дней</small>}
           </aside>
         </div>
@@ -1302,7 +1311,19 @@ export default function Home() {
 
         {likelyPlayoff.stages.length > 0 && <div className="likely-playoff">
           <div className="likely-playoff__head"><div><p className="eyebrow">ПРОГНОЗ ПЛЕЙ-ОФФ</p><h3>Double elimination до чемпиона</h3></div><span>Предварительная сетка из восьми вероятнейших участников. Посев будет автоматически заменён фактическим, когда организаторы опубликуют пары. Все серии BO3, гранд-финал BO5.</span></div>
-          <div className="likely-playoff__grid">{likelyPlayoff.stages.map((stage) => <section key={stage.name}><h4>{stage.name}</h4>{stage.matches.map((match) => <article key={match.label}><header><span>{match.label}</span><b>{match.format}</b></header><div className={match.winner === match.a ? "is-winner" : ""}><TeamMark team={getTeam(match.a)} small /><strong>{getTeam(match.a).name}</strong><em>{match.probabilityA.toFixed(0)}%</em></div><div className={match.winner === match.b ? "is-winner" : ""}><TeamMark team={getTeam(match.b)} small /><strong>{getTeam(match.b).name}</strong><em>{(100 - match.probabilityA).toFixed(0)}%</em></div></article>)}</section>)}</div>
+          <div className="playoff-bracket" aria-label="Сетка плей-офф double elimination">
+            <div className="playoff-bracket__canvas">
+              <section className="playoff-stage playoff-stage--uq"><h4>1/4 финала</h4>{[1, 2, 3, 4].map((number) => <PlayoffMatchCard key={number} match={playoffMatches[`UB QF ${number}`]} />)}</section>
+              <section className="playoff-stage playoff-stage--us"><h4>Полуфинал верхней сетки</h4>{[1, 2].map((number) => <PlayoffMatchCard key={number} match={playoffMatches[`UB SF ${number}`]} />)}</section>
+              <section className="playoff-stage playoff-stage--uf"><h4>Финал верхней сетки</h4><PlayoffMatchCard match={playoffMatches["UB FINAL"]} /></section>
+              <section className="playoff-stage playoff-stage--gf"><h4>Гранд-финал</h4><PlayoffMatchCard match={playoffMatches["GRAND FINAL"]} /></section>
+              <div className="playoff-bracket__divider" />
+              <section className="playoff-stage playoff-stage--lr1"><h4>Нижняя сетка · Раунд 1</h4>{[1, 2].map((number) => <PlayoffMatchCard key={number} match={playoffMatches[`LB R1 ${number}`]} />)}</section>
+              <section className="playoff-stage playoff-stage--lr2"><h4>Нижняя сетка · Раунд 2</h4>{[1, 2].map((number) => <PlayoffMatchCard key={number} match={playoffMatches[`LB R2 ${number}`]} />)}</section>
+              <section className="playoff-stage playoff-stage--ls"><h4>Полуфинал нижней сетки</h4><PlayoffMatchCard match={playoffMatches["LB SF"]} /></section>
+              <section className="playoff-stage playoff-stage--lf"><h4>Финал нижней сетки</h4><PlayoffMatchCard match={playoffMatches["LB FINAL"]} /></section>
+            </div>
+          </div>
           <p className="likely-champion">Вероятнейший чемпион: <TeamMark team={getTeam(likelyPlayoff.stages.at(-1)!.matches[0].winner)} small /><b>{getTeam(likelyPlayoff.stages.at(-1)!.matches[0].winner).name}</b></p>
         </div>}
 
