@@ -14,16 +14,16 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.SITE_URL || "http://159.194.202.215"),
-  title: "TI 2026 Predictor — швейцарка и плей-офф",
-  description: "Вероятностный прогноз The International 2026: 100 000 симуляций, живая швейцарка, стыки, история модели и плей-офф.",
+  title: "TI 2026 Predictor — прогноз всего турнира",
+  description: "Живой вероятностный прогноз каждого матча The International 2026: швейцарка, стыки, плей-офф, официальные пары и честная история точности.",
   openGraph: {
     title: "TI 2026 Predictor",
-    description: "Швейцарка, стыки и плей-офф — с живыми результатами и историей прогнозов.",
+    description: "Прогноз каждого матча TI 2026 — от швейцарки до гранд-финала, с официальными парами и историей точности.",
     type: "website",
     locale: "ru_RU",
     images: [{ url: "/og.png", width: 1728, height: 907, alt: "TI 2026 Predictor" }],
   },
-  twitter: { card: "summary_large_image", title: "TI 2026 Predictor", description: "100 000 симуляций швейцарки, стыков и плей-офф.", images: ["/og.png"] },
+  twitter: { card: "summary_large_image", title: "TI 2026 Predictor", description: "Живой прогноз каждого матча — от швейцарки до гранд-финала.", images: ["/og.png"] },
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

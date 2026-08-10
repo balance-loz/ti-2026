@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { completedSeriesFromMaps } from "../server/live-series.mjs";
+import { scheduledSeriesFromCybersportHtml } from "../server/schedule-source.mjs";
 import { buildForecastSource, ROUND_ONE, runForecast, SWISS_GROUPS, SWISS_GROUP_BY_TEAM, swissBucketKey } from "../server/forecast-engine.mjs";
 
 test("first three Swiss rounds are restricted to the revealed groups", () => {
@@ -52,6 +53,16 @@ test("OpenDota BO5 is not completed at 2-0", () => {
   assert.equal(completedSeriesFromMaps(maps).length, 1);
 });
 
+test("Cybersport schedule becomes official pre-match series", () => {
+  const html = `<div class="tab_x isActive_y"><span>Раунд 2</span></div>
+    <div>14.08.26 в 08:00<img alt="PARIVISION"><img alt="Nigma Galaxy"><span class="vs_pcDDl">vs</span><img alt="BetBoom"></div>
+    <div>14.08.26 в 11:00<img alt="Team Spirit"><img alt="Xtreme Gaming"><span class="vs_pcDDl">vs</span></div>`;
+  assert.deepEqual(scheduledSeriesFromCybersportHtml(html), [
+    { teamA: "parivision", teamB: "nigma", round: 2, scheduledAt: "2026-08-14T05:00:00.000Z", source: "cybersport" },
+    { teamA: "spirit", teamB: "xtreme", round: 2, scheduledAt: "2026-08-14T08:00:00.000Z", source: "cybersport" },
+  ]);
+});
+
 test("Ubuntu deployment documents automatic live sync", async () => {
   const guide = await readFile("docs/UBUNTU_DEPLOY.md", "utf8");
   const compose = await readFile("docker-compose.yml", "utf8");
@@ -75,4 +86,7 @@ test("server forecast can create an automatic snapshot payload", async () => {
   assert.equal(result.iterations, 100);
   assert.equal(result.formatVersion, "hidden-groups-r1-r3-v1");
   assert.equal(result.teams.filter((team) => team.qualify > 0).length > 0, true);
+  const total = (field) => Math.round(result.teams.reduce((sum, team) => sum + team[field], 0));
+  assert.deepEqual({ direct: total("direct"), playinWin: total("viaPlayin"), playinLoss: total("playinLoss"), swissOut: total("swissOut") }, { direct: 300, playinWin: 500, playinLoss: 500, swissOut: 300 });
+  for (const team of result.teams) assert.ok(Math.abs(team.direct + team.viaPlayin + team.playinLoss + team.swissOut - 100) < 0.001);
 });

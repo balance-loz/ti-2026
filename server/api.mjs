@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { completedSeriesFromMaps, OPENDOTA_TEAMS } from "./live-series.mjs";
+import { scheduledSeriesFromCybersportHtml } from "./schedule-source.mjs";
 import { buildForecastSource, ROUND_ONE, runForecast } from "./forecast-engine.mjs";
 
 const PORT = Number(process.env.API_PORT || 3001);
@@ -18,6 +19,9 @@ const TI_LEAGUE_ID = Number(process.env.TI_LEAGUE_ID || 19719);
 const LIVE_SYNC_ENABLED = process.env.LIVE_SYNC_ENABLED !== "false";
 const LIVE_SYNC_INTERVAL_MINUTES = Math.max(2, Number(process.env.LIVE_SYNC_INTERVAL_MINUTES || 10));
 const OPENDOTA_API_URL = process.env.OPENDOTA_API_URL || "https://api.opendota.com/api";
+const SCHEDULE_SYNC_ENABLED = process.env.SCHEDULE_SYNC_ENABLED !== "false";
+const SCHEDULE_SOURCE_URL = process.env.SCHEDULE_SOURCE_URL || "https://www.cybersport.ru/tournaments/dota-2/the-international-2026";
+const SCHEDULE_TIMEZONE_OFFSET = process.env.SCHEDULE_TIMEZONE_OFFSET || "+03:00";
 const AUTO_SNAPSHOT_ITERATIONS = Math.max(10_000, Number(process.env.AUTO_SNAPSHOT_ITERATIONS || 100_000));
 const TI_PLAYIN_START = Date.parse(process.env.TI_PLAYIN_START || "2026-08-17T00:00:00+08:00") / 1000;
 const TI_PLAYOFF_START = Date.parse(process.env.TI_PLAYOFF_START || "2026-08-20T00:00:00+08:00") / 1000;
@@ -141,7 +145,7 @@ function publicState() {
   try { lastSync = liveSyncRow ? { ...JSON.parse(liveSyncRow.value), updatedAt: liveSyncRow.updated_at } : null; } catch { lastSync = null; }
   return {
     answers, matches, snapshots, refresh, refreshRunning: Boolean(refreshProcess),
-    liveSync: { enabled: LIVE_SYNC_ENABLED, leagueId: TI_LEAGUE_ID, intervalMinutes: LIVE_SYNC_INTERVAL_MINUTES, running: Boolean(liveSyncPromise), lastSync, autoForecastRunning },
+    liveSync: { enabled: LIVE_SYNC_ENABLED, scheduleEnabled: SCHEDULE_SYNC_ENABLED, leagueId: TI_LEAGUE_ID, intervalMinutes: LIVE_SYNC_INTERVAL_MINUTES, running: Boolean(liveSyncPromise), lastSync, autoForecastRunning },
   };
 }
 
@@ -171,7 +175,9 @@ function saveAutomaticSnapshot(trigger) {
   try {
     const { matches, stats, config, probabilities } = currentForecast();
     const completedMatchCount = matches.filter((match) => match.winner).length;
-    const previous = trigger.startsWith("auto_")
+    const previous = trigger.startsWith("auto_pairing_")
+      ? db.prepare("SELECT id FROM prediction_snapshots WHERE trigger = ? AND completed_match_count = ? ORDER BY id DESC LIMIT 1").get(trigger, completedMatchCount)
+      : trigger.startsWith("auto_")
       ? db.prepare("SELECT id FROM prediction_snapshots WHERE trigger LIKE 'auto_%' AND completed_match_count = ? ORDER BY id DESC LIMIT 1").get(completedMatchCount)
       : db.prepare("SELECT id FROM prediction_snapshots WHERE trigger = ? AND completed_match_count = ? ORDER BY id DESC LIMIT 1").get(trigger, completedMatchCount);
     if (previous) return Number(previous.id);
@@ -207,10 +213,61 @@ function probabilityBefore(teamA, teamB, timestamp) {
   } catch { return null; }
 }
 
+const stageForTimestamp = (timestamp) => timestamp >= TI_PLAYOFF_START ? "playoff" : timestamp >= TI_PLAYIN_START ? "playin" : "swiss";
+const probabilityFor = (probabilities, teamA, teamB) => {
+  const key = [teamA, teamB].sort().join("|");
+  const value = probabilities[key];
+  return Number.isFinite(value) ? (key.startsWith(`${teamA}|`) ? value : 100 - value) : 50;
+};
+
+function persistScheduledSeries(series, probabilities) {
+  const timestamp = Date.parse(series.scheduledAt) / 1000;
+  const stage = stageForTimestamp(timestamp);
+  const sourceMatchId = `cybersport:${stage}:${series.round}:${[series.teamA, series.teamB].sort().join("|")}`;
+  const existing = db.prepare(`SELECT * FROM matches WHERE stage = ? AND round = ?
+    AND ((team_a = ? AND team_b = ?) OR (team_a = ? AND team_b = ?)) ORDER BY id DESC LIMIT 1`)
+    .get(stage, series.round, series.teamA, series.teamB, series.teamB, series.teamA);
+  if (existing?.winner) return "scheduledUnchanged";
+  const predictedProbability = probabilityFor(probabilities, series.teamA, series.teamB);
+  if (existing) {
+    if (existing.scheduled_at === series.scheduledAt && existing.predicted_probability !== null) return "scheduledUnchanged";
+    const orientedProbability = existing.team_a === series.teamA ? predictedProbability : 100 - predictedProbability;
+    db.prepare("UPDATE matches SET scheduled_at = ?, source_match_id = COALESCE(source_match_id, ?), predicted_probability = COALESCE(predicted_probability, ?), updated_at = ? WHERE id = ?")
+      .run(series.scheduledAt, sourceMatchId, orientedProbability, now(), existing.id);
+    return "scheduledUpdated";
+  }
+  const stamp = now();
+  db.prepare(`INSERT INTO matches(stage, round, team_a, team_b, scheduled_at, source_match_id, predicted_probability, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(stage, series.round, series.teamA, series.teamB, series.scheduledAt, sourceMatchId, predictedProbability, stamp, stamp);
+  return "scheduledInserted";
+}
+
+function removeConflictingScheduledSeries(series) {
+  const timestamp = Date.parse(series.scheduledAt) / 1000;
+  const stage = stageForTimestamp(timestamp);
+  const conflicts = db.prepare(`SELECT id FROM matches
+    WHERE stage = ? AND round = ? AND winner IS NULL AND source_match_id LIKE 'cybersport:%'
+      AND (team_a IN (?, ?) OR team_b IN (?, ?))
+      AND NOT ((team_a = ? AND team_b = ?) OR (team_a = ? AND team_b = ?))`)
+    .all(stage, series.round, series.teamA, series.teamB, series.teamA, series.teamB, series.teamA, series.teamB, series.teamB, series.teamA);
+  const remove = db.prepare("DELETE FROM matches WHERE id = ?");
+  for (const conflict of conflicts) remove.run(conflict.id);
+  return conflicts.length;
+}
+
+function officialPairingTrigger() {
+  const pairings = db.prepare(`SELECT stage, round, team_a, team_b FROM matches
+    WHERE winner IS NULL AND source_match_id LIKE 'cybersport:%'
+    ORDER BY stage, round, team_a, team_b`).all();
+  const signature = pairings.map((match) => `${match.stage}:${match.round}:${[match.team_a, match.team_b].sort().join("|")}`).join(";");
+  return `auto_pairing_${createHash("sha256").update(signature).digest("hex").slice(0, 12)}`;
+}
+
 function persistLiveSeries(series) {
   const sourceMatchId = `opendota:${TI_LEAGUE_ID}:${series.seriesId}`;
   if (db.prepare("SELECT id FROM matches WHERE source_match_id = ?").get(sourceMatchId)) return "unchanged";
-  const stage = series.startTime >= TI_PLAYOFF_START ? "playoff" : series.startTime >= TI_PLAYIN_START ? "playin" : "swiss";
+  const stage = stageForTimestamp(series.startTime);
   const winner = series.winsA > series.winsB ? series.teamA : series.teamB;
   const manualResult = db.prepare(`SELECT * FROM matches WHERE stage = ? AND source_match_id IS NULL AND winner = ?
     AND ((team_a = ? AND team_b = ?) OR (team_a = ? AND team_b = ?)) ORDER BY id DESC LIMIT 1`).get(stage, winner, series.teamA, series.teamB, series.teamB, series.teamA);
@@ -247,23 +304,40 @@ async function syncLiveMatches(trigger = "timer") {
   liveSyncPromise = (async () => {
     const startedAt = now();
     try {
-      const response = await fetch(`${OPENDOTA_API_URL}/leagues/${TI_LEAGUE_ID}/matches`, {
-        headers: { "user-agent": "ti-2026-predictor/1.0 (github.com/balance-loz/ti-2026)" },
-        signal: AbortSignal.timeout(30_000),
-      });
-      if (!response.ok) throw new Error(`OpenDota HTTP ${response.status}`);
-      const maps = await response.json();
-      if (!Array.isArray(maps)) throw new Error("OpenDota returned an invalid payload");
+      let maps = []; let schedule = []; let resultError = null; let scheduleError = null;
+      try {
+        const response = await fetch(`${OPENDOTA_API_URL}/leagues/${TI_LEAGUE_ID}/matches`, { headers: { "user-agent": "ti-2026-predictor/1.0 (github.com/balance-loz/ti-2026)" }, signal: AbortSignal.timeout(30_000) });
+        if (!response.ok) throw new Error(`OpenDota HTTP ${response.status}`);
+        maps = await response.json();
+        if (!Array.isArray(maps)) throw new Error("OpenDota returned an invalid payload");
+      } catch (error) { resultError = error instanceof Error ? error.message : String(error); }
+      if (SCHEDULE_SYNC_ENABLED) try {
+        const response = await fetch(SCHEDULE_SOURCE_URL, { headers: { "user-agent": "ti-2026-predictor/1.0 (github.com/balance-loz/ti-2026)" }, signal: AbortSignal.timeout(30_000) });
+        if (!response.ok) throw new Error(`Cybersport HTTP ${response.status}`);
+        schedule = scheduledSeriesFromCybersportHtml(await response.text(), { timezoneOffset: SCHEDULE_TIMEZONE_OFFSET });
+      } catch (error) { scheduleError = error instanceof Error ? error.message : String(error); }
+      if (resultError && (!SCHEDULE_SYNC_ENABLED || scheduleError)) throw new Error(`OpenDota: ${resultError}; schedule: ${scheduleError || "disabled"}`);
       const series = completedSeriesFromMaps(maps);
       const unknownTeamIds = [...new Set(maps.flatMap((map) => [Number(map.radiant_team_id), Number(map.dire_team_id)]).filter((id) => id && !OPENDOTA_TEAMS.has(id)))];
-      const summary = { ok: true, trigger, startedAt, maps: maps.length, completedSeries: series.length, unknownTeamIds, inserted: 0, updated: 0, unchanged: 0 };
+      const summary = { ok: !resultError && !scheduleError, partial: Boolean(resultError || scheduleError), trigger, startedAt, maps: maps.length, completedSeries: series.length, unknownTeamIds, resultError, scheduleError, scheduleSource: SCHEDULE_SYNC_ENABLED ? "Cybersport.ru" : "disabled", scheduledFound: schedule.length, scheduledInserted: 0, scheduledUpdated: 0, scheduledRemoved: 0, scheduledUnchanged: 0, forecastQueued: false, inserted: 0, updated: 0, unchanged: 0 };
       db.exec("BEGIN");
       try {
+        const probabilities = schedule.length ? currentForecast().probabilities : {};
+        for (const item of schedule) {
+          summary.scheduledRemoved += removeConflictingScheduledSeries(item);
+          summary[persistScheduledSeries(item, probabilities)] += 1;
+        }
         for (const item of series) summary[persistLiveSeries(item)] += 1;
         db.exec("COMMIT");
       } catch (error) { db.exec("ROLLBACK"); throw error; }
+      const scheduleChanged = summary.scheduledInserted || summary.scheduledUpdated || summary.scheduledRemoved;
+      if (summary.inserted || summary.updated) { audit("live_sync_results", summary); queueAutomaticSnapshot("auto_live_result"); summary.forecastQueued = true; }
+      if (scheduleChanged) {
+        audit("official_schedule_sync", summary);
+        queueAutomaticSnapshot(officialPairingTrigger());
+        summary.forecastQueued = true;
+      }
       db.prepare("INSERT INTO settings(key,value,updated_at) VALUES ('live_sync',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").run(JSON.stringify(summary), now());
-      if (summary.inserted || summary.updated) { audit("live_sync_results", summary); queueAutomaticSnapshot("auto_live_result"); }
       return summary;
     } catch (error) {
       const summary = { ok: false, trigger, startedAt, error: error instanceof Error ? error.message : String(error) };
