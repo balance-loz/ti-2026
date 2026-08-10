@@ -32,6 +32,23 @@ test("statistics contain every TI matchup and calibrated methodology", async () 
   }
 });
 
+test("draft lab contains current-patch heroes and regularized matchup evidence", async () => {
+  const stats = JSON.parse(await readFile("public/draft-stats.json", "utf8"));
+  const page = await readFile("app/drafts/page.tsx", "utf8");
+  const server = await readFile("server/api.mjs", "utf8");
+  assert.ok(stats.heroes.length >= 120);
+  assert.ok(stats.methodology.cachedPatchMaps >= 100);
+  assert.ok(stats.methodology.proPriorGames > 0);
+  assert.ok(stats.methodology.patchPriorGames > 0);
+  assert.ok(stats.methodology.pairPriorGames > 0);
+  assert.ok(stats.radiantWinRate > 40 && stats.radiantWinRate < 60);
+  assert.ok(Object.keys(stats.synergy).length > 0);
+  assert.ok(Object.keys(stats.counters).length > 0);
+  assert.match(page, /Почему получилась эта вероятность/);
+  assert.match(page, /Контрпики/);
+  assert.match(server, /scripts\/update-all-stats\.mjs/);
+});
+
 test("deployment files do not contain the administrator password", async () => {
   const compose = await readFile("docker-compose.yml", "utf8");
   const example = await readFile(".env.example", "utf8");

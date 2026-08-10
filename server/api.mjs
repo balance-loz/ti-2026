@@ -476,7 +476,7 @@ const server = createServer(async (req, res) => {
       }
       if (req.method === "POST" && url.pathname === "/api/admin/refresh") {
         if (refreshProcess) return json(res, 409, { error: "refresh_running" });
-        refreshProcess = spawn(process.execPath, ["scripts/update-stats.mjs"], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+        refreshProcess = spawn(process.execPath, ["scripts/update-all-stats.mjs"], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
         let output = "";
         refreshProcess.stdout.on("data", (chunk) => { output = (output + chunk).slice(-12000); });
         refreshProcess.stderr.on("data", (chunk) => { output = (output + chunk).slice(-12000); });

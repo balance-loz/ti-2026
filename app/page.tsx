@@ -1217,6 +1217,7 @@ export default function Home() {
         <nav aria-label="Разделы страницы">
           <a href="#matchups">Матчапы</a>
           <a href="#forecast">Прогноз</a>
+          <a href="/drafts">Пики</a>
           <a href="#format">Формат</a>
         </nav>
         <div className="live-pill"><span /> TI 2026</div>

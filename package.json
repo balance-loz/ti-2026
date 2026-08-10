@@ -11,6 +11,7 @@
     "start": "vinext start",
     "api": "node server/api.mjs",
     "stats:update": "node scripts/update-stats.mjs",
+    "drafts:update": "node scripts/update-draft-stats.mjs",
     "model:backtest": "node scripts/backtest-model.mjs",
     "test": "npm run build && node --test tests/project.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
