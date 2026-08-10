@@ -27,6 +27,11 @@ const ROSTER_PROJECTIONS = {
 };
 
 const TEAM_IDENTITY = {
+  "1w": {
+    canonicalName: "1w",
+    alternateOpenDotaIds: [8291895],
+    aliases: ["1W", "1W TEAM", "1WIN", "1WIN TEAM", "TUNDRA", "TUNDRA ESPORTS"],
+  },
   parivision: {
     canonicalName: "PARIVISION",
     alternateOpenDotaIds: [9824702],
@@ -47,12 +52,12 @@ const DISPLAY_NAMES = {
 };
 
 const DEFAULT_ALIASES = {
-  "1w": ["1W", "1WIN", "1WIN TEAM"],
+  "1w": ["1W", "1W TEAM", "1WIN", "1WIN TEAM", "TUNDRA", "TUNDRA ESPORTS"],
   aurora: ["AURORA", "AURORA GAMING"],
   betboom: ["BETBOOM", "BETBOOM TEAM", "BB TEAM", "BBT", "BOOMBOYS"],
   falcons: ["FALCONS", "TEAM FALCONS"],
   gamerlegion: ["GAMERLEGION", "GAMER LEGION"],
-  l1ga: ["L1GA", "L1GA TEAM"],
+  l1ga: ["L1GA", "L1GA TEAM", "L1 TEAM", "LIGA TEAM"],
   lgd: ["LGD", "LGD GAMING"],
   liquid: ["LIQUID", "TEAM LIQUID"],
   nigma: ["NIGMA", "NIGMA GALAXY"],

@@ -23,6 +23,9 @@ test("statistics contain every TI matchup and calibrated methodology", async () 
   assert.deepEqual(stats.methodology.rosterWeights, { 3: 0.07, 4: 0.25, 5: 1 });
   assert.equal(stats.methodology.directMatchPriorSeries, 6);
   assert.equal(stats.methodology.ratingL2Penalty, 0.025);
+  assert.ok(stats.teams["1w"].openDotaIds.includes(8291895));
+  assert.ok(stats.teams["1w"].aliases.includes("TUNDRA ESPORTS"));
+  assert.ok(stats.teams["1w"].exactRosterGames >= 200);
   for (const pair of Object.values(stats.pairwise)) {
     assert.ok(pair.probabilityA >= 7 && pair.probabilityA <= 93);
     assert.ok(pair.uncertainty > 0);
@@ -55,6 +58,14 @@ test("OpenDota BO5 is not completed at 2-0", () => {
   assert.equal(completedSeriesFromMaps(maps).length, 1);
 });
 
+test("former Tundra OpenDota team ID resolves to current 1w roster", () => {
+  const maps = [
+    { match_id: 11, series_id: 199, start_time: 100, radiant_team_id: 8291895, dire_team_id: 10136357, radiant_win: true },
+    { match_id: 12, series_id: 199, start_time: 200, radiant_team_id: 10136357, dire_team_id: 8291895, radiant_win: false },
+  ];
+  assert.deepEqual(completedSeriesFromMaps(maps)[0], { seriesId: "199", teamA: "1w", teamB: "nigma", winsA: 2, winsB: 0, startTime: 100, seriesType: 1, mapIds: [11, 12] });
+});
+
 test("Cybersport schedule becomes official pre-match series", () => {
   const html = `<div class="tab_x isActive_y"><span>Раунд 2</span></div>
     <div>14.08.26 в 08:00<img alt="PARIVISION"><img alt="Nigma Galaxy"><span class="vs_pcDDl">vs</span><img alt="BetBoom"></div>
@@ -62,6 +73,22 @@ test("Cybersport schedule becomes official pre-match series", () => {
   assert.deepEqual(scheduledSeriesFromCybersportHtml(html), [
     { teamA: "parivision", teamB: "nigma", round: 2, scheduledAt: "2026-08-14T05:00:00.000Z", source: "cybersport" },
     { teamA: "spirit", teamB: "xtreme", round: 2, scheduledAt: "2026-08-14T08:00:00.000Z", source: "cybersport" },
+  ]);
+});
+
+test("L1 TEAM sponsorship-safe name resolves to L1ga", () => {
+  const html = `<div class="tab_x isActive_y"><span>Раунд 3</span></div>
+    <div>15.08.26 в 14:00<img alt="L1 TEAM"><img alt="Team Liquid"><span class="vs_pcDDl">vs</span></div>`;
+  assert.deepEqual(scheduledSeriesFromCybersportHtml(html), [
+    { teamA: "l1ga", teamB: "liquid", round: 3, scheduledAt: "2026-08-15T11:00:00.000Z", source: "cybersport" },
+  ]);
+});
+
+test("Tundra schedule name resolves to transferred 1w roster", () => {
+  const html = `<div class="tab_x isActive_y"><span>Раунд 2</span></div>
+    <div>14.08.26 в 14:00<img alt="Tundra Esports"><img alt="Team Spirit"><span class="vs_pcDDl">vs</span></div>`;
+  assert.deepEqual(scheduledSeriesFromCybersportHtml(html), [
+    { teamA: "1w", teamB: "spirit", round: 2, scheduledAt: "2026-08-14T11:00:00.000Z", source: "cybersport" },
   ]);
 });
 

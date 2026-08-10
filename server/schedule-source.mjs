@@ -1,7 +1,7 @@
 const TEAM_ALIASES = new Map(Object.entries({
-  "1W": "1w", "1WTEAM": "1w", AURORA: "aurora", AURORAGAMING: "aurora",
+  "1W": "1w", "1WTEAM": "1w", "1WIN": "1w", "1WINTEAM": "1w", TUNDRA: "1w", TUNDRAESPORTS: "1w", AURORA: "aurora", AURORAGAMING: "aurora",
   BETBOOM: "betboom", BETBOOMTEAM: "betboom", FALCONS: "falcons", TEAMFALCONS: "falcons",
-  GAMERLEGION: "gamerlegion", L1GA: "l1ga", L1GATEAM: "l1ga", LGD: "lgd", LGDGAMING: "lgd",
+  GAMERLEGION: "gamerlegion", L1GA: "l1ga", L1GATEAM: "l1ga", L1TEAM: "l1ga", LIGATEAM: "l1ga", LGD: "lgd", LGDGAMING: "lgd",
   LIQUID: "liquid", TEAMLIQUID: "liquid", NIGMA: "nigma", NIGMAGALAXY: "nigma", OG: "og",
   PARIVISION: "parivision", PVISION: "parivision", TEAMVISION: "parivision",
   RESILIENCE: "resilience", TEAMRESILIENCE: "resilience", SPIRIT: "spirit", TEAMSPIRIT: "spirit",
