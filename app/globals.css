@@ -471,6 +471,10 @@ button:disabled, input:disabled { cursor: not-allowed; opacity: .5; }
 .snapshot-list time, .snapshot-list summary span { color: #a2acb9; font: 700 10px var(--font-geist-mono); }.snapshot-list summary b { font-size: 11px; }.snapshot-list summary span { text-align: right; }
 .snapshot-metrics { display: grid; grid-template-columns: repeat(4, 1fr); background: #10151c; border: 1px solid #2c3440; }.snapshot-metrics > div { display: grid; gap: 4px; padding: 12px; border-right: 1px solid #2c3440; }.snapshot-metrics > div:last-child { border: 0; }.snapshot-metrics b { color: #dce3eb; font: 800 14px var(--font-geist-mono); }.snapshot-metrics span { color: #9ca7b4; font-size: 10px; }
 .snapshot-teams { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 10px 0 16px; }.snapshot-teams > span { display: flex; align-items: center; gap: 6px; color: #b8c1cc; font-size: 10px; }.snapshot-teams b { margin-left: auto; color: var(--lime); font-family: var(--font-geist-mono); }.history-empty { color: #a1abb8; font-size: 11px; }
+.snapshot-admin-row { display: flex; align-items: center; justify-content: flex-end; gap: 14px; padding: 0 0 14px; }
+.snapshot-admin-row span { color: #8995a3; font: 600 9px var(--font-geist-mono); text-transform: uppercase; }
+.snapshot-admin-row button { border: 1px solid rgba(255,101,115,.45); padding: 8px 11px; background: rgba(255,101,115,.07); color: #ff7b87; font: 750 9px var(--font-geist-mono); text-transform: uppercase; cursor: pointer; }
+.snapshot-admin-row button:hover { background: #ff6573; color: #111720; }
 
 @media (max-width: 900px) {
   .swiss-groups { grid-template-columns: 1fr; }
@@ -548,6 +552,7 @@ button:disabled, input:disabled { cursor: not-allowed; opacity: .5; }
   .live-results i { text-align: left; }
   .snapshot-list summary { grid-template-columns: 1fr; gap: 6px; }.snapshot-list summary span { text-align: left; }
   .snapshot-metrics, .snapshot-teams { grid-template-columns: repeat(2, 1fr); }
+  .snapshot-admin-row { align-items: flex-start; flex-direction: column; }
 }
 
 @media (prefers-reduced-motion: reduce) {

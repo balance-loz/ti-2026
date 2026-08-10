@@ -1122,6 +1122,18 @@ export default function Home() {
     await loadServerState();
   };
 
+  const deleteSnapshot = async (snapshot: PredictionSnapshot) => {
+    const created = new Date(snapshot.created_at).toLocaleString("ru-RU");
+    if (!window.confirm(`Удалить сохранённый прогноз от ${created}? Ответы, матчи и остальные прогнозы останутся.`)) return;
+    const response = await fetch(`/api/admin/snapshots/${snapshot.id}`, { method: "DELETE" });
+    if (!response.ok) {
+      setAdminMessage("Не удалось удалить прогноз. Возможно, сессия администратора закончилась.");
+      return;
+    }
+    setAdminMessage(`Прогноз от ${created} удалён. Остальные данные не изменены.`);
+    await loadServerState();
+  };
+
   const prepareRoundOne = async () => {
     setAdminMessage("Сохраняю восемь матчей первого раунда и предматчевые вероятности…");
     const response = await fetch("/api/admin/rounds/prepare", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ round: 1 }) });
@@ -1291,6 +1303,7 @@ export default function Home() {
                 <div><b>{evaluation.logLoss === null ? "—" : evaluation.logLoss.toFixed(3)}</b><span>log loss</span></div>
               </div>
               <div className="snapshot-teams">{snapshot.result.teams.slice(0, 8).map((team) => <span key={team.id}><TeamMark team={getTeam(team.id)} small />{team.name}<b>{team.qualify.toFixed(1)}%</b></span>)}</div>
+              {serverState?.isAdmin && <div className="snapshot-admin-row"><span>Удаляется только этот сохранённый прогон.</span><button type="button" onClick={() => void deleteSnapshot(snapshot)}>Удалить прогноз</button></div>}
             </details>;
           })}</div> : <p className="history-empty">История появится после первого серверного прогона из режима администратора. Она не переписывается после получения результатов.</p>}
         </div>

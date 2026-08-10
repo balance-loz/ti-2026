@@ -434,6 +434,15 @@ const server = createServer(async (req, res) => {
         audit("snapshot_saved", { id: Number(inserted.lastInsertRowid), trigger: data.trigger || "manual_run" });
         return json(res, 201, { ok: true, id: Number(inserted.lastInsertRowid) });
       }
+      if (req.method === "DELETE" && url.pathname.startsWith("/api/admin/snapshots/")) {
+        const id = Number(url.pathname.split("/").at(-1));
+        if (!Number.isInteger(id) || id < 1) return json(res, 400, { error: "invalid_id" });
+        const snapshot = db.prepare("SELECT id, trigger, model_generated_at, created_at FROM prediction_snapshots WHERE id = ?").get(id);
+        if (!snapshot) return json(res, 404, { error: "snapshot_not_found" });
+        db.prepare("DELETE FROM prediction_snapshots WHERE id = ?").run(id);
+        audit("snapshot_deleted", snapshot);
+        return json(res, 200, { ok: true, id });
+      }
       if (req.method === "POST" && url.pathname === "/api/admin/rounds/prepare") {
         const data = await body(req);
         const round = Number(data.round || 1);
