@@ -139,6 +139,19 @@ type SimulationResult = {
   uniqueSwissOutcomes?: number;
   uniquePlayoffPodiums?: number;
   uniqueFinalOutcomes?: number;
+  pathSampleIterations?: number;
+  requestedIterations?: number;
+  convergence?: {
+    adaptive: boolean;
+    converged: boolean;
+    stopReason: "stable" | "max_iterations" | "fixed_budget";
+    minIterations: number;
+    maxIterations: number;
+    batchSize: number;
+    tolerancePp: number;
+    maxDeltaPp: number | null;
+    maxSamplingMarginPp: number;
+  };
   formatVersion?: string;
 };
 
@@ -216,7 +229,7 @@ type ServerState = {
   answers: AnswerMap;
   matches: LiveMatch[];
   snapshots: PredictionSnapshot[];
-  officialForecast?: { forecastMode: "stats"; opinionWeight: 0; iterations: number };
+  officialForecast?: { forecastMode: "stats"; opinionWeight: 0; iterations: number; adaptive?: boolean; maxIterations?: number; batchSize?: number; tolerancePp?: number };
   isAdmin: boolean;
   refreshRunning: boolean;
   refresh: { value: string; updated_at: string } | null;
@@ -1112,7 +1125,7 @@ export default function Home() {
         })}</div>}
         <div className="prediction-history">
           <div className="prediction-history__head"><div><p className="eyebrow">ИСТОРИЯ МОДЕЛИ</p><h3>Что модель думала до результатов</h3></div><span>{snapshots.length} сохранённых прогонов</span></div>
-          {selectedRoot && selectedLatest ? <div className="selected-run-banner"><div><b>ПРОГНОЗ #{selectedRoot.id} · {selectedRoot.forecast_mode === "mixed" ? `${selectedRoot.opinion_weight}% личного мнения` : selectedRoot.forecast_mode === "stats" ? "официальная статистическая база" : "личный сценарий"}</b><span>Оригинал от {new Date(selectedRoot.created_at).toLocaleString("ru-RU")} сохранён неизменным. На странице показана ревизия #{selectedLatest.id}, учитывающая {selectedLatest.completed_match_count} завершённых серий.</span></div><button type="button" onClick={() => selectSnapshot(null)}>Вернуться к Official baseline</button></div> : <div className="official-baseline-banner"><b>OFFICIAL BASELINE</b><span>Только статистика · 0% личного мнения · 250 000 симуляций · автоматически пересчитывается после результатов</span></div>}
+          {selectedRoot && selectedLatest ? <div className="selected-run-banner"><div><b>ПРОГНОЗ #{selectedRoot.id} · {selectedRoot.forecast_mode === "mixed" ? `${selectedRoot.opinion_weight}% личного мнения` : selectedRoot.forecast_mode === "stats" ? "официальная статистическая база" : "личный сценарий"}</b><span>Оригинал от {new Date(selectedRoot.created_at).toLocaleString("ru-RU")} сохранён неизменным. На странице показана ревизия #{selectedLatest.id}, учитывающая {selectedLatest.completed_match_count} завершённых серий.</span></div><button type="button" onClick={() => selectSnapshot(null)}>Вернуться к Official baseline</button></div> : <div className="official-baseline-banner"><b>OFFICIAL BASELINE</b><span>Только статистика · 0% личного мнения · адаптивно от 250 000 до 1 000 000 симуляций · пересчёт после результатов</span></div>}
           {matchHistoryPoints.length > 0 && <div className="history-chart">
             <div className="history-chart__controls"><strong>НАКОПИТЕЛЬНАЯ ТОЧНОСТЬ ПОСЛЕ КАЖДОГО МАТЧА</strong><span>Наведи на столбец: увидишь пару, Brier и log loss на тот момент</span></div>
             <div className="history-chart__bars">{matchHistoryPoints.map((point) => { const accuracy = 100 * point.correct / point.count; return <div key={point.match.id} title={`${getTeam(point.match.team_a).name} — ${getTeam(point.match.team_b).name} · точность ${accuracy.toFixed(1)}% · Brier ${point.brier?.toFixed(3)} · log loss ${point.logLoss?.toFixed(3)}`}><b>{accuracy.toFixed(0)}%</b><i style={{ height: `${Math.max(3, accuracy)}%` }} /><small>{point.match.stage === "swiss" ? `S${point.match.round}` : point.match.stage === "playin" ? "PI" : "PO"}</small></div>; })}</div>
@@ -1263,8 +1276,8 @@ export default function Home() {
               {isCalculating ? `Считаю ${iterationCount.toLocaleString("ru-RU")} сеток…` : "Запустить новый прогон"}
               <span>{isCalculating ? "···" : "↗"}</span>
             </button>
-            <small>Каждый запуск использует новую независимую случайную выборку. Максимальная статистическая погрешность при {iterationCount.toLocaleString("ru-RU")} прогонах — около ±{samplingMargin(iterationCount).toFixed(2)} п.п.</small>
-            {result && <small className="stats-meta">Итоговых восьмёрок Swiss: {result.uniqueSwissOutcomes?.toLocaleString("ru-RU") ?? "—"}; вариантов подиума: {result.uniquePlayoffPodiums?.toLocaleString("ru-RU") ?? "—"}; полных итогов «восьмёрка + подиум»: {result.uniqueFinalOutcomes?.toLocaleString("ru-RU") ?? "—"}. Детальных путей всего турнира: {(result.uniqueTournamentPaths ?? result.uniqueBrackets).toLocaleString("ru-RU")} из {result.iterations.toLocaleString("ru-RU")} ({(100 - (result.tournamentDuplicateRate ?? result.duplicateRate)).toFixed(3)}%). Это разные метрики: один итог может быть достигнут множеством разных жеребьёвок и результатов по раундам.</small>}
+            <small>Ручной прогон использует фиксированный бюджет, чтобы не замораживать вкладку. Official baseline на сервере адаптивно считает от 250 000 до 1 000 000.</small>
+            {result && <small className="stats-meta">Итоговых восьмёрок Swiss: {result.uniqueSwissOutcomes?.toLocaleString("ru-RU") ?? "—"}; вариантов подиума: {result.uniquePlayoffPodiums?.toLocaleString("ru-RU") ?? "—"}; полных итогов «восьмёрка + подиум»: {result.uniqueFinalOutcomes?.toLocaleString("ru-RU") ?? "—"}. Детальных путей всего турнира: {(result.uniqueTournamentPaths ?? result.uniqueBrackets).toLocaleString("ru-RU")} из {(result.pathSampleIterations ?? result.iterations).toLocaleString("ru-RU")} проверенных для уникальности ({(100 - (result.tournamentDuplicateRate ?? result.duplicateRate)).toFixed(3)}%). Это разные метрики: один итог может быть достигнут множеством разных жеребьёвок и результатов по раундам.</small>}
             {stats && <small className="stats-meta">{stats.totals.uniqueAcceptedGames} карт · одна контрольная карта на турнир · половина веса за {stats.methodology.recencyHalfLifeDays} дней</small>}
           </aside>
         </div>
@@ -1274,7 +1287,7 @@ export default function Home() {
         <div className="section-heading section-heading--light">
           <span className="step-number">02</span>
           <div><p>РЕЗУЛЬТАТ СИМУЛЯЦИИ</p><h2>Куда попадёт команда</h2></div>
-          <span className="section-note">{result ? <>{result.iterations.toLocaleString("ru-RU")} независимых полных турниров · {(result.uniqueTournamentPaths ?? result.uniqueBrackets).toLocaleString("ru-RU")} уникальных путей<br />погрешность вероятностей до ±{samplingMargin(result.iterations).toFixed(2)} п.п.</> : "Готовим первый прогноз…"}</span>
+          <span className="section-note">{result ? <>{result.iterations.toLocaleString("ru-RU")} независимых полных турниров · {(result.uniqueTournamentPaths ?? result.uniqueBrackets).toLocaleString("ru-RU")} уникальных путей в выборке<br />{result.convergence?.adaptive ? (result.convergence.converged ? `сошлось: Δ ≤ ${result.convergence.tolerancePp.toFixed(2)} п.п.` : `достигнут лимит; последнее Δ ${result.convergence.maxDeltaPp?.toFixed(2) ?? "—"} п.п.`) : "фиксированный бюджет"} · погрешность до ±{(result.convergence?.maxSamplingMarginPp ?? samplingMargin(result.iterations)).toFixed(2)} п.п.</> : "Готовим первый прогноз…"}</span>
         </div>
 
         <div className="swiss-groups" aria-label="Скрытые группы первых трёх раундов">
@@ -1387,9 +1400,9 @@ export default function Home() {
         {result && (
           <div className="scenario-grid">
             <div className="scenario-intro">
-              <p className="eyebrow">ТОП-3 СЦЕНАРИЯ</p>
-              <h3>Самые частые<br />финальные расклады</h3>
-              <p>Точное сочетание команды 4–0, двух команд 4–1 и пяти победителей стыков — итоговая восьмёрка плей-офф. Это редкие совместные исходы, а не вероятность прохода отдельной команды.</p>
+              <p className="eyebrow">3 НАБЛЮДАЕМЫХ СЦЕНАРИЯ</p>
+              <h3>Репрезентативные<br />финальные расклады</h3>
+              <p>Это самые частые точные пути именно в Monte Carlo-выборке, а не устойчивый рейтинг всех возможных сеток. Для решений используйте командные вероятности выше.</p>
             </div>
             {result.scenarios.map((scenario, index) => (
               <article className="scenario-card" key={`${scenario.direct40.join("-")}-${scenario.direct41.join("-")}-${scenario.via.join("-")}`}>
@@ -1409,9 +1422,9 @@ export default function Home() {
         {result?.playoffScenarios?.length > 0 && (
           <div className="scenario-grid scenario-grid--playoff">
             <div className="scenario-intro">
-              <p className="eyebrow">ТОП-3 ПЛЕЙ-ОФФ</p>
-              <h3>Самые частые<br />подиумы турнира</h3>
-              <p>Точное сочетание чемпиона, финалиста и третьего места после полной double-elimination сетки.</p>
+              <p className="eyebrow">3 НАБЛЮДАЕМЫХ ПЛЕЙ-ОФФ</p>
+              <h3>Репрезентативные<br />подиумы турнира</h3>
+              <p>Точные совместные исходы из выборки. Они заметно менее устойчивы, чем отдельные вероятности чемпионства, финала и топ‑3.</p>
             </div>
             {result.playoffScenarios.map((scenario, index) => (
               <article className="scenario-card playoff-scenario-card" key={`${scenario.champion}-${scenario.runnerUp}-${scenario.third}`}>

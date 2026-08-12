@@ -93,12 +93,28 @@ function pairBucket(ids, records, random) {
   return best;
 }
 
-export function runForecast(answers, iterations = 100000, seed = Math.floor(Math.random() * 0xffffffff), { matches = [], stats = null } = {}) {
+export function runForecast(answers, iterations = 100000, seed = Math.floor(Math.random() * 0xffffffff), { matches = [], stats = null, adaptive = null } = {}) {
+  const requestedIterations = Math.max(1, Math.floor(iterations));
+  const adaptiveConfig = adaptive?.enabled ? {
+    enabled: true,
+    minIterations: Math.max(1, Math.floor(adaptive.minIterations ?? requestedIterations)),
+    maxIterations: Math.max(requestedIterations, Math.floor(adaptive.maxIterations ?? requestedIterations * 4)),
+    batchSize: Math.max(1, Math.floor(adaptive.batchSize ?? Math.max(10_000, requestedIterations / 2))),
+    tolerancePp: Math.max(.001, Number(adaptive.tolerancePp ?? .1)),
+    stableChecksRequired: Math.max(1, Math.floor(adaptive.stableChecksRequired ?? 2)),
+  } : { enabled: false, minIterations: requestedIterations, maxIterations: requestedIterations, batchSize: requestedIterations, tolerancePp: 0, stableChecksRequired: 0 };
+  adaptiveConfig.maxIterations = Math.max(adaptiveConfig.minIterations, adaptiveConfig.maxIterations);
   const scores = teamScores(answers); const random = seededRandom(seed);
   const calibration = { ...DEFAULT_CALIBRATION, ...(stats?.tournamentCalibration?.selected ?? {}) };
   const totals = Object.fromEntries(TEAMS.map((team) => [team.id, { direct: 0, playin: 0, viaPlayin: 0, playinLoss: 0, swissOut: 0, out: 0, wins: 0, losses: 0, champion: 0, final: 0, top3: 0 }]));
   const scenarioCounts = new Map(); const playoffScenarioCounts = new Map(); const matchupCounts = new Map(); const swissPathHashes = new Set(); const tournamentPathHashes = new Set(); const finalOutcomeSignatures = new Set();
-  for (let iteration = 0; iteration < iterations; iteration += 1) {
+  const pathSampleLimit = Math.min(adaptiveConfig.maxIterations, 250_000);
+  const convergenceHistory = []; let previousCheckpoint = null; let stableChecks = 0; let completedIterations = 0; let converged = false;
+  const checkpointValues = (denominator) => TEAMS.flatMap((team) => {
+    const total = totals[team.id];
+    return [total.direct + total.viaPlayin, total.direct, total.viaPlayin, total.champion, total.final, total.top3].map((value) => 100 * value / denominator);
+  });
+  for (let iteration = 0; iteration < adaptiveConfig.maxIterations; iteration += 1) {
     const path = []; let round = 1;
     const records = Object.fromEntries(TEAMS.map((team) => [team.id, { wins: 0, losses: 0, opponents: new Set() }]));
     const form = Object.fromEntries(TEAMS.map((team) => [team.id, normalRandom(random) * calibration.formLogitSd]));
@@ -131,7 +147,7 @@ export function runForecast(answers, iterations = 100000, seed = Math.floor(Math
     playinPairs.forEach(([a, b]) => { const actual = knownPlayins.find((match) => (match.team_a === a && match.team_b === b) || (match.team_a === b && match.team_b === a)); const winner = actual?.winner || winnerFor(a, b); const loser = winner === a ? b : a; totals[winner].viaPlayin++; totals[loser].playinLoss++; totals[loser].out++; via.push(winner); const key = pairKey(a, b); const first = key.split("|")[0]; const item = matchupCounts.get(key) || { count: 0, firstWins: 0 }; item.count++; if (winner === first) item.firstWins++; matchupCounts.set(key, item); path.push(`P:${key}>${winner}`); });
     const signature = JSON.stringify({ direct40: direct40.sort(), direct41: direct41.sort(), via: via.sort() }); scenarioCounts.set(signature, (scenarioCounts.get(signature) || 0) + 1);
     const compactHash = (value) => { let first = 2166136261; let second = 2246822519; for (const char of value) { const code = char.charCodeAt(0); first = Math.imul(first ^ code, 16777619); second = Math.imul(second ^ code, 3266489917); } return `${first >>> 0}:${second >>> 0}`; };
-    swissPathHashes.add(compactHash(path.join(";")));
+    if (iteration < pathSampleLimit) swissPathHashes.add(compactHash(path.join(";")));
     const directSeeds = [...direct40, ...direct41.sort((a, b) => scores[b] - scores[a])];
     const viaSeeds = [...via].sort((a, b) => scores[b] - scores[a]);
     const qualifiers = [...directSeeds, ...viaSeeds];
@@ -147,13 +163,25 @@ export function runForecast(answers, iterations = 100000, seed = Math.floor(Math
     const lf = playoffSeries("LF", ls.winner, uf.loser); const gf = playoffSeries("GF", uf.winner, lf.winner, 5);
     totals[gf.winner].champion++; totals[gf.winner].final++; totals[gf.winner].top3++;
     totals[gf.loser].final++; totals[gf.loser].top3++; totals[lf.loser].top3++;
-    const playoffSignature = JSON.stringify({ champion: gf.winner, runnerUp: gf.loser, third: lf.loser }); playoffScenarioCounts.set(playoffSignature, (playoffScenarioCounts.get(playoffSignature) || 0) + 1); finalOutcomeSignatures.add(`${signature}|${playoffSignature}`);
-    tournamentPathHashes.add(compactHash(path.join(";")));
+    const playoffSignature = JSON.stringify({ champion: gf.winner, runnerUp: gf.loser, third: lf.loser }); playoffScenarioCounts.set(playoffSignature, (playoffScenarioCounts.get(playoffSignature) || 0) + 1); if (iteration < pathSampleLimit) finalOutcomeSignatures.add(`${signature}|${playoffSignature}`);
+    if (iteration < pathSampleLimit) tournamentPathHashes.add(compactHash(path.join(";")));
+    completedIterations = iteration + 1;
+    const atCheckpoint = completedIterations % adaptiveConfig.batchSize === 0 || completedIterations === adaptiveConfig.maxIterations;
+    if (atCheckpoint) {
+      const values = checkpointValues(completedIterations);
+      const maxDeltaPp = previousCheckpoint ? Math.max(...values.map((value, index) => Math.abs(value - previousCheckpoint[index]))) : null;
+      if (maxDeltaPp !== null && maxDeltaPp <= adaptiveConfig.tolerancePp) stableChecks += 1; else stableChecks = 0;
+      convergenceHistory.push({ iterations: completedIterations, maxDeltaPp, maxSamplingMarginPp: 98 / Math.sqrt(completedIterations), stable: maxDeltaPp !== null && maxDeltaPp <= adaptiveConfig.tolerancePp });
+      previousCheckpoint = values;
+      if (adaptiveConfig.enabled && completedIterations >= adaptiveConfig.minIterations && stableChecks >= adaptiveConfig.stableChecksRequired) { converged = true; break; }
+    }
   }
-  const teams = TEAMS.map((team) => ({ ...team, qualify: 100 * (totals[team.id].direct + totals[team.id].viaPlayin) / iterations, direct: 100 * totals[team.id].direct / iterations, playin: 100 * totals[team.id].playin / iterations, viaPlayin: 100 * totals[team.id].viaPlayin / iterations, playinLoss: 100 * totals[team.id].playinLoss / iterations, swissOut: 100 * totals[team.id].swissOut / iterations, out: 100 * totals[team.id].out / iterations, champion: 100 * totals[team.id].champion / iterations, final: 100 * totals[team.id].final / iterations, top3: 100 * totals[team.id].top3 / iterations, avgWins: totals[team.id].wins / iterations, avgLosses: totals[team.id].losses / iterations })).sort((a, b) => b.qualify - a.qualify || b.direct - a.direct);
-  const scenarios = [...scenarioCounts].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([signature, count]) => ({ ...JSON.parse(signature), probability: 100 * count / iterations, occurrences: count }));
-  const playoffScenarios = [...playoffScenarioCounts].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([signature, count]) => ({ ...JSON.parse(signature), probability: 100 * count / iterations, occurrences: count }));
-  const playinMatchups = [...matchupCounts].sort((a, b) => b[1].count - a[1].count).slice(0, 10).map(([key, value]) => { const [a, b] = key.split("|"); return { a, b, probability: 100 * value.count / iterations, aWinProbability: 100 * value.firstWins / value.count }; });
-  const swissDuplicateRate = 100 * (1 - swissPathHashes.size / iterations); const tournamentDuplicateRate = 100 * (1 - tournamentPathHashes.size / iterations);
-  return { teams, scenarios, playoffScenarios, playinMatchups, iterations, seed, uniqueBrackets: tournamentPathHashes.size, duplicateRate: tournamentDuplicateRate, uniqueSwissPaths: swissPathHashes.size, swissDuplicateRate, uniqueTournamentPaths: tournamentPathHashes.size, tournamentDuplicateRate, uniqueSwissOutcomes: scenarioCounts.size, uniquePlayoffPodiums: playoffScenarioCounts.size, uniqueFinalOutcomes: finalOutcomeSignatures.size, calibration, uncertaintyPolicy: stats?.tournamentCalibration?.validation?.validated ? "historical tournament holdout calibration" : "experimental latent logit shocks; calibration gate not passed", formatVersion: "hidden-groups-r1-r3-playoff-v4" };
+  const teams = TEAMS.map((team) => ({ ...team, qualify: 100 * (totals[team.id].direct + totals[team.id].viaPlayin) / completedIterations, direct: 100 * totals[team.id].direct / completedIterations, playin: 100 * totals[team.id].playin / completedIterations, viaPlayin: 100 * totals[team.id].viaPlayin / completedIterations, playinLoss: 100 * totals[team.id].playinLoss / completedIterations, swissOut: 100 * totals[team.id].swissOut / completedIterations, out: 100 * totals[team.id].out / completedIterations, champion: 100 * totals[team.id].champion / completedIterations, final: 100 * totals[team.id].final / completedIterations, top3: 100 * totals[team.id].top3 / completedIterations, avgWins: totals[team.id].wins / completedIterations, avgLosses: totals[team.id].losses / completedIterations })).sort((a, b) => b.qualify - a.qualify || b.direct - a.direct);
+  const scenarios = [...scenarioCounts].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([signature, count]) => ({ ...JSON.parse(signature), probability: 100 * count / completedIterations, occurrences: count, representative: true }));
+  const playoffScenarios = [...playoffScenarioCounts].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([signature, count]) => ({ ...JSON.parse(signature), probability: 100 * count / completedIterations, occurrences: count, representative: true }));
+  const playinMatchups = [...matchupCounts].sort((a, b) => b[1].count - a[1].count).slice(0, 10).map(([key, value]) => { const [a, b] = key.split("|"); return { a, b, probability: 100 * value.count / completedIterations, aWinProbability: 100 * value.firstWins / value.count }; });
+  const sampledIterations = Math.min(completedIterations, pathSampleLimit);
+  const swissDuplicateRate = 100 * (1 - swissPathHashes.size / sampledIterations); const tournamentDuplicateRate = 100 * (1 - tournamentPathHashes.size / sampledIterations);
+  const lastCheckpoint = convergenceHistory.at(-1);
+  return { teams, scenarios, playoffScenarios, playinMatchups, iterations: completedIterations, requestedIterations, seed, uniqueBrackets: tournamentPathHashes.size, duplicateRate: tournamentDuplicateRate, uniqueSwissPaths: swissPathHashes.size, swissDuplicateRate, uniqueTournamentPaths: tournamentPathHashes.size, tournamentDuplicateRate, pathSampleIterations: sampledIterations, uniqueSwissOutcomes: scenarioCounts.size, uniquePlayoffPodiums: playoffScenarioCounts.size, uniqueFinalOutcomes: finalOutcomeSignatures.size, calibration, convergence: { adaptive: adaptiveConfig.enabled, converged, stopReason: converged ? "stable" : adaptiveConfig.enabled ? "max_iterations" : "fixed_budget", minIterations: adaptiveConfig.minIterations, maxIterations: adaptiveConfig.maxIterations, batchSize: adaptiveConfig.batchSize, tolerancePp: adaptiveConfig.tolerancePp, stableChecksRequired: adaptiveConfig.stableChecksRequired, stableChecks, maxDeltaPp: lastCheckpoint?.maxDeltaPp ?? null, maxSamplingMarginPp: lastCheckpoint?.maxSamplingMarginPp ?? 98 / Math.sqrt(completedIterations), checkpoints: convergenceHistory }, uncertaintyPolicy: stats?.tournamentCalibration?.validation?.validated ? "historical tournament holdout calibration" : "experimental latent logit shocks; calibration gate not passed", formatVersion: "hidden-groups-r1-r3-playoff-v5-adaptive" };
 }

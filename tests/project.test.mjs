@@ -295,7 +295,9 @@ test("server forecast can create an automatic snapshot payload", async () => {
   const result = runForecast(probabilities, 100, 123, { stats, matches: [] });
   assert.equal(result.teams.length, 16);
   assert.equal(result.iterations, 100);
-  assert.equal(result.formatVersion, "hidden-groups-r1-r3-playoff-v4");
+  assert.equal(result.formatVersion, "hidden-groups-r1-r3-playoff-v5-adaptive");
+  assert.equal(result.convergence.stopReason, "fixed_budget");
+  assert.equal(result.convergence.checkpoints.at(-1).iterations, 100);
   assert.deepEqual(result.calibration, stats.tournamentCalibration.selected);
   assert.ok(Math.abs(result.teams.reduce((sum, team) => sum + team.champion, 0) - 100) < 1e-9);
   assert.ok(Math.abs(result.teams.reduce((sum, team) => sum + team.final, 0) - 200) < 1e-9);
@@ -317,6 +319,38 @@ test("server forecast can create an automatic snapshot payload", async () => {
   const total = (field) => Math.round(result.teams.reduce((sum, team) => sum + team[field], 0));
   assert.deepEqual({ direct: total("direct"), playinWin: total("viaPlayin"), playinLoss: total("playinLoss"), swissOut: total("swissOut") }, { direct: 300, playinWin: 500, playinLoss: 500, swissOut: 300 });
   for (const team of result.teams) assert.ok(Math.abs(team.direct + team.viaPlayin + team.playinLoss + team.swissOut - 100) < 0.001);
+});
+
+test("adaptive forecast respects its minimum, checkpoints and maximum budget", async () => {
+  const stats = JSON.parse(await readFile("public/team-stats.json", "utf8"));
+  const probabilities = buildForecastSource({ answers: {}, stats, matches: [], mode: "stats", opinionWeight: 0 });
+  const result = runForecast(probabilities, 100, 321, { stats, matches: [], adaptive: { enabled: true, minIterations: 100, maxIterations: 400, batchSize: 100, tolerancePp: 100, stableChecksRequired: 2 } });
+  assert.equal(result.iterations, 300);
+  assert.equal(result.requestedIterations, 100);
+  assert.equal(result.convergence.adaptive, true);
+  assert.equal(result.convergence.converged, true);
+  assert.equal(result.convergence.stopReason, "stable");
+  assert.deepEqual(result.convergence.checkpoints.map((item) => item.iterations), [100, 200, 300]);
+  assert.ok(result.convergence.maxSamplingMarginPp > 0);
+  assert.equal(result.pathSampleIterations, 300);
+  const championTotal = result.teams.reduce((sum, team) => sum + team.champion, 0);
+  const finalTotal = result.teams.reduce((sum, team) => sum + team.final, 0);
+  assert.ok(Math.abs(championTotal - 100) < 1e-9);
+  assert.ok(Math.abs(finalTotal - 200) < 1e-9);
+});
+
+test("forecast worker returns the same deterministic result as the engine", async () => {
+  const { Worker } = await import("node:worker_threads");
+  const stats = JSON.parse(await readFile("public/team-stats.json", "utf8"));
+  const probabilities = buildForecastSource({ answers: {}, stats, matches: [], mode: "stats", opinionWeight: 0 });
+  const expected = runForecast(probabilities, 100, 987, { stats, matches: [] });
+  const actual = await new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("../server/forecast-worker.mjs", import.meta.url), { workerData: { probabilities, minimum: 100, seed: 987, matches: [], stats, adaptive: null } });
+    worker.once("message", (message) => message.ok ? resolve(message.result) : reject(new Error(message.error)));
+    worker.once("error", reject);
+  });
+  assert.deepEqual(actual.teams, expected.teams);
+  assert.deepEqual(actual.convergence, expected.convergence);
 });
 
 test("intel artifact covers every team and complete tournament outcomes", async () => {

@@ -82,6 +82,8 @@ A second commercial/statistical provider such as STRATZ is valuable for anomaly 
 
 DatDota follows the same rule. Its draft/position tables are cached with checksum and `asOf`, deduplicated by match ID where raw rows exist, and remain shadow-only until they add chronological OOF value after conditioning on existing features. See [DATDOTA_INTEGRATION.md](DATDOTA_INTEGRATION.md).
 
+The official tournament forecast uses an adaptive simulation budget and records convergence diagnostics. See [ADAPTIVE_MONTE_CARLO.md](ADAPTIVE_MONTE_CARLO.md).
+
 ## Next metrics unlocked by own `.dem` parsing
 
 - lane matchups and lane net worth by player;

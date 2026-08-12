@@ -3,10 +3,11 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { Worker } from "node:worker_threads";
 import path from "node:path";
 import { completedSeriesFromMaps, OPENDOTA_TEAMS } from "./live-series.mjs";
 import { scheduledSeriesFromCybersportHtml } from "./schedule-source.mjs";
-import { buildForecastSource, ROUND_ONE, runForecast } from "./forecast-engine.mjs";
+import { buildForecastSource, ROUND_ONE } from "./forecast-engine.mjs";
 import { predictTemporalDraft } from "./draft-inference.mjs";
 
 const PORT = Number(process.env.API_PORT || 3001);
@@ -24,7 +25,10 @@ const SCHEDULE_SYNC_ENABLED = process.env.SCHEDULE_SYNC_ENABLED !== "false";
 const SCHEDULE_SOURCE_URL = process.env.SCHEDULE_SOURCE_URL || "https://www.cybersport.ru/tournaments/dota-2/the-international-2026";
 const SCHEDULE_TIMEZONE_OFFSET = process.env.SCHEDULE_TIMEZONE_OFFSET || "+03:00";
 const AUTO_SNAPSHOT_ITERATIONS = Math.max(10_000, Number(process.env.AUTO_SNAPSHOT_ITERATIONS || 250_000));
-const OFFICIAL_FORECAST_CONFIG = Object.freeze({ forecastMode: "stats", opinionWeight: 0, iterations: AUTO_SNAPSHOT_ITERATIONS });
+const AUTO_SNAPSHOT_MAX_ITERATIONS = Math.max(AUTO_SNAPSHOT_ITERATIONS, Number(process.env.AUTO_SNAPSHOT_MAX_ITERATIONS || AUTO_SNAPSHOT_ITERATIONS * 4));
+const AUTO_SNAPSHOT_BATCH_SIZE = Math.max(10_000, Number(process.env.AUTO_SNAPSHOT_BATCH_SIZE || AUTO_SNAPSHOT_ITERATIONS));
+const AUTO_SNAPSHOT_TOLERANCE_PP = Math.max(.01, Number(process.env.AUTO_SNAPSHOT_TOLERANCE_PP || .1));
+const OFFICIAL_FORECAST_CONFIG = Object.freeze({ forecastMode: "stats", opinionWeight: 0, iterations: AUTO_SNAPSHOT_ITERATIONS, adaptive: true, maxIterations: AUTO_SNAPSHOT_MAX_ITERATIONS, batchSize: AUTO_SNAPSHOT_BATCH_SIZE, tolerancePp: AUTO_SNAPSHOT_TOLERANCE_PP });
 const TI_PLAYIN_START = Date.parse(process.env.TI_PLAYIN_START || "2026-08-17T00:00:00+08:00") / 1000;
 const TI_PLAYOFF_START = Date.parse(process.env.TI_PLAYOFF_START || "2026-08-20T00:00:00+08:00") / 1000;
 const DRAFT_TEMPORAL_MODEL = path.resolve(process.env.DRAFT_TEMPORAL_MODEL || "public/draft-temporal-model.json");
@@ -230,29 +234,40 @@ function insertSnapshot({ trigger, config, probabilities, result, stats, matches
   return id;
 }
 
-function saveProfileSnapshot(trigger, config, profileAnswers, { kind = "original", rootId = null, parentId = null } = {}) {
+function runForecastWorker(payload) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./forecast-worker.mjs", import.meta.url), { workerData: payload });
+    worker.once("message", (message) => message?.ok ? resolve(message.result) : reject(new Error(message?.error || "forecast_worker_failed")));
+    worker.once("error", reject);
+    worker.once("exit", (code) => { if (code !== 0) reject(new Error(`forecast_worker_exit_${code}`)); });
+  });
+}
+
+async function saveProfileSnapshot(trigger, config, profileAnswers, { kind = "original", rootId = null, parentId = null } = {}) {
     const { matches, stats, probabilities } = currentForecast(config, profileAnswers);
     const completedMatchCount = matches.filter((match) => match.winner).length;
     const key = profileKey(config.forecastMode, config.opinionWeight, profileAnswers);
     const existing = db.prepare("SELECT id FROM prediction_snapshots WHERE profile_key=? AND completed_match_count=? AND snapshot_kind=? ORDER BY id DESC LIMIT 1").get(key, completedMatchCount, kind);
     if (existing) return Number(existing.id);
     const seed = Math.floor(Date.now() % 0xffffffff);
-    const result = runForecast(probabilities, Number(config.iterations || AUTO_SNAPSHOT_ITERATIONS), seed, { matches, stats });
+    const minimum = Number(config.iterations || AUTO_SNAPSHOT_ITERATIONS);
+    const adaptive = config.adaptive ? { enabled: true, minIterations: minimum, maxIterations: Number(config.maxIterations || AUTO_SNAPSHOT_MAX_ITERATIONS), batchSize: Number(config.batchSize || AUTO_SNAPSHOT_BATCH_SIZE), tolerancePp: Number(config.tolerancePp || AUTO_SNAPSHOT_TOLERANCE_PP), stableChecksRequired: 2 } : null;
+    const result = await runForecastWorker({ probabilities, minimum, seed, matches, stats, adaptive });
     const id = insertSnapshot({ trigger, config, probabilities, result, stats, matches, inputs: { answers: profileAnswers, cutoffCompletedMatches: completedMatchCount }, kind, rootId, parentId, key });
     audit("snapshot_saved", { id, trigger, completedMatchCount, kind, rootId, profileKey: key });
     return id;
 }
 
-function saveAutomaticSnapshots(trigger) {
+async function saveAutomaticSnapshots(trigger) {
   if (autoForecastRunning) return null;
   autoForecastRunning = true;
   try {
-    const officialId = saveProfileSnapshot(trigger, OFFICIAL_FORECAST_CONFIG, {}, { kind: "original" });
+    const officialId = await saveProfileSnapshot(trigger, OFFICIAL_FORECAST_CONFIG, {}, { kind: "original" });
     const roots = db.prepare("SELECT * FROM prediction_snapshots WHERE snapshot_kind='original' AND id=root_snapshot_id AND forecast_mode!='stats' GROUP BY profile_key ORDER BY id").all();
     for (const root of roots) {
       let inputs = {}; try { inputs = root.inputs_json ? JSON.parse(root.inputs_json) : {}; } catch { inputs = {}; }
       const parent = db.prepare("SELECT id FROM prediction_snapshots WHERE root_snapshot_id=? ORDER BY completed_match_count DESC,id DESC LIMIT 1").get(root.id);
-      saveProfileSnapshot(`revision_${trigger}`, { forecastMode: root.forecast_mode, opinionWeight: root.opinion_weight, iterations: AUTO_SNAPSHOT_ITERATIONS }, inputs.answers ?? {}, { kind: "revision", rootId: root.id, parentId: parent?.id ?? root.id });
+      await saveProfileSnapshot(`revision_${trigger}`, { ...OFFICIAL_FORECAST_CONFIG, forecastMode: root.forecast_mode, opinionWeight: root.opinion_weight }, inputs.answers ?? {}, { kind: "revision", rootId: root.id, parentId: parent?.id ?? root.id });
     }
     return officialId;
   } finally { autoForecastRunning = false; }
@@ -260,9 +275,9 @@ function saveAutomaticSnapshots(trigger) {
 
 function queueAutomaticSnapshot(trigger, delay = 100) {
   if (autoSnapshotTimer) clearTimeout(autoSnapshotTimer);
-  autoSnapshotTimer = setTimeout(() => {
+  autoSnapshotTimer = setTimeout(async () => {
     autoSnapshotTimer = null;
-    try { saveAutomaticSnapshots(trigger); } catch (error) { console.error("Automatic forecast failed:", error); audit("automatic_snapshot_failed", { trigger, error: error instanceof Error ? error.message : String(error) }); }
+    try { await saveAutomaticSnapshots(trigger); } catch (error) { console.error("Automatic forecast failed:", error); audit("automatic_snapshot_failed", { trigger, error: error instanceof Error ? error.message : String(error) }); }
   }, delay);
   autoSnapshotTimer.unref();
 }
