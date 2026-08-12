@@ -1,6 +1,7 @@
 ﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import ForecastClientWorker from "./forecast-client-worker.ts?worker";
 import { runForecast } from "../server/forecast-engine.mjs";
 import { assessPredictionConfidence } from "../server/prediction-confidence.mjs";
 import { predictionDecision } from "../server/prediction-decision.mjs";
@@ -633,7 +634,7 @@ function runSimulationInWorker(
   options: { liveMatches?: LiveMatch[]; statisticalModel?: StatisticalModel | null; adaptive?: boolean } = {},
 ): Promise<SimulationResult> {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL("./forecast-client-worker.ts", import.meta.url), { type: "module" });
+    const worker = new ForecastClientWorker();
     const cleanup = () => worker.terminate();
     worker.onmessage = (event) => {
       cleanup();
@@ -949,8 +950,8 @@ export default function Home() {
             .catch(() => setAdminMessage("Прогон рассчитан, но не удалось сохранить его в историю."));
         }
         document.getElementById("forecast")?.scrollIntoView({ behavior: "smooth", block: "start" });
-      } catch {
-        setAdminMessage("Не удалось выполнить Monte Carlo в фоновом потоке.");
+      } catch (error) {
+        setAdminMessage(`Не удалось выполнить Monte Carlo: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
         setIsCalculating(false);
       }

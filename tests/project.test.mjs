@@ -368,7 +368,7 @@ test("manual Monte Carlo UI exposes adaptive, 500K and 1M budgets", async () => 
   const page = await readFile("app/page.tsx", "utf8");
   assert.match(page, /setAdaptiveRun\(true\)/);
   assert.match(page, /500000, 1000000/);
-  assert.match(page, /forecast-client-worker\.ts/);
+  assert.match(page, /forecast-client-worker\.ts\?worker/);
 });
 
 test("conditional branches freeze ratings and compare probabilistic outcomes", async () => {
