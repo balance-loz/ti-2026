@@ -1,6 +1,5 @@
 ﻿"use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 type TeamMeta = { id: string; name: string; short: string; color: string; logo: string };
@@ -123,13 +122,13 @@ export default function IntelPage() {
   const selectedH2h = stats ? headToHead(stats, intel, selectedPair[0], selectedPair[1], context) : null;
   const selected = intel?.teams[selectedTeam];
 
-  if (error) return <main className="intel-loading"><b>INTEL ERROR</b><p>{error}</p><Link href="/">← К прогнозу</Link></main>;
+  if (error) return <main className="intel-loading"><b>INTEL ERROR</b><p>{error}</p><a href="/">← К прогнозу</a></main>;
   if (!intel || !stats) return <main className="intel-loading"><b>TI / INTEL</b><p>Собираю карту поля…</p></main>;
 
   return <main className="intel-page" id="top">
     <header className="topbar intel-topbar">
-      <Link className="brand" href="/" aria-label="Вернуться к прогнозу турнира"><span className="brand-glyph">T</span><span>TI / PREDICTOR</span></Link>
-      <nav aria-label="Разделы"><Link href="/">Турнир</Link><Link href="/drafts">Пики</Link><Link className="is-current" href="/intel">Разведка</Link><a href="#sources">Данные</a></nav>
+      <a className="brand" href="/" aria-label="Вернуться к прогнозу турнира"><span className="brand-glyph">T</span><span>TI / PREDICTOR</span></a>
+      <nav aria-label="Разделы"><a href="/">Турнир</a><a href="/drafts">Пики</a><a className="is-current" href="/intel">Разведка</a><a href="#sources">Данные</a></nav>
     </header>
 
     <section className="intel-hero">

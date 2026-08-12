@@ -1,7 +1,6 @@
 ﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { combineDraftSignals, combineLearnedDraftSignals } from "../../server/draft-combiner.mjs";
 import { predictTemporalDraft } from "../../server/draft-inference.mjs";
 
@@ -363,8 +362,8 @@ export default function DraftsPage() {
 
   return <main className="draft-page">
     <header className="topbar">
-      <Link className="brand" href="/" aria-label="Вернуться к прогнозу турнира"><span className="brand-glyph">T</span><span>TI / PREDICTOR</span></Link>
-      <nav aria-label="Разделы"><Link href="/">Турнир</Link><Link className="is-current" href="/drafts">Пики</Link><Link href="/intel">Разведка</Link><a href="#model">Модель</a></nav>
+      <a className="brand" href="/" aria-label="Вернуться к прогнозу турнира"><span className="brand-glyph">T</span><span>TI / PREDICTOR</span></a>
+      <nav aria-label="Разделы"><a href="/">Турнир</a><a className="is-current" href="/drafts">Пики</a><a href="/intel">Разведка</a><a href="#model">Модель</a></nav>
       <div className="live-pill"><span /> DRAFT LAB</div>
     </header>
 
@@ -426,6 +425,6 @@ export default function DraftsPage() {
       </div> : null}
     </section>
 
-    <footer><div className="brand"><span className="brand-glyph">T</span><span>TI / PREDICTOR</span></div><p>Экспериментальный прогноз драфта · коэффициенты будут проверяться на сыгранных картах TI</p><Link href="/">К турниру →</Link></footer>
+    <footer><div className="brand"><span className="brand-glyph">T</span><span>TI / PREDICTOR</span></div><p>Экспериментальный прогноз драфта · коэффициенты будут проверяться на сыгранных картах TI</p><a href="/">К турниру →</a></footer>
   </main>;
 }

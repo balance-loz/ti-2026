@@ -357,3 +357,11 @@ test("production image exposes next-generation artifacts without activating shad
   assert.match(api, /\/api\/models\/nextgen/);
   assert.match(api, /activeForecastUnchanged: true/);
 });
+
+test("cross-page navigation does not depend on broken Vinext Link prefetch", async () => {
+  for (const file of ["app/drafts/page.tsx", "app/intel/page.tsx"]) {
+    const page = await readFile(file, "utf8");
+    assert.doesNotMatch(page, /from ["']next\/link["']/);
+    assert.match(page, /<a[^>]+href="\/"[^>]*>.*Турнир/s);
+  }
+});
