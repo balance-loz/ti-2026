@@ -1,5 +1,9 @@
 # TI 2026 Predictor
 
+> Next-generation all-pro/player, full pick/ban, CatBoost/Deep Sets and series-calibration results: [docs/NEXTGEN_MODEL_2026-08-12.md](docs/NEXTGEN_MODEL_2026-08-12.md). Weak challengers remain shadow/experimental and do not silently replace production.
+
+> Математический статус моделей и список спорных допущений: [docs/MODEL_AUDIT_2026-08-12.md](docs/MODEL_AUDIT_2026-08-12.md). Командные проценты остаются экспериментальными; temporal ensemble работает в SHADOW, а активная map-level формула прошла отдельный frozen holdout против team+side baseline.
+
 Живой вероятностный прогноз всего The International 2026: личные оценки, статистическая модель, Монте-Карло, швейцарка, стыки, плей-офф и честная оценка каждого матча.
 
 ## Что умеет модель
@@ -30,7 +34,7 @@
 
 ## Следующий слой: прогноз карты после драфта
 
-Его следует обучать отдельно от предматчевой модели. Текущая вероятность серии становится prior, а patch/draft-модель обновляет шанс конкретной карты по десяти героям, Radiant/Dire, порядку пиков, игрокам на героях и взаимодействиям героев. Так прогноз до драфта остаётся стабильным и объяснимым, а данные текущей меты не подменяют силу команды.
+Он обучается отдельно от предматчевой модели. Текущая вероятность серии становится prior, а patch/draft-модель обновляет шанс конкретной карты по десяти героям, Radiant/Dire, ролям и взаимодействиям героев. Обучающая SQLite-база остаётся локально, а сервер получает только компактный артефакт и выполняет `/api/draft/predict`. Новая версия включается в итог только после улучшения log loss на строгом walk-forward по будущим патчам; до этого она видна в Draft Lab как `SHADOW` с нулевым весом.
 
 ## Локальный запуск
 
@@ -77,7 +81,23 @@ docker compose up -d --build
 
 - `npm run build` — production-сборка;
 - `npm run stats:update` — осторожное обновление кэша OpenDota;
+- `npm run drafts:update` — возобновляемый сбор всех карт текущего патча и пересборка отдельной SQLite-базы пиков;
+- `npm run draft:collect` — стратифицированный сбор старых pro-карт с квотой на patch ID и checkpoint cursor;
+- `npm run draft:research:pipeline` — полный доступный двухлетний census pro-карт, официальные версии/patch notes Valve, сборка SQLite и аудит мощности каждой версии;
+- `npm run draft:research:train` — patch-transition OOF, активная map-level формула и девятимодельная arena на точных подпатчах;
+- `npm run stats:update` — обновление данных команд, nested arena (Elo / dynamic / recency logistic / Bradley–Terry) и tournament holdout-калибровка формы/неопределённости;
+- `npm run draft:collect:mmr` — опциональная top-MMR выборка; карта принимается только при подтверждённом MMR/rank-tier;
+- `npm run draft:data` — локальная нормализация исторических карт в `work/draft-training.sqlite`;
+- `npm run draft:train` — полный Model Arena и компактный production-ансамбль;
+- `npm run draft:train:single` — прежний одиночный temporal-logistic baseline для контрольного сравнения;
+- `npm run draft:arena` — турнир моделей, online-калибровка, stacking и production gate;
+- `npm run draft:pipeline` — оба локальных этапа подряд;
+- `npm run intel:update` — пересборка `/intel` из уже загруженных матчей и parsed replay telemetry;
+- `npm run data:update` — последовательное обновление матчей, драфтов и разведданных;
 - `npm run model:backtest` — walk-forward проверка вариантов полураспада без подглядывания в будущее;
 - `npm run api` — API, SQLite и админ-сессии.
 
 Секреты не коммитятся: `.env` исключён из Git, в репозитории есть только `.env.example`.
+
+Подробная схема происхождения данных, правила identity/roster era и план собственного `.dem`-архива описаны в [docs/DATA_PIPELINE.md](docs/DATA_PIPELINE.md).
+Архитектура межпатчевого обучения, оценка диска и правила выката описаны в [docs/DRAFT_TEMPORAL_MODEL.md](docs/DRAFT_TEMPORAL_MODEL.md).

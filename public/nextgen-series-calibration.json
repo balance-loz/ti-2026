@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-12T14:50:44.576631+00:00",
+  "sourceModelId": "c20ff32cf905af1b",
+  "sourceModel": "stack",
+  "orderOfOperations": [
+    "train base team models",
+    "fit OOF stack",
+    "select class on middle validation",
+    "evaluate once on untouched final test",
+    "train/evaluate post-draft challengers",
+    "calibrate BO3/BO5",
+    "estimate tournament variance",
+    "enable Monte Carlo parameters only after gate"
+  ],
+  "dataset": {
+    "series": 28599,
+    "train": 22879,
+    "test": 5720,
+    "testBo3": 3379,
+    "testBo5": 67
+  },
+  "seriesTemperature": {
+    "bo3": 1.5299999999999998,
+    "bo5": 1.4849999999999999
+  },
+  "holdout": {
+    "rawLogLoss": 0.657573883211956,
+    "calibratedLogLoss": 0.6619930158773948,
+    "bootstrap": {
+      "lower95": 0.001753614598647954,
+      "upper95": 0.0070098065124864035,
+      "iterations": 3000,
+      "clusters": 3446,
+      "cluster": "series_id"
+    }
+  },
+  "monteCarlo": {
+    "teamFormLogitSd": 0.32295637554901085,
+    "seriesShockLogitSd": 0,
+    "policy": "persistent team form only; Bernoulli series draw already carries aleatoric uncertainty"
+  },
+  "status": "experimental"
+}

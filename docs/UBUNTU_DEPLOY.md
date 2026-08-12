@@ -110,7 +110,10 @@ cd /opt/ti2026
 git pull --ff-only
 docker compose up -d --build
 docker compose ps
+curl -s http://127.0.0.1/api/models/nextgen
 ```
+
+Next-generation model artifacts are copied into the immutable `/app/model` directory, so the persistent `/app/public` volume cannot hide a newly built artifact. The endpoint above exposes them for production smoke tests, but they remain diagnostic-only: shadow CatBoost/Deep Sets and experimental BO3/BO5 calibration do not alter live forecasts.
 
 Контейнеры имеют `restart: unless-stopped`, поэтому автоматически поднимутся после перезагрузки VPS. Именованные Docker volumes сохраняют SQLite, статистику и OpenDota-кэш при пересборке.
 

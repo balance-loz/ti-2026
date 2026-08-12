@@ -4,6 +4,141 @@ import { readFile } from "node:fs/promises";
 import { completedSeriesFromMaps } from "../server/live-series.mjs";
 import { scheduledSeriesFromCybersportHtml } from "../server/schedule-source.mjs";
 import { buildForecastSource, ROUND_ONE, runForecast, SWISS_GROUPS, SWISS_GROUP_BY_TEAM, swissBucketKey } from "../server/forecast-engine.mjs";
+import { combineDraftSignals } from "../server/draft-combiner.mjs";
+import { predictTemporalDraft } from "../server/draft-inference.mjs";
+import { bestOfProbability, convertSeriesProbability } from "../server/team-model.mjs";
+
+test("draft decides a matchup between equally strong teams", () => {
+  const betterDraft = combineDraftSignals(0.5, [0.25]);
+  const worseDraft = combineDraftSignals(0.5, [-0.25]);
+  assert.ok(betterDraft.probability >= 0.62);
+  assert.ok(worseDraft.probability <= 0.38);
+  assert.ok(betterDraft.draftSignalWeight > betterDraft.teamPriorWeight * 4);
+});
+
+test("a clearly stronger team survives a slightly worse draft", () => {
+  const closeMatchup = combineDraftSignals(0.5, [-0.12]);
+  const clearFavorite = combineDraftSignals(0.8, [-0.12]);
+  assert.ok(closeMatchup.probability < 0.5);
+  assert.ok(clearFavorite.probability > 0.7);
+  assert.ok(clearFavorite.teamPriorWeight > closeMatchup.teamPriorWeight);
+  assert.ok(clearFavorite.draftSignalWeight < closeMatchup.draftSignalWeight);
+});
+
+test("temporal draft inference exposes hero, synergy and counter components", () => {
+  const model = {
+    schemaVersion: 1,
+    modelId: "fixture",
+    dataset: { matches: 100, patches: 4, currentPatchId: 60 },
+    inference: { heroScale: 1, roleScale: 1, synergyScale: 1, counterScale: 1, temperature: 1, radiantBias: 0.1 },
+    heroes: { 1: { coefficient: 0.3 }, 2: { coefficient: -0.2 } },
+    synergy: {},
+    counters: { "1>2": { coefficient: 0.4 }, "2>1": { coefficient: -0.1 } },
+  };
+  const prediction = predictTemporalDraft(model, { picksA: [1], picksB: [2], radiant: "a" });
+  assert.ok(prediction.probabilityA > 0.7);
+  assert.equal(prediction.components.heroes, 0.5);
+  assert.equal(prediction.components.counters, 0.5);
+  assert.equal(prediction.evidence.trainingMatches, 100);
+  assert.throws(() => predictTemporalDraft(model, { picksA: [1], picksB: [1] }), /invalid_picks/);
+});
+
+test("production inference combines calibrated linear and factorization members", () => {
+  const model = {
+    schemaVersion: 1, modelId: "ensemble-fixture", dataset: { matches: 200, patches: 5, currentPatchId: 60 },
+    ensemble: { neutralWeight: 0.2, members: [
+      { name: "linear", weight: 0.5, temperature: 1, model: { type: "linear", inference: { heroScale: 1 }, heroes: { 1: { coefficient: 0.4 }, 2: { coefficient: -0.2 } } } },
+      { name: "fm", weight: 0.3, temperature: 1, model: { type: "fm", inference: { heroScale: 0, roleScale: 0, dimensions: 2 }, heroes: { 1: { coefficient: 0, embedding: [0.3, 0.1] }, 2: { coefficient: 0, embedding: [-0.2, 0.2] } } } },
+    ] },
+  };
+  const prediction = predictTemporalDraft(model, { picksA: [1], picksB: [2], radiant: "a" });
+  assert.ok(prediction.probabilityA > 0.55);
+  assert.ok(prediction.components.heroes > 0);
+  assert.ok(Number.isFinite(prediction.components.synergy));
+  assert.equal(prediction.evidence.patches, 5);
+});
+
+test("factorization draft signal is invariant to Radiant side assignment", () => {
+  const model = {
+    schemaVersion: 1, modelId: "fm-side-invariant", dataset: { matches: 20, patches: 2 },
+    ensemble: { neutralWeight: 0, members: [{ name: "fm", weight: 1, temperature: 1, model: {
+      type: "fm", inference: { heroScale: 0, roleScale: 0, dimensions: 2 },
+      heroes: {
+        1: { coefficient: 0, embedding: [.4, -.1] }, 2: { coefficient: 0, embedding: [.2, .3] },
+        3: { coefficient: 0, embedding: [-.3, .2] }, 4: { coefficient: 0, embedding: [.1, -.4] },
+      },
+    } }] },
+  };
+  const radiantA = predictTemporalDraft(model, { picksA: [1, 2], picksB: [3, 4], radiant: "a" });
+  const radiantB = predictTemporalDraft(model, { picksA: [1, 2], picksB: [3, 4], radiant: "b" });
+  assert.ok(Math.abs(radiantA.probabilityA - radiantB.probabilityA) < 1e-12);
+});
+
+test("map probabilities convert separately to BO3 and BO5", () => {
+  assert.ok(bestOfProbability(.6, 5) > bestOfProbability(.6, 3));
+  assert.ok(Math.abs(convertSeriesProbability(bestOfProbability(.6, 3), 3, 5) - bestOfProbability(.6, 5)) < 1e-10);
+  assert.equal(bestOfProbability(.5, 3), .5);
+  assert.equal(bestOfProbability(.5, 5), .5);
+});
+
+test("temporal artifact is compact and gated by future-patch evaluation", async () => {
+  const raw = await readFile("public/draft-temporal-model.json", "utf8");
+  const model = JSON.parse(raw);
+  assert.equal(model.schemaVersion, 1);
+  assert.equal(model.modelFamily, "walk-forward-draft-ensemble-v1");
+  assert.ok(model.dataset.matches >= 1000);
+  assert.ok(model.dataset.patches >= 5);
+  assert.equal(model.arena.leaderboard.length, 9);
+  assert.ok(model.ensemble.members.length >= 1 && model.ensemble.members.length <= 4);
+  assert.equal(model.backtest.validatedObject, "fixed four-member production stack");
+  assert.equal(model.deployment.incrementalToActiveValidated, false);
+  assert.ok(["candidate", "shadow", "insufficient_data"].includes(model.deployment.status));
+  assert.ok(Number.isFinite(model.backtest.aggregate.model.logLoss));
+  assert.ok(Number.isFinite(model.backtest.aggregate.neutral.logLoss));
+  assert.equal(model.backtest.aggregate.seriesClusterBootstrap.cluster, "series_id");
+  assert.ok(Number.isFinite(model.backtest.aggregate.seriesClusterBootstrap.upper95));
+  assert.ok(Buffer.byteLength(raw) < 1_000_000);
+  const heroIds = Object.keys(model.ensemble.members[0].model.heroes).slice(0, 10).map(Number);
+  const sideA = predictTemporalDraft(model, { picksA: heroIds.slice(0, 5), picksB: heroIds.slice(5, 10), radiant: "a" });
+  const sideB = predictTemporalDraft(model, { picksA: heroIds.slice(0, 5), picksB: heroIds.slice(5, 10), radiant: "b" });
+  assert.ok(Math.abs(sideA.probabilityA - sideB.probabilityA) < 1e-12);
+  if (model.backtest.aggregate.logLossDelta >= 0) assert.equal(model.deployment.recommendedWeight, 0);
+});
+
+test("two-year patch research uses exact versions and honest patch-note ablation", async () => {
+  const [coverage, transition, artifact] = await Promise.all([
+    readFile("work/draft-coverage.json", "utf8").then(JSON.parse),
+    readFile("work/patch-transition-backtest.json", "utf8").then(JSON.parse),
+    readFile("public/patch-transition-model.json", "utf8").then(JSON.parse),
+  ]);
+  assert.equal(coverage.window.years, 2);
+  assert.ok(coverage.totals.maps >= 50_000);
+  assert.equal(coverage.totals.viableCompleteVersions, coverage.totals.completeVersions);
+  assert.ok(transition.dataset.exactVersions >= 20);
+  assert.ok(transition.dataset.transitions >= 19);
+  assert.ok(transition.metrics.all.ensemble.weightedRmse < transition.metrics.all.baseline.weightedRmse);
+  assert.equal(artifact.validation.comparedWithCarryAndNoNotesAblation, true);
+  assert.equal(artifact.validation.targetOutcomesExcludedFromArtifact, true);
+  assert.equal(artifact.validation.teamOpponentAdjustedTarget, true);
+  assert.equal(artifact.pairForecastRule.status, "disabled_until_direct_residual_transition_is_trained");
+  assert.ok(Object.values(artifact.heroForecasts).every((row) => !("actualStrength" in row) && !("currentGames" in row)));
+  if (transition.metrics.all.ensemble.weightedRmse >= transition.metrics.all.noNotes.weightedRmse) {
+    assert.equal(artifact.deploymentStatus, "experimental");
+    assert.equal(artifact.validation.notesAddValue, false);
+  }
+});
+
+test("active draft candidate beats a separately fitted team-plus-side frozen holdout", async () => {
+  const report = JSON.parse(await readFile("work/active-draft-walkforward.json", "utf8"));
+  const teamModel = JSON.parse(await readFile("public/team-model.json", "utf8"));
+  assert.equal(report.combiner.version, 2);
+  assert.ok(report.dataset.frozenHoldoutMaps >= 10_000);
+  assert.ok(report.metrics.frozenHoldout.model.logLoss < report.metrics.frozenHoldout.teamSide.logLoss);
+  assert.ok(report.metrics.frozenHoldout.model.brier < report.metrics.frozenHoldout.teamSide.brier);
+  assert.ok(report.bootstrap.frozenHoldoutVersusTeamSide.upper95 < 0);
+  assert.equal(report.deployment.frozenHoldoutGatePassed, true);
+  assert.equal(report.teamPrior.modelId, teamModel.selected.id);
+});
 
 test("first three Swiss rounds are restricted to the revealed groups", () => {
   const participants = [...SWISS_GROUPS.A, ...SWISS_GROUPS.B];
@@ -20,6 +155,12 @@ test("statistics contain every TI matchup and calibrated methodology", async () 
   assert.equal(Object.keys(stats.teams).length, 16);
   assert.equal(Object.keys(stats.pairwise).length, 120);
   assert.equal(stats.methodology.recencyHalfLifeDays, 45);
+  assert.equal(stats.methodology.claim.includes("experimental"), true);
+  assert.equal(stats.validation.status, "experimental");
+  assert.ok(stats.validation.selected.logLoss < stats.validation.neutral.logLoss);
+  assert.equal(stats.methodology.teamPrior.artifact, "/team-model.json");
+  assert.equal(stats.tournamentCalibration.validation.validated, stats.tournamentCalibration.holdout.bootstrap.upper95 < 0);
+  assert.equal(stats.tournamentCalibration.selected.seriesNoiseLogitSd, 0);
   assert.deepEqual(stats.methodology.rosterWeights, { 3: 0.07, 4: 0.25, 5: 1 });
   assert.equal(stats.methodology.directMatchPriorSeries, 6);
   assert.equal(stats.methodology.ratingL2Penalty, 0.025);
@@ -28,7 +169,9 @@ test("statistics contain every TI matchup and calibrated methodology", async () 
   assert.ok(stats.teams["1w"].exactRosterGames >= 200);
   for (const pair of Object.values(stats.pairwise)) {
     assert.ok(pair.probabilityA >= 7 && pair.probabilityA <= 93);
-    assert.ok(pair.uncertainty > 0);
+    assert.ok(pair.probabilityBo3A >= 7 && pair.probabilityBo3A <= 93);
+    assert.ok(pair.probabilityBo5A >= 3 && pair.probabilityBo5A <= 97);
+    assert.ok(pair.uncertainty >= 0);
   }
 });
 
@@ -38,15 +181,33 @@ test("draft lab contains current-patch heroes and regularized matchup evidence",
   const server = await readFile("server/api.mjs", "utf8");
   assert.ok(stats.heroes.length >= 120);
   assert.ok(stats.methodology.cachedPatchMaps >= 100);
+  assert.equal(stats.methodology.patchName, "7.41e");
+  assert.ok(stats.methodology.cachedPatchMaps >= stats.methodology.tiTeamPatchMaps);
+  assert.equal(stats.methodology.cachedPatchMaps, stats.methodology.globalProPatchMaps);
+  assert.equal(stats.methodology.missingPatchMaps, 0);
   assert.ok(stats.methodology.proPriorGames > 0);
   assert.ok(stats.methodology.patchPriorGames > 0);
   assert.ok(stats.methodology.pairPriorGames > 0);
   assert.ok(stats.radiantWinRate > 40 && stats.radiantWinRate < 60);
   assert.ok(Object.keys(stats.synergy).length > 0);
   assert.ok(Object.keys(stats.counters).length > 0);
+  assert.ok(Object.keys(stats.lineups).length > 0);
+  assert.deepEqual(stats.activeSnapshot.featureContract, ["teamPrior", "side", "hero", "synergy", "counter", "teamPool", "playerPool", "roles"]);
+  assert.deepEqual(stats.activeSnapshot.teamPairwise, Object.fromEntries(Object.entries((await readFile("public/team-stats.json", "utf8").then(JSON.parse)).pairwise).map(([key, pair]) => [key, { probabilityA: pair.mapProbabilityA, modelId: pair.modelId }])));
+  assert.ok(Object.values(stats.activeSnapshot.synergy).every((row) => Number.isFinite(row.coefficient)));
+  assert.ok(Object.values(stats.activeSnapshot.counter).every((row) => Number.isFinite(row.coefficient)));
+  assert.ok(Object.keys(stats.activeSnapshot.heroRole).length > 0);
+  assert.ok(Object.values(stats.activeSnapshot.playerPositions).every((row) => row.role >= 1 && row.role <= 5));
+  assert.equal(stats.validation.activeFormula.bootstrap.frozenHoldoutVersusTeamSide.cluster, "series_id");
+  assert.ok(Object.values(stats.teams).every((team) => team.players.length === 5));
+  assert.ok(Object.values(stats.teams).some((team) => team.players.some((player) => Object.keys(player.heroes).length > 0)));
   assert.match(page, /Почему получилась эта вероятность/);
   assert.match(page, /Контрпики/);
+  assert.match(page, /Игроки на героях/);
   assert.match(server, /scripts\/update-all-stats\.mjs/);
+  assert.match(server, /\/api\/draft\/predict/);
+  assert.match(page, /Межпатчевая модель/);
+  assert.match(page, /MODEL ARENA/);
 });
 
 test("deployment files do not contain the administrator password", async () => {
@@ -130,7 +291,11 @@ test("server forecast can create an automatic snapshot payload", async () => {
   const result = runForecast(probabilities, 100, 123, { stats, matches: [] });
   assert.equal(result.teams.length, 16);
   assert.equal(result.iterations, 100);
-  assert.equal(result.formatVersion, "hidden-groups-r1-r3-playoff-v2");
+  assert.equal(result.formatVersion, "hidden-groups-r1-r3-playoff-v4");
+  assert.deepEqual(result.calibration, stats.tournamentCalibration.selected);
+  assert.ok(Math.abs(result.teams.reduce((sum, team) => sum + team.champion, 0) - 100) < 1e-9);
+  assert.ok(Math.abs(result.teams.reduce((sum, team) => sum + team.final, 0) - 200) < 1e-9);
+  assert.ok(Math.abs(result.teams.reduce((sum, team) => sum + team.top3, 0) - 300) < 1e-9);
   assert.equal(result.teams.filter((team) => team.qualify > 0).length > 0, true);
   assert.equal(result.scenarios[0].direct40.length, 1);
   assert.equal(result.scenarios[0].direct41.length, 2);
@@ -145,4 +310,50 @@ test("server forecast can create an automatic snapshot payload", async () => {
   const total = (field) => Math.round(result.teams.reduce((sum, team) => sum + team[field], 0));
   assert.deepEqual({ direct: total("direct"), playinWin: total("viaPlayin"), playinLoss: total("playinLoss"), swissOut: total("swissOut") }, { direct: 300, playinWin: 500, playinLoss: 500, swissOut: 300 });
   for (const team of result.teams) assert.ok(Math.abs(team.direct + team.viaPlayin + team.playinLoss + team.swissOut - 100) < 0.001);
+});
+
+test("intel artifact covers every team and complete tournament outcomes", async () => {
+  const intel = JSON.parse(await readFile(new URL("../public/intel-stats.json", import.meta.url), "utf8"));
+  assert.equal(Object.keys(intel.teams).length, 16);
+  assert.ok(intel.methodology.parsedReplayFiles >= 1000);
+  assert.equal(intel.sources.some((source) => source.id === "opendota-replays"), true);
+  for (const team of Object.values(intel.teams)) {
+    assert.equal(team.contexts.length, 5);
+    assert.ok(team.style.metrics.length >= 8);
+    assert.equal(team.players.length, 5);
+    assert.equal(team.storylines.length, 3);
+    assert.ok(team.identity.openDotaIds.length >= 1);
+  }
+  const outcomes = Object.values(intel.tournament.teams);
+  assert.ok(Math.abs(outcomes.reduce((sum, team) => sum + team.champion, 0) - 100) < 0.2);
+  assert.ok(Math.abs(outcomes.reduce((sum, team) => sum + team.final, 0) - 200) < 0.2);
+  assert.ok(Math.abs(outcomes.reduce((sum, team) => sum + team.top3, 0) - 300) < 0.2);
+});
+
+test("next-generation artifacts enforce chronological gates and keep weak challengers out", async () => {
+  const team = JSON.parse(await readFile("public/all-pro-team-model.json", "utf8"));
+  const draft = JSON.parse(await readFile("public/draft-nextgen-model.json", "utf8"));
+  const series = JSON.parse(await readFile("public/nextgen-series-calibration.json", "utf8"));
+  assert.equal(team.training.series, 29599);
+  assert.equal(team.selected.id, "stack");
+  assert.equal(team.validation.modelSelection.selected, "stack");
+  assert.equal(team.validation.frozenHoldout.stackBeatsBestBase, false);
+  assert.ok(team.validation.frozenHoldout.selectedBootstrapVs50.upper95 < 0);
+  assert.equal(draft.fullPickBanSequence, true);
+  assert.equal(draft.status, "shadow");
+  assert.ok(draft.training.test >= 350);
+  assert.equal(series.sourceModel, "stack");
+  assert.equal(series.status, "experimental");
+  assert.equal(series.monteCarlo.seriesShockLogitSd, 0);
+  assert.ok(series.holdout.calibratedLogLoss >= series.holdout.rawLogLoss);
+});
+
+test("production image exposes next-generation artifacts without activating shadows", async () => {
+  const dockerfile = await readFile("Dockerfile", "utf8");
+  const compose = await readFile("docker-compose.yml", "utf8");
+  const api = await readFile("server/api.mjs", "utf8");
+  for (const file of ["all-pro-team-model.json", "draft-nextgen-model.json", "nextgen-series-calibration.json"]) assert.match(dockerfile, new RegExp(file.replaceAll(".", "\\.")));
+  assert.match(compose, /ALL_PRO_TEAM_MODEL: \/app\/model\/all-pro-team-model\.json/);
+  assert.match(api, /\/api\/models\/nextgen/);
+  assert.match(api, /activeForecastUnchanged: true/);
 });

@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "modelId": "5e9cb81fbeb018f8",
+  "status": "shadow",
+  "winner": "catBoost",
+  "deployment": "post-draft shadow challenger; production remains unchanged unless candidate gate passes",
+  "test": {
+    "preDraft": {
+      "samples": 374,
+      "logLoss": 0.6259408332491673,
+      "brier": 0.21749572444313744,
+      "accuracy": 0.6443850267379679
+    },
+    "catBoost": {
+      "samples": 374,
+      "logLoss": 0.6259408332491673,
+      "brier": 0.21749572444313744,
+      "accuracy": 0.6443850267379679
+    },
+    "deepSets": {
+      "samples": 374,
+      "logLoss": 0.6264417433868792,
+      "brier": 0.21773620003608607,
+      "accuracy": 0.6497326203208557
+    }
+  },
+  "training": {
+    "maps": 1761,
+    "series": 942,
+    "train": 1110,
+    "validation": 277,
+    "test": 374,
+    "fullSequences": 1761
+  },
+  "preDraftSource": "all-pro-team-model v3",
+  "fullPickBanSequence": true,
+  "propensity": "prequential patch/order/side/action with Laplace smoothing",
+  "residualEffects": [
+    "hero",
+    "synergy",
+    "counter"
+  ],
+  "sideFlip": {
+    "preDraftMaxError": 0.0,
+    "catBoostMeanError": 0.0,
+    "catBoostMaxError": 0.0,
+    "deepSetsMeanError": 0.0,
+    "deepSetsMaxError": 0.0,
+    "required": true,
+    "trainingAugmentation": true
+  },
+  "inferenceSymmetrization": "0.5 * (p(x) + 1 - p(sideFlip(x)))",
+  "challengers": [
+    "CatBoost",
+    "Deep Sets multi-task"
+  ]
+}

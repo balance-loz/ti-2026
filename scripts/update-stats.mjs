@@ -1,5 +1,6 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { DEFAULT_TEAM_MODEL_CONFIG, fitProductionTeamModel, productionPairPrediction, seriesInformation } from "../server/team-model.mjs";
 
 const API = "https://api.opendota.com/api";
 const ROOT = process.cwd();
@@ -7,11 +8,11 @@ const CACHE = path.join(ROOT, "work", "opendota-cache");
 const MATCH_CACHE = path.join(CACHE, "matches");
 const OUTPUT = path.join(ROOT, "public", "team-stats.json");
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
-const HALF_LIFE_DAYS = 45;
+const HALF_LIFE_DAYS = DEFAULT_TEAM_MODEL_CONFIG.halfLifeDays;
 const ROSTER_WEIGHTS = { 5: 1, 4: 0.25, 3: 0.07 };
-const DIRECT_MATCH_PRIOR_SERIES = 6;
-const RATING_L2_PENALTY = 0.025;
-const SERIES_INFORMATION = { singleMap: 0.6, multiMapBase: 0.72, decisiveBonus: 0.28 };
+const DIRECT_MATCH_PRIOR_SERIES = DEFAULT_TEAM_MODEL_CONFIG.directMatchPriorSeries;
+const RATING_L2_PENALTY = DEFAULT_TEAM_MODEL_CONFIG.ratingL2Penalty;
+const SERIES_INFORMATION = DEFAULT_TEAM_MODEL_CONFIG.seriesInformation;
 const REQUEST_GAP_MS = 1100;
 const LIVE_TI_LEAGUE_ID = Number(process.env.TI_LEAGUE_ID || 19719);
 
@@ -329,41 +330,13 @@ function collapseToSeries(games) {
   }
   return groups.map((series) => {
     const maps = series.wins + series.losses;
-    const decisive = Math.abs(series.wins - series.losses) / Math.max(1, maps);
     return {
       ...series,
       targetScore: series.wins / Math.max(1, maps),
       rosterWeight: series.mapWeights.reduce((sum, value) => sum + value, 0) / series.mapWeights.length,
-      seriesInformation: maps === 1 ? SERIES_INFORMATION.singleMap : SERIES_INFORMATION.multiMapBase + SERIES_INFORMATION.decisiveBonus * decisive,
+      seriesInformation: seriesInformation(series.wins, series.losses),
     };
   });
-}
-
-function fitBradleyTerry(seriesList, targetLineups) {
-  const nodes = new Set(targetLineups);
-  seriesList.forEach((series) => { nodes.add(series.targetLineup); nodes.add(series.opponentLineup); });
-  const ratings = Object.fromEntries([...nodes].map((node) => [node, 0]));
-  const nowSeconds = Date.now() / 1000;
-  const weighted = seriesList.map((series) => ({
-    ...series,
-    weight: (series.rosterWeight ?? 1) * series.seriesInformation
-      * 0.5 ** (((nowSeconds - series.startTime) / 86400) / HALF_LIFE_DAYS),
-  }));
-
-  for (let iteration = 0; iteration < 700; iteration += 1) {
-    const gradient = Object.fromEntries([...nodes].map((node) => [node, -RATING_L2_PENALTY * ratings[node]]));
-    for (const game of weighted) {
-      const a = game.targetLineup;
-      const b = game.opponentLineup;
-      const expected = 1 / (1 + Math.exp(-(ratings[a] - ratings[b])));
-      const error = game.weight * (game.targetScore - expected);
-      gradient[a] += error;
-      gradient[b] -= error;
-    }
-    const rate = 0.018 / Math.sqrt(1 + iteration / 120);
-    for (const node of nodes) ratings[node] += rate * gradient[node];
-  }
-  return { ratings, weighted };
 }
 
 function confidenceLabel(effectiveGames, directGames) {
@@ -421,7 +394,8 @@ async function main() {
   }
   const games = [...uniqueGames.values()];
   const series = collapseToSeries(games);
-  const { ratings, weighted } = fitBradleyTerry(series, Object.values(targetLineups));
+  const fittedTeamModel = fitProductionTeamModel(series, Object.values(targetLineups));
+  const { weighted } = fittedTeamModel;
   const pairwise = {};
 
   for (let i = 0; i < TEAMS.length; i += 1) {
@@ -430,30 +404,21 @@ async function main() {
       const b = TEAMS[j];
       const lineupA = targetLineups[a.id];
       const lineupB = targetLineups[b.id];
-      const indirectMap = 1 / (1 + Math.exp(-(ratings[lineupA] - ratings[lineupB])));
-      const indirectSeriesProbability = indirectMap * indirectMap * (3 - 2 * indirectMap);
-      let directWins = 0;
-      let directGames = 0;
-      for (const game of weighted) {
-        const isForward = game.targetLineup === lineupA && game.opponentLineup === lineupB;
-        const isReverse = game.targetLineup === lineupB && game.opponentLineup === lineupA;
-        if (!isForward && !isReverse) continue;
-        directGames += game.weight;
-        directWins += game.weight * (isForward ? game.targetScore : 1 - game.targetScore);
-      }
-      const priorGames = DIRECT_MATCH_PRIOR_SERIES;
-      const mapProbability = (indirectMap * priorGames + directWins) / (priorGames + directGames);
-      const seriesProbability = mapProbability * mapProbability * (3 - 2 * mapProbability);
+      const rosterProjection = a.rosterProjection ?? b.rosterProjection;
+      const prediction = productionPairPrediction(fittedTeamModel, lineupA, lineupB, { rosterReliability: rosterProjection?.reliability ?? 1 });
+      const { mapProbability, directGames } = prediction;
+      const indirectSeriesProbability = prediction.indirectBo3;
+      const seriesProbability = prediction.bo3Probability;
       const sampleA = weighted.filter((game) => game.targetLineup === lineupA).reduce((sum, game) => sum + game.weight, 0);
       const sampleB = weighted.filter((game) => game.targetLineup === lineupB).reduce((sum, game) => sum + game.weight, 0);
       const effectiveGames = Math.min(sampleA, sampleB);
-      const rosterProjection = a.rosterProjection ?? b.rosterProjection;
-      const adjustedSeriesProbability = rosterProjection
-        ? 0.5 + (seriesProbability - 0.5) * rosterProjection.reliability
-        : seriesProbability;
+      const rawSeriesProbability = prediction.rawBo3Probability;
+      const adjustedSeriesProbability = seriesProbability;
       pairwise[`${a.id}|${b.id}`] = {
         probabilityA: Math.round(Math.min(0.93, Math.max(0.07, adjustedSeriesProbability)) * 1000) / 10,
         mapProbabilityA: Math.round(mapProbability * 1000) / 10,
+        probabilityBo3A: Math.round(Math.min(0.93, Math.max(0.07, prediction.bo3Probability)) * 1000) / 10,
+        probabilityBo5A: Math.round(Math.min(0.97, Math.max(0.03, prediction.bo5Probability)) * 1000) / 10,
         directEffectiveGames: Math.round(directGames * 10) / 10,
         modelEffectiveGames: Math.round(effectiveGames * 10) / 10,
         source: rosterProjection ? "roster_proxy" : directGames >= 0.75 ? "head_to_head_and_indirect" : "indirect",
@@ -462,8 +427,8 @@ async function main() {
         uncertainty: Math.round(Math.min(0.18, 0.04 + 0.32 / Math.sqrt(4 + effectiveGames)) * 1000) / 1000,
         featureContributions: {
           commonOpponentsPp: Math.round((indirectSeriesProbability - 0.5) * 1000) / 10,
-          headToHeadPp: Math.round((seriesProbability - indirectSeriesProbability) * 1000) / 10,
-          rosterPp: Math.round((adjustedSeriesProbability - seriesProbability) * 1000) / 10,
+          headToHeadPp: Math.round((rawSeriesProbability - indirectSeriesProbability) * 1000) / 10,
+          rosterPp: Math.round((adjustedSeriesProbability - rawSeriesProbability) * 1000) / 10,
         },
       };
     }

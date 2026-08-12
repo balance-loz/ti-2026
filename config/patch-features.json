@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "description": "Optional patch transition metadata. magnitude controls how strongly hero and pair parameters carry into a new patch.",
+  "patches": {
+    "60": {
+      "name": "7.41",
+      "kind": "major",
+      "magnitude": 2.2,
+      "source": "Valve patch notes / GameTracking-Dota2",
+      "heroChangesReady": false,
+      "globalChangesReady": false
+    }
+  }
+}

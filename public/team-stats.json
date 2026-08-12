@@ -21,7 +21,14 @@
     },
     "liveLeagueExcludedFromBaseline": 19719,
     "model": "series-level recency-weighted Bradley-Terry; 5/5, 4/5 and 3/5 roster evidence; regularized direct matchup residual; Bo3 conversion; uncertainty exported for Monte Carlo",
-    "rosterProjection": "When a TI roster has no official games, a four-player historical core is shrunk toward 50% by its reliability coefficient."
+    "rosterProjection": "When a TI roster has no official games, a four-player historical core is shrunk toward 50% by its reliability coefficient.",
+    "claim": "experimental team prior; nested walk-forward tournament holdout did not pass the full gate",
+    "teamPrior": {
+      "artifact": "/team-model.json",
+      "modelId": "dynamic_lr0.2_h120",
+      "selection": "nested walk-forward arena",
+      "status": "experimental"
+    }
   },
   "totals": {
     "uniqueAcceptedGames": 2168,
@@ -47960,1804 +47967,2576 @@
   },
   "pairwise": {
     "1w|aurora": {
-      "probabilityA": 49.3,
-      "mapProbabilityA": 49.5,
+      "probabilityA": 49.9,
+      "mapProbabilityA": 50,
       "directEffectiveGames": 0.3,
       "modelEffectiveGames": 15.7,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.112,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -1.6,
         "headToHeadPp": 0.8,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 49.9,
+      "probabilityBo5A": 49.9,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "1w|betboom": {
-      "probabilityA": 47.3,
-      "mapProbabilityA": 48.2,
+      "probabilityA": 42.9,
+      "mapProbabilityA": 45.2,
       "directEffectiveGames": 1.4,
       "modelEffectiveGames": 18.4,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.108,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -10.6,
         "headToHeadPp": 7.9,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 42.9,
+      "probabilityBo5A": 41.1,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "1w|falcons": {
-      "probabilityA": 26.3,
-      "mapProbabilityA": 33.6,
+      "probabilityA": 45.3,
+      "mapProbabilityA": 46.9,
       "directEffectiveGames": 1.1,
       "modelEffectiveGames": 15.7,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.112,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -17.3,
         "headToHeadPp": -6.5,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 45.3,
+      "probabilityBo5A": 44.2,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "1w|gamerlegion": {
-      "probabilityA": 85.6,
-      "mapProbabilityA": 76.1,
+      "probabilityA": 52.4,
+      "mapProbabilityA": 51.6,
       "directEffectiveGames": 0.3,
       "modelEffectiveGames": 11.6,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.121,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 35.8,
         "headToHeadPp": -0.1,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 52.4,
+      "probabilityBo5A": 53.1,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "1w|l1ga": {
-      "probabilityA": 82.7,
-      "mapProbabilityA": 73.5,
+      "probabilityA": 62.8,
+      "mapProbabilityA": 58.6,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.1,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.16,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 32.7,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 62.8,
+      "probabilityBo5A": 65.9,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "1w|lgd": {
-      "probabilityA": 73.2,
-      "mapProbabilityA": 76.2,
+      "probabilityA": 59.5,
+      "mapProbabilityA": 56.4,
       "directEffectiveGames": 1.6,
       "modelEffectiveGames": 2.3,
-      "source": "roster_proxy",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 0.65,
-      "uncertainty": 0.168,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 28.1,
         "headToHeadPp": 7.6,
         "rosterPp": -12.5
-      }
+      },
+      "probabilityBo3A": 59.5,
+      "probabilityBo5A": 61.8,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "1w|liquid": {
-      "probabilityA": 38.7,
-      "mapProbabilityA": 42.4,
+      "probabilityA": 49,
+      "mapProbabilityA": 49.3,
       "directEffectiveGames": 1.3,
       "modelEffectiveGames": 10.9,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.123,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -2.8,
         "headToHeadPp": -8.5,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 49,
+      "probabilityBo5A": 48.7,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "1w|nigma": {
-      "probabilityA": 81.2,
-      "mapProbabilityA": 72.3,
+      "probabilityA": 55.3,
+      "mapProbabilityA": 53.5,
       "directEffectiveGames": 1.2,
       "modelEffectiveGames": 4.9,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.147,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 26.3,
         "headToHeadPp": 4.9,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 55.3,
+      "probabilityBo5A": 56.6,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "1w|og": {
-      "probabilityA": 63,
-      "mapProbabilityA": 58.8,
+      "probabilityA": 55.8,
+      "mapProbabilityA": 53.8,
       "directEffectiveGames": 1.5,
       "modelEffectiveGames": 5.8,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.142,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 16.1,
         "headToHeadPp": -3,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 55.8,
+      "probabilityBo5A": 57.2,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "1w|parivision": {
-      "probabilityA": 29,
-      "mapProbabilityA": 35.6,
+      "probabilityA": 36.7,
+      "mapProbabilityA": 41,
       "directEffectiveGames": 0.7,
       "modelEffectiveGames": 10.6,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.124,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -23.9,
         "headToHeadPp": 3,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 36.7,
+      "probabilityBo5A": 33.6,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "1w|resilience": {
-      "probabilityA": 40.1,
-      "mapProbabilityA": 43.3,
+      "probabilityA": 47.6,
+      "mapProbabilityA": 48.4,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.3,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.158,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -9.9,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 47.6,
+      "probabilityBo5A": 47,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "1w|spirit": {
       "probabilityA": 46,
       "mapProbabilityA": 47.3,
       "directEffectiveGames": 0.1,
       "modelEffectiveGames": 7,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.136,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -4.5,
         "headToHeadPp": 0.5,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 46,
+      "probabilityBo5A": 45,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "1w|vg": {
-      "probabilityA": 65.1,
-      "mapProbabilityA": 60.2,
+      "probabilityA": 50.1,
+      "mapProbabilityA": 50.1,
       "directEffectiveGames": 2.4,
       "modelEffectiveGames": 10.6,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.124,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 15,
         "headToHeadPp": 0.2,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 50.1,
+      "probabilityBo5A": 50.1,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "1w|xtreme": {
-      "probabilityA": 69.1,
-      "mapProbabilityA": 63,
+      "probabilityA": 58.3,
+      "mapProbabilityA": 55.6,
       "directEffectiveGames": 0.7,
       "modelEffectiveGames": 6.3,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.14,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 21.8,
         "headToHeadPp": -2.7,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 58.3,
+      "probabilityBo5A": 60.4,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "1w|yandex": {
-      "probabilityA": 24.7,
-      "mapProbabilityA": 32.4,
+      "probabilityA": 47.4,
+      "mapProbabilityA": 48.3,
       "directEffectiveGames": 1.2,
       "modelEffectiveGames": 2.9,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.161,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -24.2,
         "headToHeadPp": -1,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 47.4,
+      "probabilityBo5A": 46.8,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "aurora|betboom": {
-      "probabilityA": 36.9,
-      "mapProbabilityA": 41.2,
+      "probabilityA": 41.8,
+      "mapProbabilityA": 44.5,
       "directEffectiveGames": 0.7,
       "modelEffectiveGames": 15.7,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.112,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -9.1,
         "headToHeadPp": -4,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 41.8,
+      "probabilityBo5A": 39.9,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "aurora|falcons": {
-      "probabilityA": 39.6,
-      "mapProbabilityA": 43,
+      "probabilityA": 43.2,
+      "mapProbabilityA": 45.5,
       "directEffectiveGames": 1.4,
       "modelEffectiveGames": 15.7,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.112,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -15.9,
         "headToHeadPp": 5.4,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 43.2,
+      "probabilityBo5A": 41.6,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "aurora|gamerlegion": {
-      "probabilityA": 87.8,
-      "mapProbabilityA": 78.2,
+      "probabilityA": 49.5,
+      "mapProbabilityA": 49.7,
       "directEffectiveGames": 0.3,
       "modelEffectiveGames": 11.6,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.121,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 36.6,
         "headToHeadPp": 1.2,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 49.5,
+      "probabilityBo5A": 49.4,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "aurora|l1ga": {
-      "probabilityA": 83.6,
-      "mapProbabilityA": 74.3,
+      "probabilityA": 58.7,
+      "mapProbabilityA": 55.9,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.1,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.16,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 33.6,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 58.7,
+      "probabilityBo5A": 60.9,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "aurora|lgd": {
-      "probabilityA": 65.8,
-      "mapProbabilityA": 66.9,
+      "probabilityA": 55,
+      "mapProbabilityA": 53.4,
       "directEffectiveGames": 0.5,
       "modelEffectiveGames": 2.3,
-      "source": "roster_proxy",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 0.65,
-      "uncertainty": 0.168,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 29.2,
         "headToHeadPp": -4.8,
         "rosterPp": -8.5
-      }
+      },
+      "probabilityBo3A": 55,
+      "probabilityBo5A": 56.3,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "aurora|liquid": {
-      "probabilityA": 53.1,
-      "mapProbabilityA": 52.1,
+      "probabilityA": 43.8,
+      "mapProbabilityA": 45.9,
       "directEffectiveGames": 1.4,
       "modelEffectiveGames": 10.9,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.123,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -1.3,
         "headToHeadPp": 4.3,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 43.8,
+      "probabilityBo5A": 42.3,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "aurora|nigma": {
-      "probabilityA": 74.8,
-      "mapProbabilityA": 67.2,
+      "probabilityA": 49.7,
+      "mapProbabilityA": 49.8,
       "directEffectiveGames": 0.7,
       "modelEffectiveGames": 4.9,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.147,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 27.5,
         "headToHeadPp": -2.7,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 49.7,
+      "probabilityBo5A": 49.6,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "aurora|og": {
-      "probabilityA": 70.5,
-      "mapProbabilityA": 64,
+      "probabilityA": 49.6,
+      "mapProbabilityA": 49.7,
       "directEffectiveGames": 0.4,
       "modelEffectiveGames": 5.8,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.142,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 17.5,
         "headToHeadPp": 3,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 49.6,
+      "probabilityBo5A": 49.5,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "aurora|parivision": {
-      "probabilityA": 28.7,
-      "mapProbabilityA": 35.4,
+      "probabilityA": 32.7,
+      "mapProbabilityA": 38.2,
       "directEffectiveGames": 1.1,
       "modelEffectiveGames": 10.6,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.124,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -22.7,
         "headToHeadPp": 1.4,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 32.7,
+      "probabilityBo5A": 28.7,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "aurora|resilience": {
-      "probabilityA": 41.6,
-      "mapProbabilityA": 44.4,
+      "probabilityA": 43.7,
+      "mapProbabilityA": 45.8,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.3,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.158,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -8.4,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 43.7,
+      "probabilityBo5A": 42.1,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "aurora|spirit": {
-      "probabilityA": 48.8,
-      "mapProbabilityA": 49.2,
+      "probabilityA": 40.3,
+      "mapProbabilityA": 43.5,
       "directEffectiveGames": 1.2,
       "modelEffectiveGames": 7,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.136,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -2.9,
         "headToHeadPp": 1.7,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 40.3,
+      "probabilityBo5A": 37.9,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "aurora|vg": {
-      "probabilityA": 67,
-      "mapProbabilityA": 61.5,
+      "probabilityA": 42.6,
+      "mapProbabilityA": 45,
       "directEffectiveGames": 0.5,
       "modelEffectiveGames": 10.6,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.124,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 16.4,
         "headToHeadPp": 0.6,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 42.6,
+      "probabilityBo5A": 40.7,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "aurora|xtreme": {
-      "probabilityA": 75.1,
-      "mapProbabilityA": 67.5,
+      "probabilityA": 50.7,
+      "mapProbabilityA": 50.5,
       "directEffectiveGames": 0.7,
       "modelEffectiveGames": 6.3,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.14,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 23.1,
         "headToHeadPp": 2.1,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 50.7,
+      "probabilityBo5A": 50.9,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "aurora|yandex": {
-      "probabilityA": 27.4,
-      "mapProbabilityA": 34.4,
+      "probabilityA": 40.6,
+      "mapProbabilityA": 43.7,
       "directEffectiveGames": 0.6,
       "modelEffectiveGames": 2.9,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.161,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -23,
         "headToHeadPp": 0.4,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 40.6,
+      "probabilityBo5A": 38.3,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "betboom|falcons": {
-      "probabilityA": 40.8,
-      "mapProbabilityA": 43.8,
+      "probabilityA": 52.4,
+      "mapProbabilityA": 51.6,
       "directEffectiveGames": 2.8,
       "modelEffectiveGames": 15.7,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.112,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -7.1,
         "headToHeadPp": -2.1,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 52.4,
+      "probabilityBo5A": 53,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "betboom|gamerlegion": {
-      "probabilityA": 93,
-      "mapProbabilityA": 85.3,
+      "probabilityA": 59.6,
+      "mapProbabilityA": 56.4,
       "directEffectiveGames": 1.8,
       "modelEffectiveGames": 11.6,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.121,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 40.6,
         "headToHeadPp": 3.6,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 59.6,
+      "probabilityBo5A": 61.9,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "betboom|l1ga": {
-      "probabilityA": 88.3,
-      "mapProbabilityA": 78.7,
+      "probabilityA": 68.5,
+      "mapProbabilityA": 62.6,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.1,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.16,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 38.3,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 68.5,
+      "probabilityBo5A": 72.7,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "betboom|lgd": {
-      "probabilityA": 74.2,
-      "mapProbabilityA": 77.7,
+      "probabilityA": 66.1,
+      "mapProbabilityA": 60.9,
       "directEffectiveGames": 2.3,
       "modelEffectiveGames": 2.3,
-      "source": "roster_proxy",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 0.65,
-      "uncertainty": 0.168,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 34.9,
         "headToHeadPp": 2.4,
         "rosterPp": -13.1
-      }
+      },
+      "probabilityBo3A": 66.1,
+      "probabilityBo5A": 69.8,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "betboom|liquid": {
-      "probabilityA": 47,
-      "mapProbabilityA": 48,
+      "probabilityA": 55.9,
+      "mapProbabilityA": 54,
       "directEffectiveGames": 1.8,
       "modelEffectiveGames": 10.9,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.123,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 7.9,
         "headToHeadPp": -10.9,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 55.9,
+      "probabilityBo5A": 57.4,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "betboom|nigma": {
-      "probabilityA": 87.6,
-      "mapProbabilityA": 78,
+      "probabilityA": 62.3,
+      "mapProbabilityA": 58.3,
       "directEffectiveGames": 1,
       "modelEffectiveGames": 4.9,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.147,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 33.5,
         "headToHeadPp": 4,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 62.3,
+      "probabilityBo5A": 65.3,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "betboom|og": {
-      "probabilityA": 75.6,
-      "mapProbabilityA": 67.8,
+      "probabilityA": 62.6,
+      "mapProbabilityA": 58.5,
       "directEffectiveGames": 1.2,
       "modelEffectiveGames": 5.8,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.142,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 25.2,
         "headToHeadPp": 0.4,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 62.6,
+      "probabilityBo5A": 65.5,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "betboom|parivision": {
-      "probabilityA": 30.8,
-      "mapProbabilityA": 36.9,
+      "probabilityA": 47.6,
+      "mapProbabilityA": 48.4,
       "directEffectiveGames": 1.5,
       "modelEffectiveGames": 10.6,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.124,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -14.6,
         "headToHeadPp": -4.6,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 47.6,
+      "probabilityBo5A": 47,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "betboom|resilience": {
-      "probabilityA": 50.7,
-      "mapProbabilityA": 50.5,
+      "probabilityA": 59.7,
+      "mapProbabilityA": 56.5,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.3,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.158,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 0.7,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 59.7,
+      "probabilityBo5A": 62.1,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "betboom|spirit": {
-      "probabilityA": 55.9,
-      "mapProbabilityA": 54,
+      "probabilityA": 55.8,
+      "mapProbabilityA": 53.8,
       "directEffectiveGames": 0.8,
       "modelEffectiveGames": 7,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.136,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 6.3,
         "headToHeadPp": -0.3,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 55.8,
+      "probabilityBo5A": 57.2,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "betboom|vg": {
-      "probabilityA": 78.5,
-      "mapProbabilityA": 70.1,
+      "probabilityA": 57.1,
+      "mapProbabilityA": 54.7,
       "directEffectiveGames": 0.9,
       "modelEffectiveGames": 10.6,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.124,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 24.2,
         "headToHeadPp": 4.3,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 57.1,
+      "probabilityBo5A": 58.8,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "betboom|xtreme": {
-      "probabilityA": 84.2,
-      "mapProbabilityA": 74.9,
+      "probabilityA": 65.2,
+      "mapProbabilityA": 60.3,
       "directEffectiveGames": 1.5,
       "modelEffectiveGames": 6.3,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.14,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 29.9,
         "headToHeadPp": 4.3,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 65.2,
+      "probabilityBo5A": 68.7,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "betboom|yandex": {
-      "probabilityA": 36.1,
-      "mapProbabilityA": 40.6,
+      "probabilityA": 56.5,
+      "mapProbabilityA": 54.3,
       "directEffectiveGames": 0.8,
       "modelEffectiveGames": 2.9,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.161,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -15,
         "headToHeadPp": 1.1,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 56.5,
+      "probabilityBo5A": 58.1,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "falcons|gamerlegion": {
-      "probabilityA": 93,
-      "mapProbabilityA": 84.3,
+      "probabilityA": 57.4,
+      "mapProbabilityA": 54.9,
       "directEffectiveGames": 1.5,
       "modelEffectiveGames": 11.6,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.121,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 43,
         "headToHeadPp": 0.4,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 57.4,
+      "probabilityBo5A": 59.2,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "falcons|l1ga": {
-      "probabilityA": 91.2,
-      "mapProbabilityA": 81.7,
+      "probabilityA": 66.1,
+      "mapProbabilityA": 60.9,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.1,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.16,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 41.2,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 66.1,
+      "probabilityBo5A": 69.9,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "falcons|lgd": {
-      "probabilityA": 75.1,
-      "mapProbabilityA": 79,
+      "probabilityA": 64,
+      "mapProbabilityA": 59.4,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 2.3,
-      "source": "roster_proxy",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 0.65,
-      "uncertainty": 0.168,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 38.5,
         "headToHeadPp": 0.2,
         "rosterPp": -13.5
-      }
+      },
+      "probabilityBo3A": 64,
+      "probabilityBo5A": 67.2,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "falcons|liquid": {
-      "probabilityA": 61.6,
-      "mapProbabilityA": 57.8,
+      "probabilityA": 53.6,
+      "mapProbabilityA": 52.4,
       "directEffectiveGames": 2.8,
       "modelEffectiveGames": 10.9,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.123,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 14.7,
         "headToHeadPp": -3.1,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 53.6,
+      "probabilityBo5A": 54.6,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "falcons|nigma": {
-      "probabilityA": 90.1,
-      "mapProbabilityA": 80.5,
+      "probabilityA": 60.3,
+      "mapProbabilityA": 56.9,
       "directEffectiveGames": 0.9,
       "modelEffectiveGames": 4.9,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.147,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 37.3,
         "headToHeadPp": 2.8,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 60.3,
+      "probabilityBo5A": 62.8,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "falcons|og": {
-      "probabilityA": 68.2,
-      "mapProbabilityA": 62.4,
+      "probabilityA": 60.5,
+      "mapProbabilityA": 57,
       "directEffectiveGames": 1.1,
       "modelEffectiveGames": 5.8,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.142,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 30.3,
         "headToHeadPp": -12.1,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 60.5,
+      "probabilityBo5A": 63,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "falcons|parivision": {
-      "probabilityA": 42.1,
-      "mapProbabilityA": 44.7,
+      "probabilityA": 47.2,
+      "mapProbabilityA": 48.1,
       "directEffectiveGames": 0.7,
       "modelEffectiveGames": 10.6,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.124,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -7.8,
         "headToHeadPp": -0.1,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 47.2,
+      "probabilityBo5A": 46.5,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "falcons|resilience": {
-      "probabilityA": 57.8,
-      "mapProbabilityA": 55.2,
+      "probabilityA": 59.3,
+      "mapProbabilityA": 56.2,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.3,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.158,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 7.8,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 59.3,
+      "probabilityBo5A": 61.6,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "falcons|spirit": {
-      "probabilityA": 67.2,
-      "mapProbabilityA": 61.7,
+      "probabilityA": 54.9,
+      "mapProbabilityA": 53.2,
       "directEffectiveGames": 1.3,
       "modelEffectiveGames": 7,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.136,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 13.2,
         "headToHeadPp": 4,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 54.9,
+      "probabilityBo5A": 56.1,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "falcons|vg": {
-      "probabilityA": 76.8,
-      "mapProbabilityA": 68.8,
+      "probabilityA": 55.1,
+      "mapProbabilityA": 53.4,
       "directEffectiveGames": 1.9,
       "modelEffectiveGames": 10.6,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.124,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 29.5,
         "headToHeadPp": -2.7,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 55.1,
+      "probabilityBo5A": 56.3,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "falcons|xtreme": {
-      "probabilityA": 86.8,
-      "mapProbabilityA": 77.2,
+      "probabilityA": 63.4,
+      "mapProbabilityA": 59,
       "directEffectiveGames": 1.1,
       "modelEffectiveGames": 6.3,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.14,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 34.3,
         "headToHeadPp": 2.4,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 63.4,
+      "probabilityBo5A": 66.6,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "falcons|yandex": {
-      "probabilityA": 44.5,
-      "mapProbabilityA": 46.4,
+      "probabilityA": 55.4,
+      "mapProbabilityA": 53.6,
       "directEffectiveGames": 0.4,
       "modelEffectiveGames": 2.9,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.161,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -8.2,
         "headToHeadPp": 2.7,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 55.4,
+      "probabilityBo5A": 56.8,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "gamerlegion|l1ga": {
-      "probabilityA": 44.5,
-      "mapProbabilityA": 46.3,
+      "probabilityA": 58.8,
+      "mapProbabilityA": 55.9,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.1,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.16,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -5.5,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 58.8,
+      "probabilityBo5A": 61,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "gamerlegion|lgd": {
-      "probabilityA": 42.1,
-      "mapProbabilityA": 41.8,
+      "probabilityA": 56.7,
+      "mapProbabilityA": 54.5,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 2.3,
-      "source": "roster_proxy",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 0.65,
-      "uncertainty": 0.168,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -12.2,
         "headToHeadPp": 0,
         "rosterPp": 4.3
-      }
+      },
+      "probabilityBo3A": 56.7,
+      "probabilityBo5A": 58.3,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "gamerlegion|liquid": {
-      "probabilityA": 9.7,
-      "mapProbabilityA": 19.2,
+      "probabilityA": 46,
+      "mapProbabilityA": 47.3,
       "directEffectiveGames": 1.5,
       "modelEffectiveGames": 10.9,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.123,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -37.2,
         "headToHeadPp": -3.1,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 46,
+      "probabilityBo5A": 45,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "gamerlegion|nigma": {
-      "probabilityA": 35.6,
-      "mapProbabilityA": 40.2,
+      "probabilityA": 52.8,
+      "mapProbabilityA": 51.8,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 4.9,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.147,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -14.4,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 52.8,
+      "probabilityBo5A": 53.4,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "gamerlegion|og": {
-      "probabilityA": 19.6,
-      "mapProbabilityA": 28.4,
+      "probabilityA": 52.8,
+      "mapProbabilityA": 51.8,
       "directEffectiveGames": 0.9,
       "modelEffectiveGames": 5.8,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.142,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -25,
         "headToHeadPp": -5.4,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 52.8,
+      "probabilityBo5A": 53.5,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "gamerlegion|parivision": {
-      "probabilityA": 7,
-      "mapProbabilityA": 13.6,
+      "probabilityA": 41,
+      "mapProbabilityA": 44,
       "directEffectiveGames": 0.2,
       "modelEffectiveGames": 10.6,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.124,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -45,
         "headToHeadPp": 0.1,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 41,
+      "probabilityBo5A": 38.8,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "gamerlegion|resilience": {
-      "probabilityA": 9.7,
-      "mapProbabilityA": 19.2,
+      "probabilityA": 52.7,
+      "mapProbabilityA": 51.8,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.3,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.158,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -40.3,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 52.7,
+      "probabilityBo5A": 53.3,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "gamerlegion|spirit": {
-      "probabilityA": 14.5,
-      "mapProbabilityA": 24,
+      "probabilityA": 47.8,
+      "mapProbabilityA": 48.6,
       "directEffectiveGames": 0.7,
       "modelEffectiveGames": 7,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.136,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -38,
         "headToHeadPp": 2.5,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 47.8,
+      "probabilityBo5A": 47.3,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "gamerlegion|vg": {
-      "probabilityA": 22.1,
-      "mapProbabilityA": 30.4,
+      "probabilityA": 46.9,
+      "mapProbabilityA": 48,
       "directEffectiveGames": 0.3,
       "modelEffectiveGames": 10.6,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.124,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -25.9,
         "headToHeadPp": -2,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 46.9,
+      "probabilityBo5A": 46.2,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "gamerlegion|xtreme": {
-      "probabilityA": 25.1,
-      "mapProbabilityA": 32.7,
+      "probabilityA": 55.5,
+      "mapProbabilityA": 53.7,
       "directEffectiveGames": 0.7,
       "modelEffectiveGames": 6.3,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.14,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -19.6,
         "headToHeadPp": -5.3,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 55.5,
+      "probabilityBo5A": 56.9,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "gamerlegion|yandex": {
-      "probabilityA": 7,
-      "mapProbabilityA": 13.4,
+      "probabilityA": 48,
+      "mapProbabilityA": 48.6,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 2.9,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.161,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -45.1,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 48,
+      "probabilityBo5A": 47.5,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "l1ga|lgd": {
-      "probabilityA": 45.5,
-      "mapProbabilityA": 45.4,
+      "probabilityA": 48.1,
+      "mapProbabilityA": 48.8,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 2.3,
-      "source": "roster_proxy",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 0.65,
-      "uncertainty": 0.168,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -6.9,
         "headToHeadPp": 0,
         "rosterPp": 2.4
-      }
+      },
+      "probabilityBo3A": 48.1,
+      "probabilityBo5A": 47.7,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "l1ga|liquid": {
-      "probabilityA": 15.7,
-      "mapProbabilityA": 25.1,
+      "probabilityA": 37.9,
+      "mapProbabilityA": 41.9,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.1,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.16,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -34.3,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 37.9,
+      "probabilityBo5A": 35,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "l1ga|nigma": {
-      "probabilityA": 40.8,
-      "mapProbabilityA": 43.8,
+      "probabilityA": 44.9,
+      "mapProbabilityA": 46.6,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.1,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.16,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -9.2,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 44.9,
+      "probabilityBo5A": 43.6,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "l1ga|og": {
-      "probabilityA": 29.5,
-      "mapProbabilityA": 36,
+      "probabilityA": 45,
+      "mapProbabilityA": 46.7,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.1,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.16,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -20.5,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 45,
+      "probabilityBo5A": 43.8,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "l1ga|parivision": {
-      "probabilityA": 7,
-      "mapProbabilityA": 15.3,
+      "probabilityA": 35.2,
+      "mapProbabilityA": 40,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.1,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.16,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -43.7,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 35.2,
+      "probabilityBo5A": 31.8,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "l1ga|resilience": {
-      "probabilityA": 12,
-      "mapProbabilityA": 21.6,
+      "probabilityA": 46.3,
+      "mapProbabilityA": 47.5,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.1,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.16,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -38,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 46.3,
+      "probabilityBo5A": 45.4,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "l1ga|spirit": {
-      "probabilityA": 14.8,
-      "mapProbabilityA": 24.2,
+      "probabilityA": 41.7,
+      "mapProbabilityA": 44.4,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.1,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.16,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -35.2,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 41.7,
+      "probabilityBo5A": 39.6,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "l1ga|vg": {
-      "probabilityA": 28.5,
-      "mapProbabilityA": 35.2,
+      "probabilityA": 40.1,
+      "mapProbabilityA": 43.3,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.1,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.16,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -21.5,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 40.1,
+      "probabilityBo5A": 37.7,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "l1ga|xtreme": {
-      "probabilityA": 35.3,
-      "mapProbabilityA": 40.1,
+      "probabilityA": 48.8,
+      "mapProbabilityA": 49.2,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.1,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.16,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -14.7,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 48.8,
+      "probabilityBo5A": 48.4,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "l1ga|yandex": {
-      "probabilityA": 7,
-      "mapProbabilityA": 15.2,
+      "probabilityA": 42.1,
+      "mapProbabilityA": 44.7,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 2.9,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.161,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -43.8,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 42.1,
+      "probabilityBo5A": 40.1,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "lgd|liquid": {
-      "probabilityA": 31.1,
-      "mapProbabilityA": 29.5,
+      "probabilityA": 39.5,
+      "mapProbabilityA": 42.9,
       "directEffectiveGames": 0.1,
       "modelEffectiveGames": 2.3,
-      "source": "roster_proxy",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 0.65,
-      "uncertainty": 0.168,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -30.1,
         "headToHeadPp": 1,
         "rosterPp": 10.2
-      }
+      },
+      "probabilityBo3A": 39.5,
+      "probabilityBo5A": 36.9,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "lgd|nigma": {
-      "probabilityA": 48.4,
-      "mapProbabilityA": 48.4,
+      "probabilityA": 46.4,
+      "mapProbabilityA": 47.6,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 2.3,
-      "source": "roster_proxy",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 0.65,
-      "uncertainty": 0.168,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -2.4,
         "headToHeadPp": 0,
         "rosterPp": 0.8
-      }
+      },
+      "probabilityBo3A": 46.4,
+      "probabilityBo5A": 45.6,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "lgd|og": {
-      "probabilityA": 42,
-      "mapProbabilityA": 41.7,
+      "probabilityA": 46.4,
+      "mapProbabilityA": 47.6,
       "directEffectiveGames": 0.2,
       "modelEffectiveGames": 2.3,
-      "source": "roster_proxy",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 0.65,
-      "uncertainty": 0.168,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -14.4,
         "headToHeadPp": 2.1,
         "rosterPp": 4.3
-      }
+      },
+      "probabilityBo3A": 46.4,
+      "probabilityBo5A": 45.5,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "lgd|parivision": {
-      "probabilityA": 23.4,
-      "mapProbabilityA": 18.5,
+      "probabilityA": 37.6,
+      "mapProbabilityA": 41.7,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 2.3,
-      "source": "roster_proxy",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 0.65,
-      "uncertainty": 0.168,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -41.6,
         "headToHeadPp": 0.6,
         "rosterPp": 14.3
-      }
+      },
+      "probabilityBo3A": 37.6,
+      "probabilityBo5A": 34.7,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "lgd|resilience": {
-      "probabilityA": 27.6,
-      "mapProbabilityA": 24.9,
+      "probabilityA": 48.1,
+      "mapProbabilityA": 48.7,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 2.3,
-      "source": "roster_proxy",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 0.65,
-      "uncertainty": 0.168,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -34.5,
         "headToHeadPp": 0,
         "rosterPp": 12.1
-      }
+      },
+      "probabilityBo3A": 48.1,
+      "probabilityBo5A": 47.6,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "lgd|spirit": {
-      "probabilityA": 30.2,
-      "mapProbabilityA": 28.3,
+      "probabilityA": 43.5,
+      "mapProbabilityA": 45.6,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 2.3,
-      "source": "roster_proxy",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 0.65,
-      "uncertainty": 0.168,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -31.2,
         "headToHeadPp": 0.7,
         "rosterPp": 10.7
-      }
+      },
+      "probabilityBo3A": 43.5,
+      "probabilityBo5A": 41.9,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "lgd|vg": {
-      "probabilityA": 39.9,
-      "mapProbabilityA": 39.5,
+      "probabilityA": 41,
+      "mapProbabilityA": 44,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 2.3,
-      "source": "roster_proxy",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 0.65,
-      "uncertainty": 0.168,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -15.5,
         "headToHeadPp": 0,
         "rosterPp": 5.4
-      }
+      },
+      "probabilityBo3A": 41,
+      "probabilityBo5A": 38.8,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "lgd|xtreme": {
-      "probabilityA": 45.1,
-      "mapProbabilityA": 45,
+      "probabilityA": 49.7,
+      "mapProbabilityA": 49.8,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 2.3,
-      "source": "roster_proxy",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 0.65,
-      "uncertainty": 0.168,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -8.1,
         "headToHeadPp": 0.7,
         "rosterPp": 2.6
-      }
+      },
+      "probabilityBo3A": 49.7,
+      "probabilityBo5A": 49.6,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "lgd|yandex": {
-      "probabilityA": 23.1,
-      "mapProbabilityA": 18.1,
+      "probabilityA": 43.5,
+      "mapProbabilityA": 45.7,
       "directEffectiveGames": 0.4,
       "modelEffectiveGames": 2.3,
-      "source": "roster_proxy",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 0.65,
-      "uncertainty": 0.168,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -41.7,
         "headToHeadPp": 0.3,
         "rosterPp": 14.5
-      }
+      },
+      "probabilityBo3A": 43.5,
+      "probabilityBo5A": 41.9,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "liquid|nigma": {
-      "probabilityA": 69.8,
-      "mapProbabilityA": 63.6,
+      "probabilityA": 57.2,
+      "mapProbabilityA": 54.8,
       "directEffectiveGames": 0.6,
       "modelEffectiveGames": 4.9,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.147,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 28.4,
         "headToHeadPp": -8.6,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 57.2,
+      "probabilityBo5A": 58.9,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "liquid|og": {
-      "probabilityA": 71.1,
-      "mapProbabilityA": 64.5,
+      "probabilityA": 57,
+      "mapProbabilityA": 54.7,
       "directEffectiveGames": 0.4,
       "modelEffectiveGames": 5.8,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.142,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 18.6,
         "headToHeadPp": 2.5,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 57,
+      "probabilityBo5A": 58.8,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "liquid|parivision": {
-      "probabilityA": 29.1,
-      "mapProbabilityA": 35.6,
+      "probabilityA": 49.3,
+      "mapProbabilityA": 49.5,
       "directEffectiveGames": 1,
       "modelEffectiveGames": 10.6,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.124,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -21.6,
         "headToHeadPp": 0.7,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 49.3,
+      "probabilityBo5A": 49.1,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "liquid|resilience": {
-      "probabilityA": 42.8,
-      "mapProbabilityA": 45.2,
+      "probabilityA": 59.3,
+      "mapProbabilityA": 56.2,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.3,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.158,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -7.2,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 59.3,
+      "probabilityBo5A": 61.5,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "liquid|spirit": {
-      "probabilityA": 41.5,
-      "mapProbabilityA": 44.3,
+      "probabilityA": 54.9,
+      "mapProbabilityA": 53.3,
       "directEffectiveGames": 1.7,
       "modelEffectiveGames": 7,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.136,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -1.7,
         "headToHeadPp": -6.8,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 54.9,
+      "probabilityBo5A": 56.1,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "liquid|vg": {
-      "probabilityA": 69.4,
-      "mapProbabilityA": 63.3,
+      "probabilityA": 51.7,
+      "mapProbabilityA": 51.1,
       "directEffectiveGames": 1.4,
       "modelEffectiveGames": 10.6,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.124,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 17.5,
         "headToHeadPp": 1.9,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 51.7,
+      "probabilityBo5A": 52.1,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "liquid|xtreme": {
-      "probabilityA": 74.5,
-      "mapProbabilityA": 67,
+      "probabilityA": 60.3,
+      "mapProbabilityA": 56.9,
       "directEffectiveGames": 1.1,
       "modelEffectiveGames": 6.3,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.14,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 24.1,
         "headToHeadPp": 0.4,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 60.3,
+      "probabilityBo5A": 62.8,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "liquid|yandex": {
-      "probabilityA": 26.5,
-      "mapProbabilityA": 33.8,
+      "probabilityA": 54.8,
+      "mapProbabilityA": 53.2,
       "directEffectiveGames": 0.5,
       "modelEffectiveGames": 2.9,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.161,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -22,
         "headToHeadPp": -1.5,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 54.8,
+      "probabilityBo5A": 56,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "nigma|og": {
-      "probabilityA": 39,
-      "mapProbabilityA": 42.6,
+      "probabilityA": 49.8,
+      "mapProbabilityA": 49.8,
       "directEffectiveGames": 0.6,
       "modelEffectiveGames": 4.9,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.147,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -12.1,
         "headToHeadPp": 1.1,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 49.8,
+      "probabilityBo5A": 49.7,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "nigma|parivision": {
-      "probabilityA": 9.2,
-      "mapProbabilityA": 18.8,
+      "probabilityA": 43,
+      "mapProbabilityA": 45.3,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 4.9,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.147,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -40.7,
         "headToHeadPp": -0.1,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 43,
+      "probabilityBo5A": 41.3,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "nigma|resilience": {
-      "probabilityA": 16.9,
-      "mapProbabilityA": 26.1,
+      "probabilityA": 52.2,
+      "mapProbabilityA": 51.5,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.3,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.158,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -33.1,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 52.2,
+      "probabilityBo5A": 52.8,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "nigma|spirit": {
-      "probabilityA": 20.8,
-      "mapProbabilityA": 29.3,
+      "probabilityA": 48,
+      "mapProbabilityA": 48.6,
       "directEffectiveGames": 0.4,
       "modelEffectiveGames": 4.9,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.147,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -29.6,
         "headToHeadPp": 0.3,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 48,
+      "probabilityBo5A": 47.4,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "nigma|vg": {
-      "probabilityA": 29.6,
-      "mapProbabilityA": 36,
+      "probabilityA": 44,
+      "mapProbabilityA": 46,
       "directEffectiveGames": 0.8,
       "modelEffectiveGames": 4.9,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.147,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -13.3,
         "headToHeadPp": -7.2,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 44,
+      "probabilityBo5A": 42.5,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "nigma|xtreme": {
-      "probabilityA": 44.5,
-      "mapProbabilityA": 46.4,
+      "probabilityA": 52.7,
+      "mapProbabilityA": 51.8,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 4.9,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.147,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -5.8,
         "headToHeadPp": 0.3,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 52.7,
+      "probabilityBo5A": 53.4,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "nigma|yandex": {
-      "probabilityA": 9.2,
-      "mapProbabilityA": 18.7,
+      "probabilityA": 47.5,
+      "mapProbabilityA": 48.4,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 2.9,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.161,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -40.8,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 47.5,
+      "probabilityBo5A": 46.9,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "og|parivision": {
-      "probabilityA": 14.7,
-      "mapProbabilityA": 24.2,
+      "probabilityA": 44.3,
+      "mapProbabilityA": 46.2,
       "directEffectiveGames": 0.1,
       "modelEffectiveGames": 5.8,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.142,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -35.1,
         "headToHeadPp": -0.2,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 44.3,
+      "probabilityBo5A": 42.9,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "og|resilience": {
-      "probabilityA": 25.4,
-      "mapProbabilityA": 32.9,
+      "probabilityA": 52.9,
+      "mapProbabilityA": 52,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.3,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.158,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -24.6,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 52.9,
+      "probabilityBo5A": 53.7,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "og|spirit": {
-      "probabilityA": 28.5,
-      "mapProbabilityA": 35.3,
+      "probabilityA": 49,
+      "mapProbabilityA": 49.3,
       "directEffectiveGames": 0.2,
       "modelEffectiveGames": 5.8,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.142,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -20,
         "headToHeadPp": -1.4,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 49,
+      "probabilityBo5A": 48.8,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "og|vg": {
-      "probabilityA": 39.3,
-      "mapProbabilityA": 42.8,
+      "probabilityA": 44.6,
+      "mapProbabilityA": 46.4,
       "directEffectiveGames": 0.9,
       "modelEffectiveGames": 5.8,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.142,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -1.2,
         "headToHeadPp": -9.5,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 44.6,
+      "probabilityBo5A": 43.2,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "og|xtreme": {
-      "probabilityA": 55.4,
-      "mapProbabilityA": 53.6,
+      "probabilityA": 53.3,
+      "mapProbabilityA": 52.2,
       "directEffectiveGames": 0.1,
       "modelEffectiveGames": 5.8,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.142,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 6.5,
         "headToHeadPp": -1.2,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 53.3,
+      "probabilityBo5A": 54.2,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "og|yandex": {
-      "probabilityA": 18.1,
-      "mapProbabilityA": 27.1,
+      "probabilityA": 48.7,
+      "mapProbabilityA": 49.1,
       "directEffectiveGames": 0.8,
       "modelEffectiveGames": 2.9,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.161,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -35.3,
         "headToHeadPp": 3.3,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 48.7,
+      "probabilityBo5A": 48.4,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "parivision|resilience": {
-      "probabilityA": 65.3,
-      "mapProbabilityA": 60.4,
+      "probabilityA": 58,
+      "mapProbabilityA": 55.3,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.3,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.158,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 15.3,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 58,
+      "probabilityBo5A": 59.9,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "parivision|spirit": {
-      "probabilityA": 65.7,
-      "mapProbabilityA": 60.6,
+      "probabilityA": 53.6,
+      "mapProbabilityA": 52.4,
       "directEffectiveGames": 1.2,
       "modelEffectiveGames": 7,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.136,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 20.2,
         "headToHeadPp": -4.6,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 53.6,
+      "probabilityBo5A": 54.5,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "parivision|vg": {
-      "probabilityA": 87.3,
-      "mapProbabilityA": 77.7,
+      "probabilityA": 48,
+      "mapProbabilityA": 48.6,
       "directEffectiveGames": 0.7,
       "modelEffectiveGames": 10.6,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.124,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 34.4,
         "headToHeadPp": 2.9,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 48,
+      "probabilityBo5A": 47.4,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "parivision|xtreme": {
-      "probabilityA": 87.7,
-      "mapProbabilityA": 78.1,
+      "probabilityA": 56.1,
+      "mapProbabilityA": 54,
       "directEffectiveGames": 0.7,
       "modelEffectiveGames": 6.3,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.14,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 38.3,
         "headToHeadPp": -0.6,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 56.1,
+      "probabilityBo5A": 57.6,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "parivision|yandex": {
-      "probabilityA": 49.5,
-      "mapProbabilityA": 49.7,
+      "probabilityA": 51.3,
+      "mapProbabilityA": 50.9,
       "directEffectiveGames": 0.9,
       "modelEffectiveGames": 2.9,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.161,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -0.4,
         "headToHeadPp": -0.1,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 51.3,
+      "probabilityBo5A": 51.6,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "resilience|spirit": {
-      "probabilityA": 55.5,
-      "mapProbabilityA": 53.7,
+      "probabilityA": 46.7,
+      "mapProbabilityA": 47.8,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 3.3,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.158,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 5.5,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 46.7,
+      "probabilityBo5A": 45.9,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "resilience|vg": {
-      "probabilityA": 70.9,
-      "mapProbabilityA": 64.3,
+      "probabilityA": 41.3,
+      "mapProbabilityA": 44.2,
       "directEffectiveGames": 0.6,
       "modelEffectiveGames": 3.3,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.158,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 23.6,
         "headToHeadPp": -2.7,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 41.3,
+      "probabilityBo5A": 39.2,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "resilience|xtreme": {
-      "probabilityA": 80.6,
-      "mapProbabilityA": 71.8,
+      "probabilityA": 49.9,
+      "mapProbabilityA": 50,
       "directEffectiveGames": 0.2,
       "modelEffectiveGames": 3.3,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.158,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 29.4,
         "headToHeadPp": 1.2,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 49.9,
+      "probabilityBo5A": 49.9,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "resilience|yandex": {
-      "probabilityA": 34.3,
-      "mapProbabilityA": 39.4,
+      "probabilityA": 46.1,
+      "mapProbabilityA": 47.4,
       "directEffectiveGames": 0,
       "modelEffectiveGames": 2.9,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.161,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -15.7,
         "headToHeadPp": 0,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 46.1,
+      "probabilityBo5A": 45.1,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "spirit|vg": {
-      "probabilityA": 76.5,
-      "mapProbabilityA": 68.5,
+      "probabilityA": 44.4,
+      "mapProbabilityA": 46.2,
       "directEffectiveGames": 1.1,
       "modelEffectiveGames": 7,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "medium",
       "rosterReliability": 1,
-      "uncertainty": 0.136,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 19,
         "headToHeadPp": 7.5,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 44.4,
+      "probabilityBo5A": 43,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "spirit|xtreme": {
-      "probabilityA": 72.7,
-      "mapProbabilityA": 65.7,
+      "probabilityA": 52.7,
+      "mapProbabilityA": 51.8,
       "directEffectiveGames": 0.3,
       "modelEffectiveGames": 6.3,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.14,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 25.4,
         "headToHeadPp": -2.6,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 52.7,
+      "probabilityBo5A": 53.4,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "spirit|yandex": {
-      "probabilityA": 21.3,
-      "mapProbabilityA": 29.7,
+      "probabilityA": 48.9,
+      "mapProbabilityA": 49.3,
       "directEffectiveGames": 1.3,
       "modelEffectiveGames": 2.9,
-      "source": "head_to_head_and_indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.161,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -20.6,
         "headToHeadPp": -8.2,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 48.9,
+      "probabilityBo5A": 48.7,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "vg|xtreme": {
-      "probabilityA": 55.4,
-      "mapProbabilityA": 53.6,
+      "probabilityA": 58.7,
+      "mapProbabilityA": 55.8,
       "directEffectiveGames": 0.4,
       "modelEffectiveGames": 6.3,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.14,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": 7.7,
         "headToHeadPp": -2.4,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 58.7,
+      "probabilityBo5A": 60.8,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "vg|yandex": {
-      "probabilityA": 12.6,
-      "mapProbabilityA": 22.2,
+      "probabilityA": 55.5,
+      "mapProbabilityA": 53.7,
       "directEffectiveGames": 0.7,
       "modelEffectiveGames": 2.9,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.161,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -34.6,
         "headToHeadPp": -2.8,
         "rosterPp": 0
-      }
+      },
+      "probabilityBo3A": 55.5,
+      "probabilityBo5A": 56.9,
+      "modelId": "dynamic_lr0.2_h120"
     },
     "xtreme|yandex": {
-      "probabilityA": 11.5,
-      "mapProbabilityA": 21.1,
+      "probabilityA": 47.2,
+      "mapProbabilityA": 48.1,
       "directEffectiveGames": 0.4,
       "modelEffectiveGames": 2.9,
-      "source": "indirect",
+      "source": "nested_team_arena",
       "confidence": "low",
       "rosterReliability": 1,
-      "uncertainty": 0.161,
+      "uncertainty": 0,
       "featureContributions": {
         "commonOpponentsPp": -38.5,
         "headToHeadPp": 0,
         "rosterPp": 0
+      },
+      "probabilityBo3A": 47.2,
+      "probabilityBo5A": 46.5,
+      "modelId": "dynamic_lr0.2_h120"
+    }
+  },
+  "validation": {
+    "generatedAt": "2026-08-12T13:32:35.261Z",
+    "status": "experimental",
+    "experimental": true,
+    "samples": 144,
+    "selected": {
+      "samples": 144,
+      "logLoss": 0.6712050146846315,
+      "brier": 0.23919379319065223,
+      "accuracy": 0.5902777777777778,
+      "expectedCalibrationError": 0.1031605503869297,
+      "calibrationBins": [
+        {
+          "samples": 15,
+          "predicted": 0.381149879364099,
+          "actual": 0.26666666666666666
+        },
+        {
+          "samples": 15,
+          "predicted": 0.4474379946788846,
+          "actual": 0.3333333333333333
+        },
+        {
+          "samples": 15,
+          "predicted": 0.48065925310487273,
+          "actual": 0.6
+        },
+        {
+          "samples": 15,
+          "predicted": 0.5073363954536475,
+          "actual": 0.6
+        },
+        {
+          "samples": 15,
+          "predicted": 0.5288339181147562,
+          "actual": 0.4
+        },
+        {
+          "samples": 15,
+          "predicted": 0.5519632625528953,
+          "actual": 0.4
+        },
+        {
+          "samples": 15,
+          "predicted": 0.56910805383782,
+          "actual": 0.7333333333333333
+        },
+        {
+          "samples": 15,
+          "predicted": 0.583748326671294,
+          "actual": 0.6
+        },
+        {
+          "samples": 15,
+          "predicted": 0.6104623102034292,
+          "actual": 0.6
+        },
+        {
+          "samples": 9,
+          "predicted": 0.647756753553175,
+          "actual": 0.7777777777777778
+        }
+      ]
+    },
+    "neutral": {
+      "samples": 144,
+      "logLoss": 0.6931471805599463,
+      "brier": 0.25,
+      "accuracy": 0.5208333333333334,
+      "expectedCalibrationError": 0.09027777777777779,
+      "calibrationBins": [
+        {
+          "samples": 15,
+          "predicted": 0.5,
+          "actual": 0.3333333333333333
+        },
+        {
+          "samples": 15,
+          "predicted": 0.5,
+          "actual": 0.8
+        },
+        {
+          "samples": 15,
+          "predicted": 0.5,
+          "actual": 0.4666666666666667
+        },
+        {
+          "samples": 15,
+          "predicted": 0.5,
+          "actual": 0.4
+        },
+        {
+          "samples": 15,
+          "predicted": 0.5,
+          "actual": 0.5333333333333333
+        },
+        {
+          "samples": 15,
+          "predicted": 0.5,
+          "actual": 0.5333333333333333
+        },
+        {
+          "samples": 15,
+          "predicted": 0.5,
+          "actual": 0.5333333333333333
+        },
+        {
+          "samples": 15,
+          "predicted": 0.5,
+          "actual": 0.6
+        },
+        {
+          "samples": 15,
+          "predicted": 0.5,
+          "actual": 0.4666666666666667
+        },
+        {
+          "samples": 9,
+          "predicted": 0.5,
+          "actual": 0.5555555555555556
+        }
+      ]
+    },
+    "comparators": {
+      "elo": {
+        "id": "elo_k16",
+        "samples": 144,
+        "logLoss": 0.6404043809441388,
+        "brier": 0.22522956053729074,
+        "accuracy": 0.5902777777777778,
+        "expectedCalibrationError": 0.14445549834482468,
+        "calibrationBins": [
+          {
+            "samples": 15,
+            "predicted": 0.3246625922817929,
+            "actual": 0.2
+          },
+          {
+            "samples": 15,
+            "predicted": 0.4258882820992708,
+            "actual": 0.6
+          },
+          {
+            "samples": 15,
+            "predicted": 0.4911568189387897,
+            "actual": 0.26666666666666666
+          },
+          {
+            "samples": 15,
+            "predicted": 0.5375155337324939,
+            "actual": 0.26666666666666666
+          },
+          {
+            "samples": 15,
+            "predicted": 0.590509862677101,
+            "actual": 0.6
+          },
+          {
+            "samples": 15,
+            "predicted": 0.6134524270317631,
+            "actual": 0.5333333333333333
+          },
+          {
+            "samples": 15,
+            "predicted": 0.6511558690037974,
+            "actual": 0.4
+          },
+          {
+            "samples": 15,
+            "predicted": 0.6866604259057449,
+            "actual": 0.8
+          },
+          {
+            "samples": 15,
+            "predicted": 0.7229733019346659,
+            "actual": 0.8
+          },
+          {
+            "samples": 9,
+            "predicted": 0.7863420848803401,
+            "actual": 0.8888888888888888
+          }
+        ]
+      },
+      "dynamic": {
+        "id": "dynamic_lr0.2_h120",
+        "samples": 144,
+        "logLoss": 0.6712050146846315,
+        "brier": 0.23919379319065223,
+        "accuracy": 0.5902777777777778,
+        "expectedCalibrationError": 0.1031605503869297,
+        "calibrationBins": [
+          {
+            "samples": 15,
+            "predicted": 0.381149879364099,
+            "actual": 0.26666666666666666
+          },
+          {
+            "samples": 15,
+            "predicted": 0.4474379946788846,
+            "actual": 0.3333333333333333
+          },
+          {
+            "samples": 15,
+            "predicted": 0.48065925310487273,
+            "actual": 0.6
+          },
+          {
+            "samples": 15,
+            "predicted": 0.5073363954536475,
+            "actual": 0.6
+          },
+          {
+            "samples": 15,
+            "predicted": 0.5288339181147562,
+            "actual": 0.4
+          },
+          {
+            "samples": 15,
+            "predicted": 0.5519632625528953,
+            "actual": 0.4
+          },
+          {
+            "samples": 15,
+            "predicted": 0.56910805383782,
+            "actual": 0.7333333333333333
+          },
+          {
+            "samples": 15,
+            "predicted": 0.583748326671294,
+            "actual": 0.6
+          },
+          {
+            "samples": 15,
+            "predicted": 0.6104623102034292,
+            "actual": 0.6
+          },
+          {
+            "samples": 9,
+            "predicted": 0.647756753553175,
+            "actual": 0.7777777777777778
+          }
+        ]
+      },
+      "recency_logistic": {
+        "id": "recency_h45_p12",
+        "samples": 144,
+        "logLoss": 0.6495367130503884,
+        "brier": 0.22880869936845885,
+        "accuracy": 0.6597222222222222,
+        "expectedCalibrationError": 0.13590693647823843,
+        "calibrationBins": [
+          {
+            "samples": 15,
+            "predicted": 0.3623054723014485,
+            "actual": 0.26666666666666666
+          },
+          {
+            "samples": 15,
+            "predicted": 0.45269412560636385,
+            "actual": 0.2
+          },
+          {
+            "samples": 15,
+            "predicted": 0.49235899104133884,
+            "actual": 0.4666666666666667
+          },
+          {
+            "samples": 15,
+            "predicted": 0.5213184462191005,
+            "actual": 0.6
+          },
+          {
+            "samples": 15,
+            "predicted": 0.5497866586306465,
+            "actual": 0.26666666666666666
+          },
+          {
+            "samples": 15,
+            "predicted": 0.5711276994982802,
+            "actual": 0.8
+          },
+          {
+            "samples": 15,
+            "predicted": 0.5959471983145558,
+            "actual": 0.5333333333333333
+          },
+          {
+            "samples": 15,
+            "predicted": 0.6239634580341508,
+            "actual": 0.7333333333333333
+          },
+          {
+            "samples": 15,
+            "predicted": 0.65667794428666,
+            "actual": 0.6
+          },
+          {
+            "samples": 9,
+            "predicted": 0.7033125492862106,
+            "actual": 0.8888888888888888
+          }
+        ]
+      },
+      "bradley_terry": {
+        "id": "bt_lr0.08_h45",
+        "samples": 144,
+        "logLoss": 0.6444850946695276,
+        "brier": 0.22674363641355752,
+        "accuracy": 0.5972222222222222,
+        "expectedCalibrationError": 0.150624048705859,
+        "calibrationBins": [
+          {
+            "samples": 15,
+            "predicted": 0.36138049951356627,
+            "actual": 0.2
+          },
+          {
+            "samples": 15,
+            "predicted": 0.44394086365169894,
+            "actual": 0.6
+          },
+          {
+            "samples": 15,
+            "predicted": 0.4932108448887574,
+            "actual": 0.3333333333333333
+          },
+          {
+            "samples": 15,
+            "predicted": 0.53139601662867,
+            "actual": 0.2
+          },
+          {
+            "samples": 15,
+            "predicted": 0.5743850705910761,
+            "actual": 0.5333333333333333
+          },
+          {
+            "samples": 15,
+            "predicted": 0.5924534965169183,
+            "actual": 0.6
+          },
+          {
+            "samples": 15,
+            "predicted": 0.6238403753684971,
+            "actual": 0.4
+          },
+          {
+            "samples": 15,
+            "predicted": 0.648064810510199,
+            "actual": 0.8
+          },
+          {
+            "samples": 15,
+            "predicted": 0.6782091707468917,
+            "actual": 0.8
+          },
+          {
+            "samples": 9,
+            "predicted": 0.737033774425466,
+            "actual": 0.8888888888888888
+          }
+        ]
       }
+    }
+  },
+  "tournamentCalibration": {
+    "schemaVersion": 2,
+    "generatedAt": "2026-08-12T13:32:35.447Z",
+    "sourceTeamModelId": "dynamic_lr0.2_h120",
+    "methodology": "nested tournament calibration: live coefficients and temperature selected on first 80% leagues; evaluated on untouched final 20%; persistent form SD estimated from regularized within-league team residuals; no extra per-series Gaussian shock because Bernoulli sampling already represents match-level aleatoric uncertainty",
+    "selected": {
+      "liveGlobal": 0.3,
+      "liveRematch": 0.2,
+      "probabilityTemperature": 1,
+      "formLogitSd": 0.35,
+      "seriesNoiseLogitSd": 0
+    },
+    "dataset": {
+      "series": 417,
+      "leagues": 26,
+      "innerSeries": 273,
+      "holdoutSeries": 144,
+      "formEffects": 91
+    },
+    "holdout": {
+      "baseline": {
+        "samples": 144,
+        "logLoss": 0.6712050146846313,
+        "brier": 0.23919379319065223
+      },
+      "calibrated": {
+        "samples": 144,
+        "logLoss": 0.6586397498712101,
+        "brier": 0.23250211194936365
+      },
+      "logLossDelta": -0.01256526481342124,
+      "bootstrap": {
+        "lower95": -0.04550257855367511,
+        "upper95": 0.02071065584534854,
+        "iterations": 5000,
+        "cluster": "series_id",
+        "clusters": 144
+      }
+    },
+    "validation": {
+      "status": "experimental",
+      "validated": false,
+      "formSdHitSafetyCap": true,
+      "note": "form SD is an empirical latent-variance estimate, not posterior uncertainty; per-series shock is disabled rather than guessed"
     }
   }
 }

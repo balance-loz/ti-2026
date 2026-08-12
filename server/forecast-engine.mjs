@@ -1,3 +1,5 @@
+import { convertSeriesProbability } from "./team-model.mjs";
+
 export const TEAMS = [
   ["1w", "1w"], ["aurora", "Aurora"], ["betboom", "BETBOOM"], ["falcons", "Falcons"],
   ["gamerlegion", "GamerLegion"], ["l1ga", "L1ga"], ["lgd", "LGD"], ["liquid", "Liquid"],
@@ -19,9 +21,7 @@ export const swissBucketKey = (id, wins, losses, round) => `${round <= 3 ? SWISS
 
 const pairKey = (a, b) => [a, b].sort().join("|");
 const PERSONAL_INFERENCE_SCALE = .78;
-const LIVE_GLOBAL_WEIGHT = .35;
-const LIVE_REMATCH_WEIGHT = .15;
-const TOURNAMENT_FORM_SD = .16;
+const DEFAULT_CALIBRATION = Object.freeze({ liveGlobal: 0, liveRematch: 0, probabilityTemperature: 1, formLogitSd: 0, seriesNoiseLogitSd: .04 });
 const storedProbability = (a, b, answers) => {
   const key = pairKey(a, b); const value = answers[key];
   return value === undefined ? undefined : key.startsWith(`${a}|`) ? value : 100 - value;
@@ -58,16 +58,17 @@ export function buildForecastSource({ answers, stats, matches, mode = "mixed", o
   const statistical = Object.fromEntries(Object.entries(stats?.pairwise || {}).map(([key, value]) => [key, value.probabilityA]));
   const weight = opinionWeight / 100;
   const base = mode === "stats" ? statistical : mode === "personal" ? personal : Object.fromEntries(Object.keys(personal).map((key) => [key, personal[key] * weight + (statistical[key] ?? personal[key]) * (1 - weight)]));
+  const calibration = { ...DEFAULT_CALIBRATION, ...(stats?.tournamentCalibration?.selected ?? {}) };
   const strength = Object.fromEntries(TEAMS.map((team) => [team.id, 0]));
   const direct = new Map();
   for (const match of (matches || []).filter((item) => item.winner)) {
     const p = storedProbability(match.team_a, match.team_b, base) ?? 50;
     const outcome = match.winner === match.team_a ? 1 : 0;
     const surprise = outcome - p / 100;
-    strength[match.team_a] += surprise * LIVE_GLOBAL_WEIGHT; strength[match.team_b] -= surprise * LIVE_GLOBAL_WEIGHT;
+    strength[match.team_a] += surprise * calibration.liveGlobal; strength[match.team_b] -= surprise * calibration.liveGlobal;
     const key = pairKey(match.team_a, match.team_b);
     const oriented = key.startsWith(`${match.team_a}|`) ? surprise : -surprise;
-    direct.set(key, (direct.get(key) || 0) + oriented * LIVE_REMATCH_WEIGHT);
+    direct.set(key, (direct.get(key) || 0) + oriented * calibration.liveRematch);
   }
   const result = {};
   for (const [key, value] of Object.entries(base)) {
@@ -94,16 +95,19 @@ function pairBucket(ids, records, random) {
 
 export function runForecast(answers, iterations = 100000, seed = Math.floor(Math.random() * 0xffffffff), { matches = [], stats = null } = {}) {
   const scores = teamScores(answers); const random = seededRandom(seed);
-  const totals = Object.fromEntries(TEAMS.map((team) => [team.id, { direct: 0, playin: 0, viaPlayin: 0, playinLoss: 0, swissOut: 0, out: 0, wins: 0, losses: 0 }]));
+  const calibration = { ...DEFAULT_CALIBRATION, ...(stats?.tournamentCalibration?.selected ?? {}) };
+  const totals = Object.fromEntries(TEAMS.map((team) => [team.id, { direct: 0, playin: 0, viaPlayin: 0, playinLoss: 0, swissOut: 0, out: 0, wins: 0, losses: 0, champion: 0, final: 0, top3: 0 }]));
   const scenarioCounts = new Map(); const playoffScenarioCounts = new Map(); const matchupCounts = new Map(); const swissPathHashes = new Set(); const tournamentPathHashes = new Set(); const finalOutcomeSignatures = new Set();
   for (let iteration = 0; iteration < iterations; iteration += 1) {
     const path = []; let round = 1;
     const records = Object.fromEntries(TEAMS.map((team) => [team.id, { wins: 0, losses: 0, opponents: new Set() }]));
-    const form = Object.fromEntries(TEAMS.map((team) => [team.id, normalRandom(random) * TOURNAMENT_FORM_SD]));
-    const winnerFor = (a, b) => {
-      const base = (storedProbability(a, b, answers) ?? 50) / 100;
-      const uncertainty = stats?.pairwise?.[pairKey(a, b)]?.uncertainty ?? .07;
-      const probability = 1 / (1 + Math.exp(-(Math.log(Math.max(.03, base) / Math.max(.03, 1 - base)) + form[a] - form[b] + normalRandom(random) * uncertainty)));
+    const form = Object.fromEntries(TEAMS.map((team) => [team.id, normalRandom(random) * calibration.formLogitSd]));
+    const winnerFor = (a, b, bestOf = 3) => {
+      const bo3Base = (storedProbability(a, b, answers) ?? 50) / 100;
+      const base = bestOf === 3 ? bo3Base : convertSeriesProbability(bo3Base, 3, bestOf);
+      const uncertainty = Number(stats?.pairwise?.[pairKey(a, b)]?.uncertainty ?? calibration.seriesNoiseLogitSd);
+      const noisyLogit = (Math.log(Math.max(.03, base) / Math.max(.03, 1 - base)) + form[a] - form[b] + normalRandom(random) * uncertainty) / calibration.probabilityTemperature;
+      const probability = 1 / (1 + Math.exp(-noisyLogit));
       return random() < probability ? a : b;
     };
     const play = (a, b, fixed = null) => { const winner = fixed === a || fixed === b ? fixed : winnerFor(a, b); const loser = winner === a ? b : a; records[winner].wins++; records[loser].losses++; records[a].opponents.add(b); records[b].opponents.add(a); path.push(`${round}:${pairKey(a, b)}>${winner}`); };
@@ -134,20 +138,22 @@ export function runForecast(answers, iterations = 100000, seed = Math.floor(Math
     const knownPlayoff = matches.filter((match) => match.stage === "playoff");
     const knownOpening = knownPlayoff.filter((match) => match.round === 1).slice(0, 4);
     const openingPairs = knownOpening.length === 4 ? knownOpening.map((match) => [match.team_a, match.team_b]) : [[qualifiers[0], qualifiers[7]], [qualifiers[3], qualifiers[4]], [qualifiers[1], qualifiers[6]], [qualifiers[2], qualifiers[5]]];
-    const playoffSeries = (label, a, b) => { const actual = knownPlayoff.find((match) => match.winner && ((match.team_a === a && match.team_b === b) || (match.team_a === b && match.team_b === a))); const winner = actual?.winner || winnerFor(a, b); const loser = winner === a ? b : a; path.push(`PO:${label}:${pairKey(a, b)}>${winner}`); return { a, b, winner, loser }; };
+    const playoffSeries = (label, a, b, bestOf = 3) => { const actual = knownPlayoff.find((match) => match.winner && ((match.team_a === a && match.team_b === b) || (match.team_a === b && match.team_b === a))); const winner = actual?.winner || winnerFor(a, b, bestOf); const loser = winner === a ? b : a; path.push(`PO:${label}:${pairKey(a, b)}>${winner}`); return { a, b, winner, loser }; };
     const uq = openingPairs.map(([a, b], index) => playoffSeries(`UQ${index + 1}`, a, b));
     const us1 = playoffSeries("US1", uq[0].winner, uq[1].winner); const us2 = playoffSeries("US2", uq[2].winner, uq[3].winner);
     const lr11 = playoffSeries("LR11", uq[0].loser, uq[1].loser); const lr12 = playoffSeries("LR12", uq[2].loser, uq[3].loser);
     const lr21 = playoffSeries("LR21", lr11.winner, us2.loser); const lr22 = playoffSeries("LR22", lr12.winner, us1.loser);
     const uf = playoffSeries("UF", us1.winner, us2.winner); const ls = playoffSeries("LS", lr21.winner, lr22.winner);
-    const lf = playoffSeries("LF", ls.winner, uf.loser); const gf = playoffSeries("GF", uf.winner, lf.winner);
+    const lf = playoffSeries("LF", ls.winner, uf.loser); const gf = playoffSeries("GF", uf.winner, lf.winner, 5);
+    totals[gf.winner].champion++; totals[gf.winner].final++; totals[gf.winner].top3++;
+    totals[gf.loser].final++; totals[gf.loser].top3++; totals[lf.loser].top3++;
     const playoffSignature = JSON.stringify({ champion: gf.winner, runnerUp: gf.loser, third: lf.loser }); playoffScenarioCounts.set(playoffSignature, (playoffScenarioCounts.get(playoffSignature) || 0) + 1); finalOutcomeSignatures.add(`${signature}|${playoffSignature}`);
     tournamentPathHashes.add(compactHash(path.join(";")));
   }
-  const teams = TEAMS.map((team) => ({ ...team, qualify: 100 * (totals[team.id].direct + totals[team.id].viaPlayin) / iterations, direct: 100 * totals[team.id].direct / iterations, playin: 100 * totals[team.id].playin / iterations, viaPlayin: 100 * totals[team.id].viaPlayin / iterations, playinLoss: 100 * totals[team.id].playinLoss / iterations, swissOut: 100 * totals[team.id].swissOut / iterations, out: 100 * totals[team.id].out / iterations, avgWins: totals[team.id].wins / iterations, avgLosses: totals[team.id].losses / iterations })).sort((a, b) => b.qualify - a.qualify || b.direct - a.direct);
+  const teams = TEAMS.map((team) => ({ ...team, qualify: 100 * (totals[team.id].direct + totals[team.id].viaPlayin) / iterations, direct: 100 * totals[team.id].direct / iterations, playin: 100 * totals[team.id].playin / iterations, viaPlayin: 100 * totals[team.id].viaPlayin / iterations, playinLoss: 100 * totals[team.id].playinLoss / iterations, swissOut: 100 * totals[team.id].swissOut / iterations, out: 100 * totals[team.id].out / iterations, champion: 100 * totals[team.id].champion / iterations, final: 100 * totals[team.id].final / iterations, top3: 100 * totals[team.id].top3 / iterations, avgWins: totals[team.id].wins / iterations, avgLosses: totals[team.id].losses / iterations })).sort((a, b) => b.qualify - a.qualify || b.direct - a.direct);
   const scenarios = [...scenarioCounts].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([signature, count]) => ({ ...JSON.parse(signature), probability: 100 * count / iterations }));
   const playoffScenarios = [...playoffScenarioCounts].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([signature, count]) => ({ ...JSON.parse(signature), probability: 100 * count / iterations }));
   const playinMatchups = [...matchupCounts].sort((a, b) => b[1].count - a[1].count).slice(0, 10).map(([key, value]) => { const [a, b] = key.split("|"); return { a, b, probability: 100 * value.count / iterations, aWinProbability: 100 * value.firstWins / value.count }; });
   const swissDuplicateRate = 100 * (1 - swissPathHashes.size / iterations); const tournamentDuplicateRate = 100 * (1 - tournamentPathHashes.size / iterations);
-  return { teams, scenarios, playoffScenarios, playinMatchups, iterations, seed, uniqueBrackets: tournamentPathHashes.size, duplicateRate: tournamentDuplicateRate, uniqueSwissPaths: swissPathHashes.size, swissDuplicateRate, uniqueTournamentPaths: tournamentPathHashes.size, tournamentDuplicateRate, uniqueSwissOutcomes: scenarioCounts.size, uniquePlayoffPodiums: playoffScenarioCounts.size, uniqueFinalOutcomes: finalOutcomeSignatures.size, formatVersion: "hidden-groups-r1-r3-playoff-v2" };
+  return { teams, scenarios, playoffScenarios, playinMatchups, iterations, seed, uniqueBrackets: tournamentPathHashes.size, duplicateRate: tournamentDuplicateRate, uniqueSwissPaths: swissPathHashes.size, swissDuplicateRate, uniqueTournamentPaths: tournamentPathHashes.size, tournamentDuplicateRate, uniqueSwissOutcomes: scenarioCounts.size, uniquePlayoffPodiums: playoffScenarioCounts.size, uniqueFinalOutcomes: finalOutcomeSignatures.size, calibration, uncertaintyPolicy: stats?.tournamentCalibration?.validation?.validated ? "historical tournament holdout calibration" : "experimental latent logit shocks; calibration gate not passed", formatVersion: "hidden-groups-r1-r3-playoff-v4" };
 }

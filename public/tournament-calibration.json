@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-12T13:32:35.447Z",
+  "sourceTeamModelId": "dynamic_lr0.2_h120",
+  "methodology": "nested tournament calibration: live coefficients and temperature selected on first 80% leagues; evaluated on untouched final 20%; persistent form SD estimated from regularized within-league team residuals; no extra per-series Gaussian shock because Bernoulli sampling already represents match-level aleatoric uncertainty",
+  "selected": {
+    "liveGlobal": 0.3,
+    "liveRematch": 0.2,
+    "probabilityTemperature": 1,
+    "formLogitSd": 0.35,
+    "seriesNoiseLogitSd": 0
+  },
+  "dataset": {
+    "series": 417,
+    "leagues": 26,
+    "innerSeries": 273,
+    "holdoutSeries": 144,
+    "formEffects": 91
+  },
+  "holdout": {
+    "baseline": {
+      "samples": 144,
+      "logLoss": 0.6712050146846313,
+      "brier": 0.23919379319065223
+    },
+    "calibrated": {
+      "samples": 144,
+      "logLoss": 0.6586397498712101,
+      "brier": 0.23250211194936365
+    },
+    "logLossDelta": -0.01256526481342124,
+    "bootstrap": {
+      "lower95": -0.04550257855367511,
+      "upper95": 0.02071065584534854,
+      "iterations": 5000,
+      "cluster": "series_id",
+      "clusters": 144
+    }
+  },
+  "validation": {
+    "status": "experimental",
+    "validated": false,
+    "formSdHitSafetyCap": true,
+    "note": "form SD is an empirical latent-variance estimate, not posterior uncertainty; per-series shock is disabled rather than guessed"
+  }
+}

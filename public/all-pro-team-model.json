@@ -1,0 +1,1207 @@
+{
+  "schemaVersion": 3,
+  "modelId": "c20ff32cf905af1b",
+  "generatedAt": "2026-08-12T14:49:58.200154+00:00",
+  "status": "candidate",
+  "selected": {
+    "id": "stack",
+    "reason": "lowest chronological validation log loss; evaluated once on untouched final test"
+  },
+  "stackStatus": "candidate",
+  "baseModels": [
+    "elo",
+    "bt",
+    "recency",
+    "player",
+    "playerRandom"
+  ],
+  "stack": {
+    "weights": [
+      0.1798425227994289,
+      0.17914582579207092,
+      0.17636550106610632,
+      0.2512241901719889,
+      0.21342196017040493
+    ],
+    "bias": 0.01380983126543961,
+    "temperature": 1.0
+  },
+  "mapStack": {
+    "weights": [
+      0.17877564982245497,
+      0.17980902245868927,
+      0.1898261625054563,
+      0.22613945006602096,
+      0.22544971514737855
+    ],
+    "bias": 0.008831496367598514,
+    "temperature": 1.0
+  },
+  "pairwise": {
+    "1w|aurora": {
+      "mapProbabilityA": 36.61226941931819,
+      "probabilityA": 30.398304280778966,
+      "probabilityBo3A": 30.398304280778966,
+      "probabilityBo5A": 26.07195159796889,
+      "playerVariance": 0.4789961416368106
+    },
+    "1w|betboom": {
+      "mapProbabilityA": 40.10133553268919,
+      "probabilityA": 35.345984572292856,
+      "probabilityBo3A": 35.345984572292856,
+      "probabilityBo5A": 31.919255214324355,
+      "playerVariance": 0.5051934798196284
+    },
+    "1w|falcons": {
+      "mapProbabilityA": 35.8793796449872,
+      "probabilityA": 29.3821769860863,
+      "probabilityBo3A": 29.3821769860863,
+      "probabilityBo5A": 24.897921904207777,
+      "playerVariance": 0.51015047802727
+    },
+    "1w|gamerlegion": {
+      "mapProbabilityA": 53.62094558008356,
+      "probabilityA": 55.42192334782734,
+      "probabilityBo3A": 55.42192334782734,
+      "probabilityBo5A": 56.765572754386184,
+      "playerVariance": 0.5120023895970482
+    },
+    "1w|l1ga": {
+      "mapProbabilityA": 54.58938949687963,
+      "probabilityA": 56.864751445777515,
+      "probabilityBo3A": 56.864751445777515,
+      "probabilityBo5A": 58.55689546689812,
+      "playerVariance": 0.5077378092291177
+    },
+    "1w|lgd": {
+      "mapProbabilityA": 51.96057907292303,
+      "probabilityA": 52.93936136705024,
+      "probabilityBo3A": 52.93936136705024,
+      "probabilityBo5A": 53.67231939398812,
+      "playerVariance": 0.5196257665126335
+    },
+    "1w|liquid": {
+      "mapProbabilityA": 39.76738958437209,
+      "probabilityA": 34.86536816432707,
+      "probabilityBo3A": 34.86536816432707,
+      "probabilityBo5A": 31.34283388032655,
+      "playerVariance": 0.5058085194523704
+    },
+    "1w|nigma": {
+      "mapProbabilityA": 47.88150088490748,
+      "probabilityA": 46.82415290847965,
+      "probabilityBo3A": 46.82415290847965,
+      "probabilityBo5A": 46.0325655516868,
+      "playerVariance": 0.48515327586634227
+    },
+    "1w|og": {
+      "mapProbabilityA": 52.84372915497207,
+      "probabilityA": 54.26099440122747,
+      "probabilityBo3A": 54.26099440122747,
+      "probabilityBo5A": 55.32050499565141,
+      "playerVariance": 0.479226804408377
+    },
+    "1w|parivision": {
+      "mapProbabilityA": 31.64202801005719,
+      "probabilityA": 23.700424898931605,
+      "probabilityBo3A": 23.700424898931605,
+      "probabilityBo5A": 18.547154700361382,
+      "playerVariance": 0.47504468219533175
+    },
+    "1w|resilience": {
+      "mapProbabilityA": 49.961457532847334,
+      "probabilityA": 49.94218631072213,
+      "probabilityBo3A": 49.94218631072213,
+      "probabilityBo5A": 49.927732902716585,
+      "playerVariance": 0.5283076910660901
+    },
+    "1w|spirit": {
+      "mapProbabilityA": 42.39101196570225,
+      "probabilityA": 38.67462500639371,
+      "probabilityBo3A": 38.67462500639371,
+      "probabilityBo5A": 35.951884747952796,
+      "playerVariance": 0.497724339731548
+    },
+    "1w|vg": {
+      "mapProbabilityA": 51.21588950036935,
+      "probabilityA": 51.82347473944048,
+      "probabilityBo3A": 51.82347473944048,
+      "probabilityBo5A": 52.27889419485767,
+      "playerVariance": 0.5092580349873277
+    },
+    "1w|xtreme": {
+      "mapProbabilityA": 51.536658868214644,
+      "probabilityA": 52.30426259351155,
+      "probabilityBo3A": 52.30426259351155,
+      "probabilityBo5A": 52.87942161996574,
+      "playerVariance": 0.4798510060586065
+    },
+    "1w|yandex": {
+      "mapProbabilityA": 41.13569916442154,
+      "probabilityA": 36.84285270450281,
+      "probabilityBo3A": 36.84285270450281,
+      "probabilityBo5A": 33.72441205076215,
+      "playerVariance": 0.5318396413964055
+    },
+    "aurora|betboom": {
+      "mapProbabilityA": 53.90779586450066,
+      "probabilityA": 55.84975870938212,
+      "probabilityBo3A": 55.84975870938212,
+      "probabilityBo5A": 57.29733420526156,
+      "playerVariance": 0.468212651509797
+    },
+    "aurora|falcons": {
+      "mapProbabilityA": 49.410132613250404,
+      "probabilityA": 49.11523996798422,
+      "probabilityBo3A": 49.11523996798422,
+      "probabilityBo5A": 48.89410126583133,
+      "playerVariance": 0.47316964971743863
+    },
+    "aurora|gamerlegion": {
+      "mapProbabilityA": 66.89991631352696,
+      "probabilityA": 74.38452701123555,
+      "probabilityBo3A": 74.38452701123555,
+      "probabilityBo5A": 79.35668748738671,
+      "playerVariance": 0.47502156128721684
+    },
+    "aurora|l1ga": {
+      "mapProbabilityA": 67.76483007142751,
+      "probabilityA": 75.52596744959612,
+      "probabilityBo3A": 75.52596744959612,
+      "probabilityBo5A": 80.61202117152449,
+      "playerVariance": 0.4707569809192863
+    },
+    "aurora|lgd": {
+      "mapProbabilityA": 65.40779458208502,
+      "probabilityA": 72.38012937379953,
+      "probabilityBo3A": 72.38012937379953,
+      "probabilityBo5A": 77.11281050367485,
+      "playerVariance": 0.4826449382028021
+    },
+    "aurora|liquid": {
+      "mapProbabilityA": 53.548475163531975,
+      "probabilityA": 55.31377649539711,
+      "probabilityBo3A": 55.31377649539711,
+      "probabilityBo5A": 56.631084063579294,
+      "playerVariance": 0.4688276911425389
+    },
+    "aurora|nigma": {
+      "mapProbabilityA": 61.621646741786286,
+      "probabilityA": 67.11853997797917,
+      "probabilityBo3A": 67.11853997797917,
+      "probabilityBo5A": 71.01848237703614,
+      "playerVariance": 0.44817244755651087
+    },
+    "aurora|og": {
+      "mapProbabilityA": 66.21478244337186,
+      "probabilityA": 73.4695382377281,
+      "probabilityBo3A": 73.4695382377281,
+      "probabilityBo5A": 78.33838077257748,
+      "playerVariance": 0.4422459760985456
+    },
+    "aurora|parivision": {
+      "mapProbabilityA": 44.69384759228374,
+      "probabilityA": 42.07065060152158,
+      "probabilityBo3A": 42.07065060152158,
+      "probabilityBo5A": 40.12540989122733,
+      "playerVariance": 0.4380638538855004
+    },
+    "aurora|resilience": {
+      "mapProbabilityA": 63.571397053728454,
+      "probabilityA": 69.85717194990943,
+      "probabilityBo3A": 69.85717194990943,
+      "probabilityBo5A": 74.22418360195645,
+      "playerVariance": 0.49132686275625864
+    },
+    "aurora|spirit": {
+      "mapProbabilityA": 56.257994138936915,
+      "probabilityA": 59.3379754810234,
+      "probabilityBo3A": 59.3379754810234,
+      "probabilityBo5A": 61.61177556544127,
+      "playerVariance": 0.46074351142171666
+    },
+    "aurora|vg": {
+      "mapProbabilityA": 64.73116471347252,
+      "probabilityA": 71.45739326806333,
+      "probabilityBo3A": 71.45739326806333,
+      "probabilityBo5A": 76.06417264857113,
+      "playerVariance": 0.4722772066774963
+    },
+    "aurora|xtreme": {
+      "mapProbabilityA": 65.04072011778518,
+      "probabilityA": 71.88056802412099,
+      "probabilityBo3A": 71.88056802412099,
+      "probabilityBo5A": 76.5462541430808,
+      "playerVariance": 0.4428701777487751
+    },
+    "aurora|yandex": {
+      "mapProbabilityA": 54.95665846908926,
+      "probabilityA": 57.41063220741596,
+      "probabilityBo3A": 57.41063220741596,
+      "probabilityBo5A": 59.23302540213113,
+      "playerVariance": 0.49485881308657415
+    },
+    "betboom|falcons": {
+      "mapProbabilityA": 45.74139841346502,
+      "probabilityA": 43.62754415368647,
+      "probabilityBo3A": 43.62754415368647,
+      "probabilityBo5A": 42.053654318918106,
+      "playerVariance": 0.4993669879002564
+    },
+    "betboom|gamerlegion": {
+      "mapProbabilityA": 63.538702471047095,
+      "probabilityA": 69.81173444692905,
+      "probabilityBo3A": 69.81173444692905,
+      "probabilityBo5A": 74.17156105379082,
+      "playerVariance": 0.5012188994700346
+    },
+    "betboom|l1ga": {
+      "mapProbabilityA": 64.43912222022611,
+      "probabilityA": 71.05660586427611,
+      "probabilityBo3A": 71.05660586427611,
+      "probabilityBo5A": 75.6058183210341,
+      "playerVariance": 0.4969543191021041
+    },
+    "betboom|lgd": {
+      "mapProbabilityA": 61.98226825673508,
+      "probabilityA": 67.62933214504976,
+      "probabilityBo3A": 67.62933214504976,
+      "probabilityBo5A": 71.62139732112146,
+      "playerVariance": 0.5088422763856199
+    },
+    "betboom|liquid": {
+      "mapProbabilityA": 49.86895311354571,
+      "probabilityA": 49.8034301204197,
+      "probabilityBo3A": 49.8034301204197,
+      "probabilityBo5A": 49.75428821314873,
+      "playerVariance": 0.4950250293253567
+    },
+    "betboom|nigma": {
+      "mapProbabilityA": 58.06216389690352,
+      "probabilityA": 61.988440154789195,
+      "probabilityBo3A": 61.988440154789195,
+      "probabilityBo5A": 64.85658674366421,
+      "playerVariance": 0.47436978573932864
+    },
+    "betboom|og": {
+      "mapProbabilityA": 62.812124815265,
+      "probabilityA": 68.7975637756556,
+      "probabilityBo3A": 68.7975637756556,
+      "probabilityBo5A": 72.9918890806055,
+      "playerVariance": 0.4684433142813634
+    },
+    "betboom|parivision": {
+      "mapProbabilityA": 41.08352309725179,
+      "probabilityA": 36.767062977800016,
+      "probabilityBo3A": 36.767062977800016,
+      "probabilityBo5A": 33.63267007250212,
+      "playerVariance": 0.4642611920683182
+    },
+    "betboom|resilience": {
+      "mapProbabilityA": 60.07927991363091,
+      "probabilityA": 64.9141252641406,
+      "probabilityBo3A": 64.9141252641406,
+      "probabilityBo5A": 68.39290496323386,
+      "playerVariance": 0.5175242009390765
+    },
+    "betboom|spirit": {
+      "mapProbabilityA": 52.58391072042562,
+      "probabilityA": 53.87241573576009,
+      "probabilityBo3A": 53.87241573576009,
+      "probabilityBo5A": 54.83621364956842,
+      "playerVariance": 0.48694084960453443
+    },
+    "betboom|vg": {
+      "mapProbabilityA": 61.27644975967574,
+      "probabilityA": 66.62789575995637,
+      "probabilityBo3A": 66.62789575995637,
+      "probabilityBo5A": 70.4373359965894,
+      "playerVariance": 0.49847454486031406
+    },
+    "betboom|xtreme": {
+      "mapProbabilityA": 61.58283710833472,
+      "probabilityA": 67.06346007656333,
+      "probabilityBo3A": 67.06346007656333,
+      "probabilityBo5A": 70.95333971126796,
+      "playerVariance": 0.46906751593159285
+    },
+    "betboom|yandex": {
+      "mapProbabilityA": 51.291130435732526,
+      "probabilityA": 51.93626518611456,
+      "probabilityBo3A": 51.93626518611456,
+      "probabilityBo5A": 52.41979361356699,
+      "playerVariance": 0.521056151269392
+    },
+    "falcons|gamerlegion": {
+      "mapProbabilityA": 67.58435889361989,
+      "probabilityA": 75.28908755121968,
+      "probabilityBo3A": 75.28908755121968,
+      "probabilityBo5A": 80.35292104492565,
+      "playerVariance": 0.5061758976776763
+    },
+    "falcons|l1ga": {
+      "mapProbabilityA": 68.43572792556309,
+      "probabilityA": 76.4004193589455,
+      "probabilityBo3A": 76.4004193589455,
+      "probabilityBo5A": 81.56183554102918,
+      "playerVariance": 0.5019113173097457
+    },
+    "falcons|lgd": {
+      "mapProbabilityA": 66.10459198247021,
+      "probabilityA": 73.3215173973266,
+      "probabilityBo3A": 73.3215173973266,
+      "probabilityBo5A": 78.17268150942829,
+      "playerVariance": 0.5137992745932616
+    },
+    "falcons|liquid": {
+      "mapProbabilityA": 54.34907767368698,
+      "probabilityA": 56.507164404942124,
+      "probabilityBo3A": 56.507164404942124,
+      "probabilityBo5A": 58.11348372908214,
+      "playerVariance": 0.49998202753299836
+    },
+    "falcons|nigma": {
+      "mapProbabilityA": 62.3710666377319,
+      "probabilityA": 68.17793820939397,
+      "probabilityBo3A": 68.17793820939397,
+      "probabilityBo5A": 72.2664810695866,
+      "playerVariance": 0.4793267839469703
+    },
+    "falcons|og": {
+      "mapProbabilityA": 66.91216122033731,
+      "probabilityA": 74.40079451080378,
+      "probabilityBo3A": 74.40079451080378,
+      "probabilityBo5A": 79.3746971210431,
+      "playerVariance": 0.47340031248900505
+    },
+    "falcons|parivision": {
+      "mapProbabilityA": 45.5089644537077,
+      "probabilityA": 43.281562979280785,
+      "probabilityBo3A": 43.281562979280785,
+      "probabilityBo5A": 41.6244894790359,
+      "playerVariance": 0.4692181902759598
+    },
+    "falcons|resilience": {
+      "mapProbabilityA": 64.2850512023461,
+      "probabilityA": 70.84456761462359,
+      "probabilityBo3A": 70.84456761462359,
+      "probabilityBo5A": 75.36263915879887,
+      "playerVariance": 0.5224811991467181
+    },
+    "falcons|spirit": {
+      "mapProbabilityA": 57.03172057787064,
+      "probabilityA": 60.478044049413896,
+      "probabilityBo3A": 60.478044049413896,
+      "probabilityBo5A": 63.01166551637495,
+      "playerVariance": 0.49189784781217605
+    },
+    "falcons|vg": {
+      "mapProbabilityA": 65.43793924549544,
+      "probabilityA": 72.42104415451442,
+      "probabilityBo3A": 72.42104415451442,
+      "probabilityBo5A": 77.15908788511729,
+      "playerVariance": 0.5034315430679557
+    },
+    "falcons|xtreme": {
+      "mapProbabilityA": 65.74315004890272,
+      "probabilityA": 72.83434728460352,
+      "probabilityBo3A": 72.83434728460352,
+      "probabilityBo5A": 77.62548610492321,
+      "playerVariance": 0.4740245141392345
+    },
+    "falcons|yandex": {
+      "mapProbabilityA": 55.7422140799472,
+      "probabilityA": 58.57545348906334,
+      "probabilityBo3A": 58.57545348906334,
+      "probabilityBo5A": 60.6723569058311,
+      "playerVariance": 0.5260131494770336
+    },
+    "gamerlegion|l1ga": {
+      "mapProbabilityA": 51.194024532397144,
+      "probabilityA": 51.79069633573392,
+      "probabilityBo3A": 51.79069633573392,
+      "probabilityBo5A": 52.23794498670898,
+      "playerVariance": 0.503763228879524
+    },
+    "gamerlegion|lgd": {
+      "mapProbabilityA": 48.559770524696354,
+      "probabilityA": 47.840253269394026,
+      "probabilityBo3A": 47.840253269394026,
+      "probabilityBo5A": 47.30106306787911,
+      "playerVariance": 0.5156511861630397
+    },
+    "gamerlegion|liquid": {
+      "mapProbabilityA": 36.54702047248822,
+      "probabilityA": 30.307481907765137,
+      "probabilityBo3A": 30.307481907765137,
+      "probabilityBo5A": 25.966602466777783,
+      "playerVariance": 0.5018339391027766
+    },
+    "gamerlegion|nigma": {
+      "mapProbabilityA": 44.4801707471444,
+      "probabilityA": 41.75389232077289,
+      "probabilityBo3A": 41.75389232077289,
+      "probabilityBo5A": 39.734103197516866,
+      "playerVariance": 0.4811786955167485
+    },
+    "gamerlegion|og": {
+      "mapProbabilityA": 49.42259833078147,
+      "probabilityA": 49.133935996471074,
+      "probabilityBo3A": 49.133935996471074,
+      "probabilityBo5A": 48.91746811711172,
+      "playerVariance": 0.47525222405878326
+    },
+    "gamerlegion|parivision": {
+      "mapProbabilityA": 28.750582249804822,
+      "probabilityA": 20.04485625072314,
+      "probabilityBo3A": 20.04485625072314,
+      "probabilityBo5A": 14.694850942667772,
+      "playerVariance": 0.471070101845738
+    },
+    "gamerlegion|resilience": {
+      "mapProbabilityA": 46.56904966541508,
+      "probabilityA": 44.861651929736254,
+      "probabilityBo3A": 44.861651929736254,
+      "probabilityBo5A": 43.587133176834875,
+      "playerVariance": 0.5243331107164964
+    },
+    "gamerlegion|spirit": {
+      "mapProbabilityA": 39.094294987563174,
+      "probabilityA": 33.900855181756945,
+      "probabilityBo3A": 33.900855181756945,
+      "probabilityBo5A": 30.191078924407126,
+      "playerVariance": 0.49374975938195426
+    },
+    "gamerlegion|vg": {
+      "mapProbabilityA": 47.80952825861039,
+      "probabilityA": 46.71639443751935,
+      "probabilityBo3A": 46.71639443751935,
+      "probabilityBo5A": 45.898117583108736,
+      "playerVariance": 0.5052834546377339
+    },
+    "gamerlegion|xtreme": {
+      "mapProbabilityA": 48.11506475362628,
+      "probabilityA": 47.17393655821864,
+      "probabilityBo3A": 47.17393655821864,
+      "probabilityBo5A": 46.469093554808936,
+      "playerVariance": 0.47587642570901273
+    },
+    "gamerlegion|yandex": {
+      "mapProbabilityA": 37.8879914684778,
+      "probabilityA": 32.1873553514502,
+      "probabilityBo3A": 32.1873553514502,
+      "probabilityBo5A": 28.162764542974845,
+      "playerVariance": 0.5278650610468117
+    },
+    "l1ga|lgd": {
+      "mapProbabilityA": 47.58936124516106,
+      "probabilityA": 46.3868435985028,
+      "probabilityBo3A": 46.3868435985028,
+      "probabilityBo5A": 45.48705177717217,
+      "playerVariance": 0.5113866057951093
+    },
+    "l1ga|liquid": {
+      "mapProbabilityA": 35.64439711258868,
+      "probabilityA": 29.05828577055608,
+      "probabilityBo3A": 29.05828577055608,
+      "probabilityBo5A": 24.525888599585816,
+      "playerVariance": 0.4975693587348461
+    },
+    "l1ga|nigma": {
+      "mapProbabilityA": 43.51428946243266,
+      "probabilityA": 40.325997751528845,
+      "probabilityBo3A": 40.325997751528845,
+      "probabilityBo5A": 37.97501308108963,
+      "playerVariance": 0.47691411514881804
+    },
+    "l1ga|og": {
+      "mapProbabilityA": 48.443738618118196,
+      "probabilityA": 47.66636176446894,
+      "probabilityBo3A": 47.66636176446894,
+      "probabilityBo5A": 47.083893954473965,
+      "playerVariance": 0.4709876436908528
+    },
+    "l1ga|parivision": {
+      "mapProbabilityA": 27.949995266739958,
+      "probabilityA": 19.069147305903954,
+      "probabilityBo3A": 19.069147305903954,
+      "probabilityBo5A": 13.703879035608368,
+      "playerVariance": 0.4668055214778075
+    },
+    "l1ga|resilience": {
+      "mapProbabilityA": 45.60443749183444,
+      "probabilityA": 43.42364154381415,
+      "probabilityBo3A": 43.42364154381415,
+      "probabilityBo5A": 41.800685110570356,
+      "playerVariance": 0.5200685303485658
+    },
+    "l1ga|spirit": {
+      "mapProbabilityA": 38.16775074545446,
+      "probabilityA": 32.58293411991347,
+      "probabilityBo3A": 32.58293411991347,
+      "probabilityBo5A": 28.628887505031226,
+      "playerVariance": 0.4894851790140238
+    },
+    "l1ga|vg": {
+      "mapProbabilityA": 46.83837220521923,
+      "probabilityA": 45.26387896475811,
+      "probabilityBo3A": 45.26387896475811,
+      "probabilityBo5A": 44.08773057293121,
+      "playerVariance": 0.5010188742698034
+    },
+    "l1ga|xtreme": {
+      "mapProbabilityA": 47.13906075107152,
+      "probabilityA": 45.713274468929605,
+      "probabilityBo3A": 45.713274468929605,
+      "probabilityBo5A": 44.647435764155226,
+      "playerVariance": 0.47161184534108225
+    },
+    "l1ga|yandex": {
+      "mapProbabilityA": 36.97658539407175,
+      "probabilityA": 30.906656611017546,
+      "probabilityBo3A": 30.906656611017546,
+      "probabilityBo5A": 26.663064986293584,
+      "playerVariance": 0.5236004806788813
+    },
+    "lgd|liquid": {
+      "mapProbabilityA": 38.10747053199252,
+      "probabilityA": 32.49760325515929,
+      "probabilityBo3A": 32.49760325515929,
+      "probabilityBo5A": 28.528227654912374,
+      "playerVariance": 0.5094573160183619
+    },
+    "lgd|nigma": {
+      "mapProbabilityA": 46.128458985143425,
+      "probabilityA": 44.20429445160523,
+      "probabilityBo3A": 44.20429445160523,
+      "probabilityBo5A": 42.76982334387886,
+      "playerVariance": 0.48880207243233376
+    },
+    "lgd|og": {
+      "mapProbabilityA": 51.08203444729694,
+      "probabilityA": 51.62279830207408,
+      "probabilityBo3A": 51.62279830207408,
+      "probabilityBo5A": 52.028181255496605,
+      "playerVariance": 0.4828756009743685
+    },
+    "lgd|parivision": {
+      "mapProbabilityA": 30.13712672203423,
+      "probabilityA": 21.773004798918894,
+      "probabilityBo3A": 21.773004798918894,
+      "probabilityBo5A": 16.489891834919,
+      "playerVariance": 0.47869347876132323
+    },
+    "lgd|resilience": {
+      "mapProbabilityA": 48.226704939032814,
+      "probabilityA": 47.34117266054487,
+      "probabilityBo3A": 47.34117266054487,
+      "probabilityBo5A": 46.67785883857745,
+      "playerVariance": 0.5319564876320816
+    },
+    "lgd|spirit": {
+      "mapProbabilityA": 40.688751343815824,
+      "probabilityA": 36.194582859822475,
+      "probabilityBo3A": 36.194582859822475,
+      "probabilityBo5A": 32.94084894480592,
+      "playerVariance": 0.5013731362975394
+    },
+    "lgd|vg": {
+      "mapProbabilityA": 49.46945630217675,
+      "probabilityA": 49.20421432039399,
+      "probabilityBo3A": 49.20421432039399,
+      "probabilityBo5A": 49.0053052318815,
+      "playerVariance": 0.5129068315533192
+    },
+    "lgd|xtreme": {
+      "mapProbabilityA": 49.772081138945055,
+      "probabilityA": 49.658124076358135,
+      "probabilityBo3A": 49.658124076358135,
+      "probabilityBo5A": 49.57265805533645,
+      "playerVariance": 0.48349980262459796
+    },
+    "lgd|yandex": {
+      "mapProbabilityA": 39.470067614571356,
+      "probabilityA": 34.4386120989872,
+      "probabilityBo3A": 34.4386120989872,
+      "probabilityBo5A": 30.832386007687614,
+      "playerVariance": 0.535488437962397
+    },
+    "liquid|nigma": {
+      "mapProbabilityA": 58.41128211931106,
+      "probabilityA": 62.4979040973537,
+      "probabilityBo3A": 62.4979040973537,
+      "probabilityBo5A": 65.47613243778933,
+      "playerVariance": 0.47498482537207065
+    },
+    "liquid|og": {
+      "mapProbabilityA": 63.148525977535805,
+      "probabilityA": 69.26815570915116,
+      "probabilityBo3A": 69.26815570915116,
+      "probabilityBo5A": 73.54048267371587,
+      "playerVariance": 0.4690583539141054
+    },
+    "liquid|parivision": {
+      "mapProbabilityA": 41.4353987751016,
+      "probabilityA": 37.27874496359516,
+      "probabilityBo3A": 37.27874496359516,
+      "probabilityBo5A": 34.25272475757278,
+      "playerVariance": 0.4648762317010601
+    },
+    "liquid|resilience": {
+      "mapProbabilityA": 60.40828088715503,
+      "probabilityA": 65.38691070627006,
+      "probabilityBo3A": 65.38691070627006,
+      "probabilityBo5A": 68.95907912839218,
+      "playerVariance": 0.5181392405718185
+    },
+    "liquid|spirit": {
+      "mapProbabilityA": 52.93713095910818,
+      "probabilityA": 54.40062886665192,
+      "probabilityBo3A": 54.40062886665192,
+      "probabilityBo5A": 55.49446473328719,
+      "playerVariance": 0.4875558892372764
+    },
+    "liquid|vg": {
+      "mapProbabilityA": 61.60819729394659,
+      "probabilityA": 67.09945445640408,
+      "probabilityBo3A": 67.09945445640408,
+      "probabilityBo5A": 70.99591285481084,
+      "playerVariance": 0.499089584493056
+    },
+    "liquid|xtreme": {
+      "mapProbabilityA": 61.92327311959856,
+      "probabilityA": 67.54589658570092,
+      "probabilityBo3A": 67.54589658570092,
+      "probabilityBo5A": 71.52306304718206,
+      "playerVariance": 0.46968255556433486
+    },
+    "liquid|yandex": {
+      "mapProbabilityA": 51.633449439496474,
+      "probabilityA": 52.44930249931016,
+      "probabilityBo3A": 52.44930249931016,
+      "probabilityBo5A": 53.06053924693719,
+      "playerVariance": 0.5216711909021339
+    },
+    "nigma|og": {
+      "mapProbabilityA": 55.180827187160496,
+      "probabilityA": 57.74342909496396,
+      "probabilityBo3A": 57.74342909496396,
+      "probabilityBo5A": 59.644745709273906,
+      "playerVariance": 0.4484031103280773
+    },
+    "nigma|parivision": {
+      "mapProbabilityA": 33.67709609803448,
+      "probabilityA": 26.38544988256041,
+      "probabilityBo3A": 26.38544988256041,
+      "probabilityBo5A": 21.49954494331411,
+      "playerVariance": 0.4442209881150321
+    },
+    "nigma|resilience": {
+      "mapProbabilityA": 52.31838740363983,
+      "probabilityA": 53.475088876023925,
+      "probabilityBo3A": 53.475088876023925,
+      "probabilityBo5A": 54.3407498268954,
+      "playerVariance": 0.4974839969857903
+    },
+    "nigma|spirit": {
+      "mapProbabilityA": 44.69852779479576,
+      "probabilityA": 42.077591911633085,
+      "probabilityBo3A": 42.077591911633085,
+      "probabilityBo5A": 40.13398889785899,
+      "playerVariance": 0.46690064565124834
+    },
+    "nigma|vg": {
+      "mapProbabilityA": 53.566248454107736,
+      "probabilityA": 55.34030148027179,
+      "probabilityBo3A": 55.34030148027179,
+      "probabilityBo5A": 56.66407245983579,
+      "playerVariance": 0.47843434090702797
+    },
+    "nigma|xtreme": {
+      "mapProbabilityA": 53.88919117393329,
+      "probabilityA": 55.8220213291153,
+      "probabilityBo3A": 55.8220213291153,
+      "probabilityBo5A": 57.26287326016194,
+      "playerVariance": 0.44902731197830675
+    },
+    "nigma|yandex": {
+      "mapProbabilityA": 43.41713465419442,
+      "probabilityA": 40.18275451160512,
+      "probabilityBo3A": 40.18275451160512,
+      "probabilityBo5A": 37.79901710610548,
+      "playerVariance": 0.5010159473161059
+    },
+    "og|parivision": {
+      "mapProbabilityA": 29.37514308200117,
+      "probabilityA": 20.817414431934957,
+      "probabilityBo3A": 20.817414431934957,
+      "probabilityBo5A": 15.491216053492836,
+      "playerVariance": 0.4382945166570668
+    },
+    "og|resilience": {
+      "mapProbabilityA": 47.36422807273282,
+      "probabilityA": 46.05000440541522,
+      "probabilityBo3A": 46.05000440541522,
+      "probabilityBo5A": 45.06707574424962,
+      "playerVariance": 0.4915575255278251
+    },
+    "og|spirit": {
+      "mapProbabilityA": 39.84907681928767,
+      "probabilityA": 34.9828079741529,
+      "probabilityBo3A": 34.9828079741529,
+      "probabilityBo5A": 31.48353425516872,
+      "playerVariance": 0.46097417419328307
+    },
+    "og|vg": {
+      "mapProbabilityA": 48.60650973756784,
+      "probabilityA": 47.91030578644161,
+      "probabilityBo3A": 47.91030578644161,
+      "probabilityBo5A": 47.38855839290285,
+      "playerVariance": 0.4725078694490627
+    },
+    "og|xtreme": {
+      "mapProbabilityA": 48.92018183293824,
+      "probabilityA": 48.38052456457482,
+      "probabilityBo3A": 48.38052456457482,
+      "probabilityBo5A": 47.97597038659235,
+      "playerVariance": 0.44310084052034154
+    },
+    "og|yandex": {
+      "mapProbabilityA": 38.62055332638219,
+      "probabilityA": 33.22553901114311,
+      "probabilityBo3A": 33.22553901114311,
+      "probabilityBo5A": 29.38886131980405,
+      "playerVariance": 0.49508947585814056
+    },
+    "parivision|resilience": {
+      "mapProbabilityA": 68.5270423886977,
+      "probabilityA": 76.51867730724457,
+      "probabilityBo3A": 76.51867730724457,
+      "probabilityBo5A": 81.68946177446469,
+      "playerVariance": 0.48737540331477985
+    },
+    "parivision|spirit": {
+      "mapProbabilityA": 61.61737372932844,
+      "probabilityA": 67.11247660668133,
+      "probabilityBo3A": 67.11247660668133,
+      "probabilityBo5A": 71.01131247994682,
+      "playerVariance": 0.4567920519802378
+    },
+    "parivision|vg": {
+      "mapProbabilityA": 69.61037247460544,
+      "probabilityA": 77.90725943254073,
+      "probabilityBo3A": 77.90725943254073,
+      "probabilityBo5A": 83.17271269829838,
+      "playerVariance": 0.46832574723601744
+    },
+    "parivision|xtreme": {
+      "mapProbabilityA": 69.90700232268256,
+      "probabilityA": 78.28271930462354,
+      "probabilityBo3A": 78.28271930462354,
+      "probabilityBo5A": 83.56874633856128,
+      "playerVariance": 0.4389187183072963
+    },
+    "parivision|yandex": {
+      "mapProbabilityA": 60.34946790555682,
+      "probabilityA": 65.30249248114926,
+      "probabilityBo3A": 65.30249248114926,
+      "probabilityBo5A": 68.85810316620447,
+      "playerVariance": 0.4909073536450953
+    },
+    "resilience|spirit": {
+      "mapProbabilityA": 42.63158928521567,
+      "probabilityA": 39.027395254564226,
+      "probabilityBo3A": 39.027395254564226,
+      "probabilityBo5A": 36.38295499870567,
+      "playerVariance": 0.5100550608509961
+    },
+    "resilience|vg": {
+      "mapProbabilityA": 51.46494463008846,
+      "probabilityA": 52.19678817250677,
+      "probabilityBo3A": 52.19678817250677,
+      "probabilityBo5A": 52.74519965466672,
+      "playerVariance": 0.5215887561067758
+    },
+    "resilience|xtreme": {
+      "mapProbabilityA": 51.76690431294774,
+      "probabilityA": 52.64925323173687,
+      "probabilityBo3A": 52.64925323173687,
+      "probabilityBo5A": 53.310188525841326,
+      "playerVariance": 0.4921817271780546
+    },
+    "resilience|yandex": {
+      "mapProbabilityA": 41.39712446283608,
+      "probabilityA": 37.22302554176263,
+      "probabilityBo3A": 37.22302554176263,
+      "probabilityBo5A": 34.18512820249977,
+      "playerVariance": 0.5441703625158537
+    },
+    "spirit|vg": {
+      "mapProbabilityA": 59.013691458258386,
+      "probabilityA": 63.37407076974036,
+      "probabilityBo3A": 63.37407076974036,
+      "probabilityBo5A": 66.53807541113179,
+      "playerVariance": 0.4910054047722337
+    },
+    "spirit|xtreme": {
+      "mapProbabilityA": 59.320009529156216,
+      "probabilityA": 63.818102283498575,
+      "probabilityBo3A": 63.818102283498575,
+      "probabilityBo5A": 67.07445706994575,
+      "playerVariance": 0.4615983758435125
+    },
+    "spirit|yandex": {
+      "mapProbabilityA": 48.932155242812264,
+      "probabilityA": 48.39847639527603,
+      "probabilityBo3A": 48.39847639527603,
+      "probabilityBo5A": 47.998399824608086,
+      "playerVariance": 0.5135870111813116
+    },
+    "vg|xtreme": {
+      "mapProbabilityA": 50.52763510287516,
+      "probabilityA": 50.79142327571665,
+      "probabilityBo3A": 50.79142327571665,
+      "probabilityBo5A": 50.989242373854395,
+      "playerVariance": 0.47313207109929223
+    },
+    "vg|yandex": {
+      "mapProbabilityA": 40.18219973089702,
+      "probabilityA": 35.46256558325586,
+      "probabilityBo3A": 35.46256558325586,
+      "probabilityBo5A": 32.059316503467464,
+      "playerVariance": 0.5251207064370913
+    },
+    "xtreme|yandex": {
+      "mapProbabilityA": 39.87312086352295,
+      "probabilityA": 35.01739104187275,
+      "probabilityBo3A": 35.01739104187275,
+      "probabilityBo5A": 31.5249855658459,
+      "playerVariance": 0.49571367750837
+    }
+  },
+  "playerState": {
+    "count": 23491,
+    "uncertainty": "Gaussian mean/variance with temporal process noise"
+  },
+  "randomEffects": [
+    "team-tournament",
+    "team-exact-patch"
+  ],
+  "training": {
+    "maps": 55874,
+    "series": 29599,
+    "binarySeries": 28702,
+    "drawSeries": 897,
+    "completeRosterSeries": 29599,
+    "providerSeries": 26657,
+    "leagues": 298,
+    "teams": 7904,
+    "players": 23491,
+    "oofSeries": 28599,
+    "validationSeries": 4862,
+    "holdoutSeries": 5148
+  },
+  "validation": {
+    "outer": {
+      "folds": 5,
+      "foldDetails": [
+        {
+          "trainThrough": 1743059272,
+          "testFrom": 1743059554,
+          "testThrough": 1750887181,
+          "train": 8579,
+          "test": 4004,
+          "model": {
+            "weights": [
+              0.18985896767290275,
+              0.1886885368962092,
+              0.18863974499114175,
+              0.24329047492252195,
+              0.18952227551722428
+            ],
+            "bias": 0.03269831614796259,
+            "temperature": 1.0
+          },
+          "mapModel": {
+            "weights": [
+              0.18709953712264094,
+              0.18778675093314148,
+              0.19638630548737496,
+              0.2205564549381178,
+              0.2081709515187249
+            ],
+            "bias": 0.027168330038240266,
+            "temperature": 1.0
+          },
+          "metrics": {
+            "samples": 3893,
+            "logLoss": 0.6657159533266727,
+            "brier": 0.23684596889635495,
+            "accuracy": 0.5836116105830979
+          }
+        },
+        {
+          "trainThrough": 1750887181,
+          "testFrom": 1750894689,
+          "testThrough": 1758642445,
+          "train": 12583,
+          "test": 4004,
+          "model": {
+            "weights": [
+              0.1908239909803442,
+              0.18974596128420737,
+              0.1850957118150725,
+              0.24268544410101475,
+              0.19164889181936112
+            ],
+            "bias": 0.014890534959990775,
+            "temperature": 1.0
+          },
+          "mapModel": {
+            "weights": [
+              0.18697705053093805,
+              0.18783538307336248,
+              0.19555478933005568,
+              0.21996979466836683,
+              0.20966298239727682
+            ],
+            "bias": 0.008774104626031684,
+            "temperature": 1.0
+          },
+          "metrics": {
+            "samples": 3858,
+            "logLoss": 0.6724059043506132,
+            "brier": 0.2403606248674002,
+            "accuracy": 0.5782789009849663
+          }
+        },
+        {
+          "trainThrough": 1758642445,
+          "testFrom": 1758643436,
+          "testThrough": 1766206891,
+          "train": 16587,
+          "test": 4004,
+          "model": {
+            "weights": [
+              0.18895374513048957,
+              0.187747428350656,
+              0.18397368725859878,
+              0.2434604618034391,
+              0.19586467745681654
+            ],
+            "bias": 0.018301123502665214,
+            "temperature": 1.0
+          },
+          "mapModel": {
+            "weights": [
+              0.18473685492094674,
+              0.18549853230044164,
+              0.19497611579345447,
+              0.22112825460915653,
+              0.21366024237600068
+            ],
+            "bias": 0.011728703641514404,
+            "temperature": 1.0
+          },
+          "metrics": {
+            "samples": 3900,
+            "logLoss": 0.6616102448027642,
+            "brier": 0.23482505801287737,
+            "accuracy": 0.5982051282051282
+          }
+        },
+        {
+          "trainThrough": 1766206891,
+          "testFrom": 1766212629,
+          "testThrough": 1774176945,
+          "train": 20591,
+          "test": 4004,
+          "model": {
+            "weights": [
+              0.1858266434975658,
+              0.1847098327477427,
+              0.18499685171101632,
+              0.243999606780018,
+              0.2004670652636573
+            ],
+            "bias": 0.01604676613098044,
+            "temperature": 1.0
+          },
+          "mapModel": {
+            "weights": [
+              0.18231394287324984,
+              0.1830978721190369,
+              0.19742305547503994,
+              0.22103669996088343,
+              0.2161284295717898
+            ],
+            "bias": 0.011044470094005887,
+            "temperature": 1.0
+          },
+          "metrics": {
+            "samples": 3911,
+            "logLoss": 0.6644737357382406,
+            "brier": 0.23645743345097128,
+            "accuracy": 0.5804142163129634
+          }
+        },
+        {
+          "trainThrough": 1774176945,
+          "testFrom": 1774180796,
+          "testThrough": 1786476363,
+          "train": 24595,
+          "test": 4004,
+          "model": {
+            "weights": [
+              0.18349444044259933,
+              0.18261861400048016,
+              0.1794205383402621,
+              0.24785393449368479,
+              0.2066124727229737
+            ],
+            "bias": 0.01892011629746241,
+            "temperature": 1.0
+          },
+          "mapModel": {
+            "weights": [
+              0.1813863619780161,
+              0.18221274789186356,
+              0.19166137915598627,
+              0.22429570114601016,
+              0.22044380982812392
+            ],
+            "bias": 0.011791020766548088,
+            "temperature": 1.0
+          },
+          "metrics": {
+            "samples": 3892,
+            "logLoss": 0.6561868829421608,
+            "brier": 0.232432323114681,
+            "accuracy": 0.5994347379239465
+          }
+        }
+      ],
+      "metrics": {
+        "samples": 19454,
+        "logLoss": 0.6641160756407727,
+        "brier": 0.23619663520343995,
+        "accuracy": 0.5884136938418835
+      },
+      "neutral": {
+        "samples": 19454,
+        "logLoss": 0.6931471805599453,
+        "brier": 0.25,
+        "accuracy": 0.5099722422123985
+      }
+    },
+    "modelSelection": {
+      "metrics": {
+        "elo": {
+          "samples": 4750,
+          "logLoss": 0.6712522696082235,
+          "brier": 0.23950775607615254,
+          "accuracy": 0.5768421052631579
+        },
+        "bt": {
+          "samples": 4750,
+          "logLoss": 0.6703147112009493,
+          "brier": 0.2390893435603109,
+          "accuracy": 0.5772631578947368
+        },
+        "recency": {
+          "samples": 4750,
+          "logLoss": 0.6810458817886659,
+          "brier": 0.24276866261509508,
+          "accuracy": 0.5682105263157895
+        },
+        "player": {
+          "samples": 4750,
+          "logLoss": 0.66042381758245,
+          "brier": 0.23436491450740735,
+          "accuracy": 0.5962105263157895
+        },
+        "playerRandom": {
+          "samples": 4750,
+          "logLoss": 0.6634720892555271,
+          "brier": 0.23543330764433876,
+          "accuracy": 0.6023157894736842
+        },
+        "stack": {
+          "samples": 4750,
+          "logLoss": 0.6600107512191388,
+          "brier": 0.23427237399804146,
+          "accuracy": 0.5873684210526315
+        },
+        "neutral": {
+          "samples": 4750,
+          "logLoss": 0.6931471805599453,
+          "brier": 0.25,
+          "accuracy": 0.5254736842105263
+        }
+      },
+      "selected": "stack"
+    },
+    "frozenHoldout": {
+      "stack": {
+        "samples": 5009,
+        "logLoss": 0.6580791434581686,
+        "brier": 0.233300510001608,
+        "accuracy": 0.6015172689159513
+      },
+      "models": {
+        "elo": {
+          "samples": 5009,
+          "logLoss": 0.675519479786467,
+          "brier": 0.2413809318028178,
+          "accuracy": 0.5753643441804751
+        },
+        "bt": {
+          "samples": 5009,
+          "logLoss": 0.6737590409270489,
+          "brier": 0.2405524568623215,
+          "accuracy": 0.5785585945298463
+        },
+        "recency": {
+          "samples": 5009,
+          "logLoss": 0.6886813879808621,
+          "brier": 0.24389909762574472,
+          "accuracy": 0.5643841086045118
+        },
+        "player": {
+          "samples": 5009,
+          "logLoss": 0.65280084179612,
+          "brier": 0.23080245323185533,
+          "accuracy": 0.6111000199640647
+        },
+        "playerRandom": {
+          "samples": 5009,
+          "logLoss": 0.6579152400589066,
+          "brier": 0.23299133623665094,
+          "accuracy": 0.6091036134957077
+        },
+        "stack": {
+          "samples": 5009,
+          "logLoss": 0.6580791434581686,
+          "brier": 0.233300510001608,
+          "accuracy": 0.6015172689159513
+        },
+        "neutral": {
+          "samples": 5009,
+          "logLoss": 0.6931471805599454,
+          "brier": 0.25,
+          "accuracy": 0.5000998203234178
+        }
+      },
+      "selectedByValidation": "stack",
+      "bestTestModelDiagnosticOnly": "player",
+      "stackBeatsBestBase": false,
+      "selectedBootstrapVs50": {
+        "lower95": -0.04092696175262637,
+        "upper95": -0.029352918497875413,
+        "iterations": 2000,
+        "clusters": 5148,
+        "cluster": "series_id"
+      }
+    }
+  }
+}

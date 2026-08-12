@@ -1,0 +1,863 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-12T13:32:35.261Z",
+  "selected": {
+    "id": "dynamic_lr0.2_h120",
+    "family": "dynamic",
+    "learningRate": 0.2,
+    "decayHalfLifeDays": 120,
+    "l2": 0.002
+  },
+  "validation": {
+    "status": "experimental",
+    "validated": false,
+    "gate": "frozen family/config selection must beat 50% on untouched tournament holdout log loss and Brier with series-cluster bootstrap upper 95% below zero"
+  },
+  "pairwise": {
+    "1w|aurora": {
+      "mapProbabilityA": 49.9575883768324,
+      "probabilityA": 49.93638258050615,
+      "probabilityBo3A": 49.93638258050615,
+      "probabilityBo5A": 49.9204782447046,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "1w|betboom": {
+      "mapProbabilityA": 45.248518332321346,
+      "probabilityA": 42.89423193781558,
+      "probabilityBo3A": 42.89423193781558,
+      "probabilityBo5A": 41.14446266108927,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "1w|falcons": {
+      "mapProbabilityA": 46.89507843228948,
+      "probabilityA": 45.348604271270084,
+      "probabilityBo3A": 45.348604271270084,
+      "probabilityBo5A": 44.19322130335305,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "1w|gamerlegion": {
+      "mapProbabilityA": 51.63317119433359,
+      "probabilityA": 52.44888557693105,
+      "probabilityBo3A": 52.44888557693105,
+      "probabilityBo5A": 53.060018650075754,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "1w|l1ga": {
+      "mapProbabilityA": 58.6423604173125,
+      "probabilityA": 62.83444036575817,
+      "probabilityBo3A": 62.83444036575817,
+      "probabilityBo5A": 65.88456789670852,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "1w|lgd": {
+      "mapProbabilityA": 56.359365314078325,
+      "probabilityA": 59.48761148205535,
+      "probabilityBo3A": 59.48761148205535,
+      "probabilityBo5A": 61.79584279229292,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "1w|liquid": {
+      "mapProbabilityA": 49.301333556007464,
+      "probabilityA": 48.952068542692174,
+      "probabilityBo3A": 48.952068542692174,
+      "probabilityBo5A": 48.69017092922793,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "1w|nigma": {
+      "mapProbabilityA": 53.534785450735455,
+      "probabilityA": 55.29334495356408,
+      "probabilityBo3A": 55.29334495356408,
+      "probabilityBo5A": 56.60567277434262,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "1w|og": {
+      "mapProbabilityA": 53.84819638420024,
+      "probabilityA": 55.76089728424416,
+      "probabilityBo3A": 55.76089728424416,
+      "probabilityBo5A": 57.18692562366936,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "1w|parivision": {
+      "mapProbabilityA": 41.044203495563096,
+      "probabilityA": 36.70996748751071,
+      "probabilityBo3A": 36.70996748751071,
+      "probabilityBo5A": 33.56358037986634,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "1w|resilience": {
+      "mapProbabilityA": 48.42488841787097,
+      "probabilityA": 47.638114189769276,
+      "probabilityBo3A": 47.638114189769276,
+      "probabilityBo5A": 47.04861910920331,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "1w|spirit": {
+      "mapProbabilityA": 47.321730258168095,
+      "probabilityA": 45.98643770202137,
+      "probabilityBo3A": 45.98643770202137,
+      "probabilityBo5A": 44.98784175256261,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "1w|vg": {
+      "mapProbabilityA": 50.079812815905036,
+      "probabilityA": 50.11971912217466,
+      "probabilityBo3A": 50.11971912217466,
+      "probabilityBo5A": 50.1496487756149,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "1w|xtreme": {
+      "mapProbabilityA": 55.58983231094903,
+      "probabilityA": 58.34981623450777,
+      "probabilityBo3A": 58.34981623450777,
+      "probabilityBo5A": 60.393932453356236,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "1w|yandex": {
+      "mapProbabilityA": 48.28611238989575,
+      "probabilityA": 47.43017546321826,
+      "probabilityBo3A": 47.43017546321826,
+      "probabilityBo5A": 46.78897703970651,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "aurora|betboom": {
+      "mapProbabilityA": 44.54385308740215,
+      "probabilityA": 41.84826502690797,
+      "probabilityBo3A": 41.84826502690797,
+      "probabilityBo5A": 39.8506479058124,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "aurora|falcons": {
+      "mapProbabilityA": 45.48296541850225,
+      "probabilityA": 43.242880882385,
+      "probabilityBo3A": 43.242880882385,
+      "probabilityBo5A": 41.576529217897246,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "aurora|gamerlegion": {
+      "mapProbabilityA": 49.67147686250082,
+      "probabilityA": 49.50722238508425,
+      "probabilityBo3A": 49.50722238508425,
+      "probabilityBo5A": 49.38403684529198,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "aurora|l1ga": {
+      "mapProbabilityA": 55.85666609267893,
+      "probabilityA": 58.744821779771996,
+      "probabilityBo3A": 58.744821779771996,
+      "probabilityBo5A": 60.88121895716488,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "aurora|lgd": {
+      "mapProbabilityA": 53.35794447549209,
+      "probabilityA": 55.0293440171516,
+      "probabilityBo3A": 55.0293440171516,
+      "probabilityBo5A": 56.27723976777308,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "aurora|liquid": {
+      "mapProbabilityA": 45.85809649157696,
+      "probabilityA": 43.801355910390996,
+      "probabilityBo3A": 43.801355910390996,
+      "probabilityBo5A": 42.26938571491396,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "aurora|nigma": {
+      "mapProbabilityA": 49.807816171435306,
+      "probabilityA": 49.71172567680044,
+      "probabilityBo3A": 49.71172567680044,
+      "probabilityBo5A": 49.63965887054419,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "aurora|og": {
+      "mapProbabilityA": 49.730849439185015,
+      "probabilityA": 49.59627805833981,
+      "probabilityBo3A": 49.59627805833981,
+      "probabilityBo5A": 49.49535244729289,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "aurora|parivision": {
+      "mapProbabilityA": 38.221179326288926,
+      "probabilityA": 32.65860915772999,
+      "probabilityBo3A": 32.65860915772999,
+      "probabilityBo5A": 28.718207855602902,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "aurora|resilience": {
+      "mapProbabilityA": 45.76124759734827,
+      "probabilityA": 43.6571029474981,
+      "probabilityBo3A": 43.6571029474981,
+      "probabilityBo5A": 42.09033602403143,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "aurora|spirit": {
+      "mapProbabilityA": 43.47805372503611,
+      "probabilityA": 40.27256380613058,
+      "probabilityBo3A": 40.27256380613058,
+      "probabilityBo5A": 37.909350774236536,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "aurora|vg": {
+      "mapProbabilityA": 45.03284603874178,
+      "probabilityA": 42.573779597031056,
+      "probabilityBo3A": 42.573779597031056,
+      "probabilityBo5A": 40.7476812481842,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "aurora|xtreme": {
+      "mapProbabilityA": 50.458512546933186,
+      "probabilityA": 50.68774954143683,
+      "probabilityBo3A": 50.68774954143683,
+      "probabilityBo5A": 50.85966282930827,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "aurora|yandex": {
+      "mapProbabilityA": 43.68127211445184,
+      "probabilityA": 40.572364884631284,
+      "probabilityBo3A": 40.572364884631284,
+      "probabilityBo5A": 38.27792263168909,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "betboom|falcons": {
+      "mapProbabilityA": 51.618295820207095,
+      "probabilityA": 52.42659610535838,
+      "probabilityBo3A": 52.42659610535838,
+      "probabilityBo5A": 53.03218626645643,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "betboom|gamerlegion": {
+      "mapProbabilityA": 56.43772530435167,
+      "probabilityA": 59.603226543627066,
+      "probabilityBo3A": 59.603226543627066,
+      "probabilityBo5A": 61.93799487144324,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "betboom|l1ga": {
+      "mapProbabilityA": 62.61904386041929,
+      "probabilityA": 68.52667380550474,
+      "probabilityBo3A": 68.52667380550474,
+      "probabilityBo5A": 72.67517649169528,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "betboom|lgd": {
+      "mapProbabilityA": 60.904412592501764,
+      "probabilityA": 66.09729840532623,
+      "probabilityBo3A": 66.09729840532623,
+      "probabilityBo5A": 69.80672284744284,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "betboom|liquid": {
+      "mapProbabilityA": 53.95740101002679,
+      "probabilityA": 55.923706125587124,
+      "probabilityBo3A": 55.923706125587124,
+      "probabilityBo5A": 57.389196657510446,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "betboom|nigma": {
+      "mapProbabilityA": 58.28665087722874,
+      "probabilityA": 62.31616980152809,
+      "probabilityBo3A": 62.31616980152809,
+      "probabilityBo5A": 65.25529858863041,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "betboom|og": {
+      "mapProbabilityA": 58.45017007923883,
+      "probabilityA": 62.55457760726186,
+      "probabilityBo3A": 62.55457760726186,
+      "probabilityBo5A": 65.54496022644987,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "betboom|parivision": {
+      "mapProbabilityA": 48.39044992955613,
+      "probabilityA": 47.586508850972294,
+      "probabilityBo3A": 47.586508850972294,
+      "probabilityBo5A": 46.984177861365694,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "betboom|resilience": {
+      "mapProbabilityA": 56.524224415331645,
+      "probabilityA": 59.73079524261876,
+      "probabilityBo3A": 59.73079524261876,
+      "probabilityBo5A": 62.09477657185837,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "betboom|spirit": {
+      "mapProbabilityA": 53.84708918030021,
+      "probabilityA": 55.759246313257925,
+      "probabilityBo3A": 55.759246313257925,
+      "probabilityBo5A": 57.18487413071692,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "betboom|vg": {
+      "mapProbabilityA": 54.72290947963864,
+      "probabilityA": 57.063294494749236,
+      "probabilityBo3A": 57.063294494749236,
+      "probabilityBo5A": 58.80292195613772,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "betboom|xtreme": {
+      "mapProbabilityA": 60.25644404640927,
+      "probabilityA": 65.1688814726016,
+      "probabilityBo3A": 65.1688814726016,
+      "probabilityBo5A": 68.69818090967651,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "betboom|yandex": {
+      "mapProbabilityA": 54.32791246906415,
+      "probabilityA": 56.47565562822179,
+      "probabilityBo3A": 56.47565562822179,
+      "probabilityBo5A": 58.074394296348956,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "falcons|gamerlegion": {
+      "mapProbabilityA": 54.92364266168469,
+      "probabilityA": 57.36159195031184,
+      "probabilityBo3A": 57.36159195031184,
+      "probabilityBo5A": 59.172323498776,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "falcons|l1ga": {
+      "mapProbabilityA": 60.933608048866006,
+      "probabilityA": 66.13900309539927,
+      "probabilityBo3A": 66.13900309539927,
+      "probabilityBo5A": 69.85636759246712,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "falcons|lgd": {
+      "mapProbabilityA": 59.41973135731609,
+      "probabilityA": 63.96243196099704,
+      "probabilityBo3A": 63.96243196099704,
+      "probabilityBo5A": 67.2485334417981,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "falcons|liquid": {
+      "mapProbabilityA": 52.43289002111479,
+      "probabilityA": 53.6464549989184,
+      "probabilityBo3A": 53.6464549989184,
+      "probabilityBo5A": 54.55447382174007,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "falcons|nigma": {
+      "mapProbabilityA": 56.89417511840046,
+      "probabilityA": 60.27572713074091,
+      "probabilityBo3A": 60.27572713074091,
+      "probabilityBo5A": 62.76367394434392,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "falcons|og": {
+      "mapProbabilityA": 57.01959475844559,
+      "probabilityA": 60.46021443765625,
+      "probabilityBo3A": 60.46021443765625,
+      "probabilityBo5A": 62.98981853539897,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "falcons|parivision": {
+      "mapProbabilityA": 48.14194780398321,
+      "probabilityA": 47.214204638233774,
+      "probabilityBo3A": 47.214204638233774,
+      "probabilityBo5A": 46.5193581343735,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "falcons|resilience": {
+      "mapProbabilityA": 56.23585547002834,
+      "probabilityA": 59.30528584277571,
+      "probabilityBo3A": 59.30528584277571,
+      "probabilityBo5A": 61.57155135961456,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "falcons|spirit": {
+      "mapProbabilityA": 53.244799322461326,
+      "probabilityA": 54.86036626527229,
+      "probabilityBo3A": 54.86036626527229,
+      "probabilityBo5A": 56.06693851550485,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "falcons|vg": {
+      "mapProbabilityA": 53.37467007166884,
+      "probabilityA": 55.05431869026177,
+      "probabilityBo3A": 55.05431869026177,
+      "probabilityBo5A": 56.30831660206921,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "falcons|xtreme": {
+      "mapProbabilityA": 59.02265252994143,
+      "probabilityA": 63.38707510869182,
+      "probabilityBo3A": 63.38707510869182,
+      "probabilityBo5A": 66.55380203007586,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "falcons|yandex": {
+      "mapProbabilityA": 53.62628941904204,
+      "probabilityA": 55.42989700555822,
+      "probabilityBo3A": 55.42989700555822,
+      "probabilityBo5A": 56.775487477070286,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "gamerlegion|l1ga": {
+      "mapProbabilityA": 55.90339318334898,
+      "probabilityA": 58.813943064229754,
+      "probabilityBo3A": 58.813943064229754,
+      "probabilityBo5A": 60.96642563128689,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "gamerlegion|lgd": {
+      "mapProbabilityA": 54.46280678384427,
+      "probabilityA": 56.67643334862746,
+      "probabilityBo3A": 56.67643334862746,
+      "probabilityBo5A": 58.32342686828399,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "gamerlegion|liquid": {
+      "mapProbabilityA": 47.31409851738838,
+      "probabilityA": 45.97502303061152,
+      "probabilityBo3A": 45.97502303061152,
+      "probabilityBo5A": 44.973614469522104,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "gamerlegion|nigma": {
+      "mapProbabilityA": 51.83579188702899,
+      "probabilityA": 52.75245045840089,
+      "probabilityBo3A": 52.75245045840089,
+      "probabilityBo5A": 53.43901760885503,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "gamerlegion|og": {
+      "mapProbabilityA": 51.844760279034354,
+      "probabilityA": 52.76588482287261,
+      "probabilityBo3A": 52.76588482287261,
+      "probabilityBo5A": 53.45578781588267,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "gamerlegion|parivision": {
+      "mapProbabilityA": 43.97235740197344,
+      "probabilityA": 41.00233593810956,
+      "probabilityBo3A": 41.00233593810956,
+      "probabilityBo5A": 38.807192309645224,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "gamerlegion|resilience": {
+      "mapProbabilityA": 51.77982315491534,
+      "probabilityA": 52.668607118129195,
+      "probabilityBo3A": 52.668607118129195,
+      "probabilityBo5A": 53.33435045146364,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "gamerlegion|spirit": {
+      "mapProbabilityA": 48.56196382948781,
+      "probabilityA": 47.843540501044224,
+      "probabilityBo3A": 47.843540501044224,
+      "probabilityBo5A": 47.30516870334308,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "gamerlegion|vg": {
+      "mapProbabilityA": 47.95345143110558,
+      "probabilityA": 46.93189148351883,
+      "probabilityBo3A": 46.93189148351883,
+      "probabilityBo5A": 46.16700512139561,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "gamerlegion|xtreme": {
+      "mapProbabilityA": 53.67579866886134,
+      "probabilityA": 55.503764895597115,
+      "probabilityBo3A": 55.503764895597115,
+      "probabilityBo5A": 56.8673299982208,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "gamerlegion|yandex": {
+      "mapProbabilityA": 48.641972233376634,
+      "probabilityA": 47.96345925573171,
+      "probabilityBo3A": 47.96345925573171,
+      "probabilityBo5A": 47.454949924611086,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "l1ga|lgd": {
+      "mapProbabilityA": 48.76403597348243,
+      "probabilityA": 48.146431573701875,
+      "probabilityBo3A": 48.146431573701875,
+      "probabilityBo5A": 47.68351131092164,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "l1ga|liquid": {
+      "mapProbabilityA": 41.86329441007107,
+      "probabilityA": 37.90268132513006,
+      "probabilityBo3A": 37.90268132513006,
+      "probabilityBo5A": 35.01088639008503,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "l1ga|nigma": {
+      "mapProbabilityA": 46.57387586208619,
+      "probabilityA": 44.86885718595563,
+      "probabilityBo3A": 44.86885718595563,
+      "probabilityBo5A": 43.59609739868587,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "l1ga|og": {
+      "mapProbabilityA": 46.68177775748998,
+      "probabilityA": 45.02997375903692,
+      "probabilityBo3A": 45.02997375903692,
+      "probabilityBo5A": 43.7965769655592,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "l1ga|parivision": {
+      "mapProbabilityA": 40.029267135545446,
+      "probabilityA": 35.242149809562946,
+      "probabilityBo3A": 35.242149809562946,
+      "probabilityBo5A": 31.794585933729092,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "l1ga|resilience": {
+      "mapProbabilityA": 47.52292832914915,
+      "probabilityA": 46.28743229864111,
+      "probabilityBo3A": 46.28743229864111,
+      "probabilityBo5A": 45.363084533880965,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "l1ga|spirit": {
+      "mapProbabilityA": 44.43315255075923,
+      "probabilityA": 41.68423191340407,
+      "probabilityBo3A": 41.68423191340407,
+      "probabilityBo5A": 39.648097977802585,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "l1ga|vg": {
+      "mapProbabilityA": 43.34624594403356,
+      "probabilityA": 40.078284505535734,
+      "probabilityBo3A": 40.078284505535734,
+      "probabilityBo5A": 37.670717617652535,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "l1ga|xtreme": {
+      "mapProbabilityA": 49.170813555180736,
+      "probabilityA": 48.756334354225714,
+      "probabilityBo3A": 48.756334354225714,
+      "probabilityBo5A": 48.44556044608176,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "l1ga|yandex": {
+      "mapProbabilityA": 44.70207069908806,
+      "probabilityA": 42.082846562703075,
+      "probabilityBo3A": 42.082846562703075,
+      "probabilityBo5A": 40.140483418453265,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "lgd|liquid": {
+      "mapProbabilityA": 42.93700290600606,
+      "probabilityA": 39.475973191837156,
+      "probabilityBo3A": 39.475973191837156,
+      "probabilityBo5A": 36.931997909896396,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "lgd|nigma": {
+      "mapProbabilityA": 47.627863612387614,
+      "probabilityA": 46.44446503559894,
+      "probabilityBo3A": 46.44446503559894,
+      "probabilityBo5A": 45.558913809165226,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "lgd|og": {
+      "mapProbabilityA": 47.57840396800489,
+      "probabilityA": 46.37044606150792,
+      "probabilityBo3A": 46.37044606150792,
+      "probabilityBo5A": 45.4666027173315,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "lgd|parivision": {
+      "mapProbabilityA": 41.666709743979474,
+      "probabilityA": 37.61580356183119,
+      "probabilityBo3A": 37.61580356183119,
+      "probabilityBo5A": 34.66201693150622,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "lgd|resilience": {
+      "mapProbabilityA": 48.73211501211148,
+      "probabilityA": 48.098580151392134,
+      "probabilityBo3A": 48.098580151392134,
+      "probabilityBo5A": 47.62373453418625,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "lgd|spirit": {
+      "mapProbabilityA": 45.644011693001225,
+      "probabilityA": 43.48254819638242,
+      "probabilityBo3A": 43.48254819638242,
+      "probabilityBo5A": 41.873754467628885,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "lgd|vg": {
+      "mapProbabilityA": 43.96901074503884,
+      "probabilityA": 40.99738894861954,
+      "probabilityBo3A": 40.99738894861954,
+      "probabilityBo5A": 38.80109849087496,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "lgd|xtreme": {
+      "mapProbabilityA": 49.77795058141161,
+      "probabilityA": 49.66692806178866,
+      "probabilityBo3A": 49.66692806178866,
+      "probabilityBo5A": 49.583662814292495,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "lgd|yandex": {
+      "mapProbabilityA": 45.67342235020733,
+      "probabilityA": 43.52633160395092,
+      "probabilityBo3A": 43.52633160395092,
+      "probabilityBo5A": 41.928071138356096,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "liquid|nigma": {
+      "mapProbabilityA": 54.800179027212046,
+      "probabilityA": 57.17814766585359,
+      "probabilityBo3A": 57.17814766585359,
+      "probabilityBo5A": 58.94518639950482,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "liquid|og": {
+      "mapProbabilityA": 54.70143436550382,
+      "probabilityA": 57.03136793137287,
+      "probabilityBo3A": 57.03136793137287,
+      "probabilityBo5A": 58.76336821022231,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "liquid|parivision": {
+      "mapProbabilityA": 49.528801408590525,
+      "probabilityA": 49.29322303675255,
+      "probabilityBo3A": 49.29322303675255,
+      "probabilityBo5A": 49.116554949380465,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "liquid|resilience": {
+      "mapProbabilityA": 56.20076920948613,
+      "probabilityA": 59.25347047098046,
+      "probabilityBo3A": 59.25347047098046,
+      "probabilityBo5A": 61.5077839304314,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "liquid|spirit": {
+      "mapProbabilityA": 53.268807762364915,
+      "probabilityA": 54.89622613324554,
+      "probabilityBo3A": 54.89622613324554,
+      "probabilityBo5A": 56.11157317095127,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "liquid|vg": {
+      "mapProbabilityA": 51.113821702079385,
+      "probabilityA": 51.670456191949235,
+      "probabilityBo3A": 51.670456191949235,
+      "probabilityBo5A": 52.08772489133025,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "liquid|xtreme": {
+      "mapProbabilityA": 56.927336335076276,
+      "probabilityA": 60.32451871506168,
+      "probabilityBo3A": 60.32451871506168,
+      "probabilityBo5A": 62.82349831515269,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "liquid|yandex": {
+      "mapProbabilityA": 53.23422830799191,
+      "probabilityA": 54.84457630581537,
+      "probabilityBo3A": 54.84457630581537,
+      "probabilityBo5A": 56.04728391972412,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "nigma|og": {
+      "mapProbabilityA": 49.84845925046464,
+      "probabilityA": 49.772689571711474,
+      "probabilityBo3A": 49.772689571711474,
+      "probabilityBo5A": 49.71586283465268,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "nigma|parivision": {
+      "mapProbabilityA": 45.326095592177325,
+      "probabilityA": 43.009564034096556,
+      "probabilityBo3A": 43.009564034096556,
+      "probabilityBo5A": 41.28734702086372,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "nigma|resilience": {
+      "mapProbabilityA": 51.48987417918658,
+      "probabilityA": 52.23414984656659,
+      "probabilityBo3A": 52.23414984656659,
+      "probabilityBo5A": 52.79186097089428,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "nigma|spirit": {
+      "mapProbabilityA": 48.63587877402595,
+      "probabilityA": 47.95432583968402,
+      "probabilityBo3A": 47.95432583968402,
+      "probabilityBo5A": 47.443541614500774,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "nigma|vg": {
+      "mapProbabilityA": 46.00650172129443,
+      "probabilityA": 44.02249026681595,
+      "probabilityBo3A": 44.02249026681595,
+      "probabilityBo5A": 42.54397399732441,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "nigma|xtreme": {
+      "mapProbabilityA": 51.80200422403259,
+      "probabilityA": 52.70183603549749,
+      "probabilityBo3A": 52.70183603549749,
+      "probabilityBo5A": 53.37583330874936,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "nigma|yandex": {
+      "mapProbabilityA": 48.35285910119513,
+      "probabilityA": 47.53018241453893,
+      "probabilityBo3A": 47.53018241453893,
+      "probabilityBo5A": 46.91384449415333,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "og|parivision": {
+      "mapProbabilityA": 46.19299505433972,
+      "probabilityA": 44.30052778430545,
+      "probabilityBo3A": 44.30052778430545,
+      "probabilityBo5A": 42.889405752969424,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "og|resilience": {
+      "mapProbabilityA": 51.9536226975529,
+      "probabilityA": 52.928942790780376,
+      "probabilityBo3A": 52.928942790780376,
+      "probabilityBo5A": 53.65931612651564,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "og|spirit": {
+      "mapProbabilityA": 49.3365284202926,
+      "probabilityA": 49.004851041751884,
+      "probabilityBo3A": 49.004851041751884,
+      "probabilityBo5A": 48.75613680861738,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "og|vg": {
+      "mapProbabilityA": 46.38647520800391,
+      "probabilityA": 44.589149576390405,
+      "probabilityBo3A": 44.589149576390405,
+      "probabilityBo5A": 43.24819595962953,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "og|xtreme": {
+      "mapProbabilityA": 52.230152339136815,
+      "probabilityA": 53.343010140733796,
+      "probabilityBo3A": 53.343010140733796,
+      "probabilityBo5A": 54.17599302592176,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "og|yandex": {
+      "mapProbabilityA": 49.13524207118359,
+      "probabilityA": 48.70299244105657,
+      "probabilityBo3A": 48.70299244105657,
+      "probabilityBo5A": 48.37890219015709,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "parivision|resilience": {
+      "mapProbabilityA": 55.32285586141962,
+      "probabilityA": 57.95412151585164,
+      "probabilityBo3A": 57.95412151585164,
+      "probabilityBo5A": 59.90520542394015,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "parivision|spirit": {
+      "mapProbabilityA": 52.39018733208861,
+      "probabilityA": 53.58254997224682,
+      "probabilityBo3A": 53.58254997224682,
+      "probabilityBo5A": 54.47477836365246,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "parivision|vg": {
+      "mapProbabilityA": 48.637850214134275,
+      "probabilityA": 47.95728080192097,
+      "probabilityBo3A": 47.95728080192097,
+      "probabilityBo5A": 47.4472325719321,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "parivision|xtreme": {
+      "mapProbabilityA": 54.046372979558214,
+      "probabilityA": 56.05630910770122,
+      "probabilityBo3A": 56.05630910770122,
+      "probabilityBo5A": 57.553888517566534,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "parivision|yandex": {
+      "mapProbabilityA": 50.85297240549704,
+      "probabilityA": 51.27933449019658,
+      "probabilityBo3A": 51.27933449019658,
+      "probabilityBo5A": 51.599012992275576,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "resilience|spirit": {
+      "mapProbabilityA": 47.79908197393585,
+      "probabilityA": 46.700755227964066,
+      "probabilityBo3A": 46.700755227964066,
+      "probabilityBo5A": 45.87860627014428,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "resilience|vg": {
+      "mapProbabilityA": 44.196238467993574,
+      "probabilityA": 41.33345607400198,
+      "probabilityBo3A": 41.33345607400198,
+      "probabilityBo5A": 39.215297964777854,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "resilience|xtreme": {
+      "mapProbabilityA": 49.963644005903284,
+      "probabilityA": 49.945466018465694,
+      "probabilityBo3A": 49.945466018465694,
+      "probabilityBo5A": 49.93183253509558,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "resilience|yandex": {
+      "mapProbabilityA": 47.37838789580683,
+      "probabilityA": 46.07118543307334,
+      "probabilityBo3A": 46.07118543307334,
+      "probabilityBo5A": 45.093478847966765,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "spirit|vg": {
+      "mapProbabilityA": 46.22762109251845,
+      "probabilityA": 44.35216846488596,
+      "probabilityBo3A": 44.35216846488596,
+      "probabilityBo5A": 42.95358577551804,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "spirit|xtreme": {
+      "mapProbabilityA": 51.81988662234633,
+      "probabilityA": 52.72862444523675,
+      "probabilityBo3A": 52.72862444523675,
+      "probabilityBo5A": 53.40927489396107,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "spirit|yandex": {
+      "mapProbabilityA": 49.29488829575663,
+      "probabilityA": 48.9424025574771,
+      "probabilityBo3A": 48.9424025574771,
+      "probabilityBo5A": 48.67809082869126,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "vg|xtreme": {
+      "mapProbabilityA": 55.81400570060077,
+      "probabilityA": 58.68170277665518,
+      "probabilityBo3A": 58.68170277665518,
+      "probabilityBo5A": 60.80339484495533,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "vg|yandex": {
+      "mapProbabilityA": 53.70629265044331,
+      "probabilityA": 55.54925659987805,
+      "probabilityBo3A": 55.54925659987805,
+      "probabilityBo5A": 56.92388474149681,
+      "modelId": "dynamic_lr0.2_h120"
+    },
+    "xtreme|yandex": {
+      "mapProbabilityA": 48.106891065437985,
+      "probabilityA": 47.16169352617872,
+      "probabilityBo3A": 47.16169352617872,
+      "probabilityBo5A": 46.45381160883798,
+      "modelId": "dynamic_lr0.2_h120"
+    }
+  },
+  "training": {
+    "through": 1785949465,
+    "series": 1036
+  },
+  "probabilityUnit": "map; explicit BO3/BO5 fields exported"
+}

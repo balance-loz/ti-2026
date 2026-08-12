@@ -1,6 +1,7 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { runForecast } from "../server/forecast-engine.mjs";
 
 type Team = {
   id: string;
@@ -77,6 +78,7 @@ type StatisticalModel = {
   };
   teams: Record<string, StatisticalTeam>;
   pairwise: Record<string, StatisticalPair>;
+  tournamentCalibration?: { selected?: { liveGlobal?: number; liveRematch?: number; formLogitSd?: number; seriesNoiseLogitSd?: number; probabilityTemperature?: number }; validation?: { validated?: boolean } };
 };
 
 type TeamForecast = Team & {
@@ -87,6 +89,9 @@ type TeamForecast = Team & {
   playinLoss: number;
   swissOut: number;
   out: number;
+  champion: number;
+  final: number;
+  top3: number;
   avgWins: number;
   avgLosses: number;
 };
@@ -244,9 +249,7 @@ const SWISS_GROUPS = {
 const SWISS_GROUP_BY_TEAM = Object.fromEntries(Object.entries(SWISS_GROUPS).flatMap(([group, ids]) => ids.map((id) => [id, group]))) as Record<string, "A" | "B">;
 const swissBucketKey = (id: string, wins: number, losses: number, round: number) => `${round <= 3 ? SWISS_GROUP_BY_TEAM[id] : "ALL"}:${wins}-${losses}`;
 const PERSONAL_INFERENCE_SCALE = 0.78;
-const LIVE_GLOBAL_WEIGHT = 0.35;
-const LIVE_REMATCH_WEIGHT = 0.15;
-const TOURNAMENT_FORM_SD = 0.16;
+const calibrationFor = (model: StatisticalModel | null) => ({ liveGlobal: 0, liveRematch: 0, formLogitSd: 0, seriesNoiseLogitSd: .04, probabilityTemperature: 1, ...(model?.tournamentCalibration?.selected ?? {}) });
 
 const ALL_PAIRS: [string, string][] = (() => {
   const firstRoundKeys = new Set(ROUND_ONE.map(([a, b]) => pairKey(a, b)));
@@ -337,7 +340,8 @@ function mixedAnswers(answers: AnswerMap, model: StatisticalModel | null, opinio
   ]));
 }
 
-function applyLiveEvidence(source: AnswerMap, matches: LiveMatch[]) {
+function applyLiveEvidence(source: AnswerMap, matches: LiveMatch[], model: StatisticalModel | null = null) {
+  const calibration = calibrationFor(model);
   const strength = Object.fromEntries(TEAMS.map((team) => [team.id, 0])) as Record<string, number>;
   const direct = new Map<string, number>();
   for (const match of matches.filter((item) => item.winner)) {
@@ -346,11 +350,11 @@ function applyLiveEvidence(source: AnswerMap, matches: LiveMatch[]) {
     const surprise = outcome - p / 100;
     // One TI series is deliberately worth roughly several ordinary historical
     // series: it measures the current lineup, patch and tournament conditions.
-    strength[match.team_a] += surprise * LIVE_GLOBAL_WEIGHT;
-    strength[match.team_b] -= surprise * LIVE_GLOBAL_WEIGHT;
+    strength[match.team_a] += surprise * calibration.liveGlobal;
+    strength[match.team_b] -= surprise * calibration.liveGlobal;
     const key = pairKey(match.team_a, match.team_b);
     const oriented = key.startsWith(`${match.team_a}|`) ? surprise : -surprise;
-    direct.set(key, (direct.get(key) ?? 0) + oriented * LIVE_REMATCH_WEIGHT);
+    direct.set(key, (direct.get(key) ?? 0) + oriented * calibration.liveRematch);
   }
   return Object.fromEntries(ALL_PAIRS.map(([a, b]) => {
     const key = pairKey(a, b);
@@ -374,7 +378,7 @@ function predictionExplanation(
   const personal = storedProbability(a, b, completePersonalAnswers(personalAnswers));
   const base = mode === "stats" ? statisticalAnswers(model) : mode === "mixed" ? mixedAnswers(personalAnswers, model, opinionWeight) : completePersonalAnswers(personalAnswers);
   const beforeLive = storedProbability(a, b, base) ?? 50;
-  const afterLive = storedProbability(a, b, applyLiveEvidence(base, liveMatches)) ?? beforeLive;
+  const afterLive = storedProbability(a, b, applyLiveEvidence(base, liveMatches, model)) ?? beforeLive;
   const pair = model?.pairwise[pairKey(a, b)];
   const orientation = pairKey(a, b).startsWith(`${a}|`) ? 1 : -1;
   const items = [];
@@ -383,8 +387,9 @@ function predictionExplanation(
   if (mode !== "personal" && pair) items.push({ label: "Состав и надёжность", value: orientation * (pair.featureContributions?.rosterPp ?? 0), text: `${pair.modelEffectiveGames.toFixed(1)} эффективных серий · веса 5/5=${model?.methodology.rosterWeights?.["5"] ?? 1}, 4/5=${model?.methodology.rosterWeights?.["4"] ?? 0.25}, 3/5=${model?.methodology.rosterWeights?.["3"] ?? 0.07}` });
   if (mode === "personal" && personal !== undefined) items.push({ label: "Твоё мнение", value: personal - 50, text: "применено напрямую; неоценённые пары достраиваются из среднего рейтинга твоих ответов" });
   if (mode === "mixed" && personal !== undefined && stat !== undefined) items.push({ label: "Твоё мнение", value: (personal - stat) * opinionWeight / 100, text: `${opinionWeight}% смеси: сдвиг ${((personal - stat) * opinionWeight / 100).toFixed(1)} п.п.` });
-  if (liveMatches.length) items.push({ label: "Матчи текущего TI", value: afterLive - beforeLive, text: `${liveMatches.length} серий · общий коэффициент ${LIVE_GLOBAL_WEIGHT}, повторная личная встреча +${LIVE_REMATCH_WEIGHT}` });
-  return { beforeLive, afterLive, items, coefficients: { recencyHalfLifeDays: model?.methodology.recencyHalfLifeDays ?? 45, directPrior: model?.methodology.directMatchPriorSeries ?? 6, rosterWeights: model?.methodology.rosterWeights ?? { 5: 1, 4: 0.25, 3: 0.07 }, personalWeight: mode === "mixed" ? opinionWeight / 100 : mode === "personal" ? 1 : 0, liveGlobal: LIVE_GLOBAL_WEIGHT, liveRematch: LIVE_REMATCH_WEIGHT, uncertainty: pair?.uncertainty ?? 0.07, formShock: TOURNAMENT_FORM_SD, inferenceScale: PERSONAL_INFERENCE_SCALE } };
+  const calibration = calibrationFor(model);
+  if (liveMatches.length) items.push({ label: "Матчи текущего TI", value: afterLive - beforeLive, text: `${liveMatches.length} серий · исторически откалиброванные веса ${calibration.liveGlobal}/${calibration.liveRematch}` });
+  return { beforeLive, afterLive, items, coefficients: { recencyHalfLifeDays: model?.methodology.recencyHalfLifeDays ?? 45, directPrior: model?.methodology.directMatchPriorSeries ?? 6, rosterWeights: model?.methodology.rosterWeights ?? { 5: 1, 4: 0.25, 3: 0.07 }, personalWeight: mode === "mixed" ? opinionWeight / 100 : mode === "personal" ? 1 : 0, liveGlobal: calibration.liveGlobal, liveRematch: calibration.liveRematch, uncertainty: pair?.uncertainty ?? calibration.seriesNoiseLogitSd, formShock: calibration.formLogitSd, inferenceScale: PERSONAL_INFERENCE_SCALE } };
 }
 
 function snapshotEvaluation(snapshot: PredictionSnapshot, matches: LiveMatch[]) {
@@ -477,60 +482,9 @@ function matchupProbability(
   return Math.min(0.9, Math.max(0.1, estimated));
 }
 
-function seededRandom(seed: number) {
-  return () => {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let value = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function normalRandom(random: () => number) {
-  const u = Math.max(1e-9, random());
-  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * random());
-}
-
 function logit(p: number) {
   const safe = Math.min(0.97, Math.max(0.03, p));
   return Math.log(safe / (1 - safe));
-}
-
-function shuffle<T>(items: T[], random: () => number) {
-  const result = [...items];
-  for (let i = result.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(random() * (i + 1));
-    [result[i], result[j]] = [result[j], result[i]];
-  }
-  return result;
-}
-
-function pairBucket(
-  ids: string[],
-  records: Record<string, { wins: number; losses: number; opponents: Set<string> }>,
-  random: () => number,
-) {
-  let best: [string, string][] = [];
-  let bestRematches = Number.POSITIVE_INFINITY;
-
-  for (let attempt = 0; attempt < 36; attempt += 1) {
-    const order = shuffle(ids, random);
-    const pairs: [string, string][] = [];
-    let rematches = 0;
-    for (let i = 0; i < order.length; i += 2) {
-      const pair: [string, string] = [order[i], order[i + 1]];
-      if (records[pair[0]].opponents.has(pair[1])) rematches += 1;
-      pairs.push(pair);
-    }
-    if (rematches < bestRematches) {
-      best = pairs;
-      bestRematches = rematches;
-      if (rematches === 0) break;
-    }
-  }
-
-  return best;
 }
 
 function deterministicPairs(ids: string[], records: Record<string, { wins: number; losses: number; opponents: Set<string> }>, scores: Record<string, number>) {
@@ -625,222 +579,7 @@ function runSimulation(
   seed = Math.floor(Math.random() * 0xffffffff),
   options: { liveMatches?: LiveMatch[]; statisticalModel?: StatisticalModel | null } = {},
 ): SimulationResult {
-  const scores = teamScores(answers);
-  const random = seededRandom(seed);
-  const totals = Object.fromEntries(
-    TEAMS.map((team) => [
-      team.id,
-      { direct: 0, playin: 0, viaPlayin: 0, playinLoss: 0, swissOut: 0, out: 0, wins: 0, losses: 0 },
-    ]),
-  ) as Record<
-    string,
-    { direct: number; playin: number; viaPlayin: number; playinLoss: number; swissOut: number; out: number; wins: number; losses: number }
-  >;
-  const scenarioCounts = new Map<string, number>();
-  const playoffScenarioCounts = new Map<string, number>();
-  const matchupCounts = new Map<string, { count: number; firstWins: number }>();
-  const uniqueSwissPathHashes = new Set<string>();
-  const uniqueTournamentPathHashes = new Set<string>();
-  const uniqueFinalOutcomes = new Set<string>();
-
-  for (let iteration = 0; iteration < iterations; iteration += 1) {
-    const pathParts: string[] = [];
-    let currentRound = 1;
-    const records = Object.fromEntries(
-      TEAMS.map((team) => [
-        team.id,
-        { wins: 0, losses: 0, opponents: new Set<string>() },
-      ]),
-    ) as Record<
-      string,
-      { wins: number; losses: number; opponents: Set<string> }
-    >;
-
-    // A team's tournament form is a latent shock: it is sampled once and then
-    // consistently affects all of that team's matches in this simulated bracket.
-    const formShock = Object.fromEntries(TEAMS.map((team) => [team.id, normalRandom(random) * TOURNAMENT_FORM_SD]));
-    const sampleWinner = (a: string, b: string) => {
-      const base = matchupProbability(a, b, answers, scores);
-      const stat = options.statisticalModel?.pairwise[pairKey(a, b)];
-      const uncertainty = stat?.uncertainty ?? 0.07;
-      const probability = 1 / (1 + Math.exp(-(logit(base) + formShock[a] - formShock[b] + normalRandom(random) * uncertainty)));
-      return random() < probability ? a : b;
-    };
-
-    const playMatch = (a: string, b: string, fixedWinner?: string | null) => {
-      const winner = fixedWinner === a || fixedWinner === b ? fixedWinner : sampleWinner(a, b);
-      const loser = winner === a ? b : a;
-      records[winner].wins += 1;
-      records[loser].losses += 1;
-      records[a].opponents.add(b);
-      records[b].opponents.add(a);
-      pathParts.push(`${currentRound}:${pairKey(a, b)}>${winner}`);
-    };
-
-    const knownSwiss = (options.liveMatches ?? []).filter((match) => match.stage === "swiss");
-    const playRound = (round: number) => {
-      currentRound = round;
-      const actual = knownSwiss.filter((match) => match.round === round);
-      const alreadyPlaying = new Set<string>();
-      actual.forEach((match) => {
-        if (records[match.team_a] && records[match.team_b]) {
-          playMatch(match.team_a, match.team_b, match.winner);
-          alreadyPlaying.add(match.team_a); alreadyPlaying.add(match.team_b);
-        }
-      });
-      if (round === 1) {
-        ROUND_ONE.filter(([a, b]) => !alreadyPlaying.has(a) && !alreadyPlaying.has(b)).forEach(([a, b]) => playMatch(a, b));
-        return;
-      }
-      const active = TEAMS.filter(
-        (team) => records[team.id].wins < 4 && records[team.id].losses < 4 && !alreadyPlaying.has(team.id),
-      );
-      const buckets = new Map<string, string[]>();
-      active.forEach((team) => {
-        const record = records[team.id];
-        const key = swissBucketKey(team.id, record.wins, record.losses, round);
-        buckets.set(key, [...(buckets.get(key) ?? []), team.id]);
-      });
-
-      [...buckets.values()].forEach((ids) => {
-        pairBucket(ids, records, random).forEach(([a, b]) => playMatch(a, b));
-      });
-    };
-    for (let round = 1; round <= 5; round += 1) playRound(round);
-
-    const direct40: string[] = [];
-    const direct41: string[] = [];
-    const via: string[] = [];
-    TEAMS.forEach((team) => {
-      const record = records[team.id];
-      const aggregate = totals[team.id];
-      aggregate.wins += record.wins;
-      aggregate.losses += record.losses;
-      if (record.wins === 4) {
-        aggregate.direct += 1;
-        (record.losses === 0 ? direct40 : direct41).push(team.id);
-      } else if (record.losses === 4) {
-        aggregate.out += 1;
-        aggregate.swissOut += 1;
-      } else {
-        aggregate.playin += 1;
-      }
-    });
-
-    const buchholz = (id: string) =>
-      [...records[id].opponents].reduce((sum, opponent) => sum + records[opponent].wins, 0);
-    const upper = TEAMS.filter((team) => records[team.id].wins === 3).map((team) => team.id)
-      .sort((a, b) => buchholz(b) - buchholz(a) || scores[b] - scores[a] || a.localeCompare(b));
-    const lower = TEAMS.filter((team) => records[team.id].wins === 2).map((team) => team.id)
-      .sort((a, b) => buchholz(a) - buchholz(b) || scores[a] - scores[b] || b.localeCompare(a));
-    const knownPlayins = (options.liveMatches ?? []).filter((match) => match.stage === "playin");
-    const playinPairs = knownPlayins.length === 5 ? knownPlayins.map((match) => [match.team_a, match.team_b] as [string, string]) : upper.map((upperTeam, index) => [upperTeam, lower[index]] as [string, string]);
-
-    playinPairs.forEach(([upperTeam, lowerTeam]) => {
-      const actual = knownPlayins.find((match) => (match.team_a === upperTeam && match.team_b === lowerTeam) || (match.team_a === lowerTeam && match.team_b === upperTeam));
-      const winner = actual?.winner ?? sampleWinner(upperTeam, lowerTeam);
-      const loser = winner === upperTeam ? lowerTeam : upperTeam;
-      totals[winner].viaPlayin += 1;
-      totals[loser].out += 1;
-      totals[loser].playinLoss += 1;
-      via.push(winner);
-      pathParts.push(`P:${pairKey(upperTeam, lowerTeam)}>${winner}`);
-
-      const key = pairKey(upperTeam, lowerTeam);
-      const first = key.split("|")[0];
-      const current = matchupCounts.get(key) ?? { count: 0, firstWins: 0 };
-      current.count += 1;
-      if (winner === first) current.firstWins += 1;
-      matchupCounts.set(key, current);
-    });
-
-    const signature = JSON.stringify({ direct40: direct40.sort(), direct41: direct41.sort(), via: via.sort() });
-    scenarioCounts.set(signature, (scenarioCounts.get(signature) ?? 0) + 1);
-
-    const compactHash = (value: string) => {
-      let first = 2166136261; let second = 2246822519;
-      for (let index = 0; index < value.length; index += 1) {
-        const code = value.charCodeAt(index);
-        first = Math.imul(first ^ code, 16777619);
-        second = Math.imul(second ^ code, 3266489917);
-      }
-      return `${first >>> 0}:${second >>> 0}`;
-    };
-    uniqueSwissPathHashes.add(compactHash(pathParts.join(";")));
-
-    const directSeeds = [...direct40, ...direct41.sort((a, b) => scores[b] - scores[a])];
-    const viaSeeds = [...via].sort((a, b) => scores[b] - scores[a]);
-    const qualifiers = [...directSeeds, ...viaSeeds];
-    const knownPlayoff = (options.liveMatches ?? []).filter((match) => match.stage === "playoff");
-    const knownOpening = knownPlayoff.filter((match) => match.round === 1).slice(0, 4);
-    const openingPairs = knownOpening.length === 4
-      ? knownOpening.map((match) => [match.team_a, match.team_b] as [string, string])
-      : [[qualifiers[0], qualifiers[7]], [qualifiers[3], qualifiers[4]], [qualifiers[1], qualifiers[6]], [qualifiers[2], qualifiers[5]]] as [string, string][];
-    const playoffSeries = (label: string, a: string, b: string) => {
-      const actual = knownPlayoff.find((match) => match.winner && ((match.team_a === a && match.team_b === b) || (match.team_a === b && match.team_b === a)));
-      const winner = actual?.winner ?? sampleWinner(a, b);
-      pathParts.push(`PO:${label}:${pairKey(a, b)}>${winner}`);
-      return { a, b, winner, loser: winner === a ? b : a };
-    };
-    const uq = openingPairs.map(([a, b], index) => playoffSeries(`UQ${index + 1}`, a, b));
-    const us1 = playoffSeries("US1", uq[0].winner, uq[1].winner);
-    const us2 = playoffSeries("US2", uq[2].winner, uq[3].winner);
-    const lr11 = playoffSeries("LR11", uq[0].loser, uq[1].loser);
-    const lr12 = playoffSeries("LR12", uq[2].loser, uq[3].loser);
-    const lr21 = playoffSeries("LR21", lr11.winner, us2.loser);
-    const lr22 = playoffSeries("LR22", lr12.winner, us1.loser);
-    const uf = playoffSeries("UF", us1.winner, us2.winner);
-    const ls = playoffSeries("LS", lr21.winner, lr22.winner);
-    const lf = playoffSeries("LF", ls.winner, uf.loser);
-    const gf = playoffSeries("GF", uf.winner, lf.winner);
-    const playoffSignature = JSON.stringify({ champion: gf.winner, runnerUp: gf.loser, third: lf.loser });
-    playoffScenarioCounts.set(playoffSignature, (playoffScenarioCounts.get(playoffSignature) ?? 0) + 1);
-    uniqueFinalOutcomes.add(`${signature}|${playoffSignature}`);
-    uniqueTournamentPathHashes.add(compactHash(pathParts.join(";")));
-  }
-
-  const teams = TEAMS.map((team) => ({
-    ...team,
-    qualify: ((totals[team.id].direct + totals[team.id].viaPlayin) / iterations) * 100,
-    direct: (totals[team.id].direct / iterations) * 100,
-    playin: (totals[team.id].playin / iterations) * 100,
-    viaPlayin: (totals[team.id].viaPlayin / iterations) * 100,
-    playinLoss: (totals[team.id].playinLoss / iterations) * 100,
-    swissOut: (totals[team.id].swissOut / iterations) * 100,
-    out: (totals[team.id].out / iterations) * 100,
-    avgWins: totals[team.id].wins / iterations,
-    avgLosses: totals[team.id].losses / iterations,
-  })).sort((a, b) => b.qualify - a.qualify || b.direct - a.direct);
-
-  const scenarios = [...scenarioCounts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([signature, count]) => ({
-      ...JSON.parse(signature),
-      probability: (count / iterations) * 100,
-    })) as Scenario[];
-
-  const playoffScenarios = [...playoffScenarioCounts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([signature, count]) => ({ ...JSON.parse(signature), probability: (count / iterations) * 100 })) as PlayoffScenario[];
-
-  const playinMatchups = [...matchupCounts.entries()]
-    .sort((a, b) => b[1].count - a[1].count)
-    .slice(0, 10)
-    .map(([key, value]) => {
-      const [a, b] = key.split("|");
-      return {
-        a,
-        b,
-        probability: (value.count / iterations) * 100,
-        aWinProbability: (value.firstWins / value.count) * 100,
-      };
-    });
-
-  const swissDuplicateRate = 100 * (1 - uniqueSwissPathHashes.size / iterations);
-  const tournamentDuplicateRate = 100 * (1 - uniqueTournamentPathHashes.size / iterations);
-  return { teams, scenarios, playoffScenarios, playinMatchups, iterations, seed, uniqueBrackets: uniqueTournamentPathHashes.size, duplicateRate: tournamentDuplicateRate, uniqueSwissPaths: uniqueSwissPathHashes.size, swissDuplicateRate, uniqueTournamentPaths: uniqueTournamentPathHashes.size, tournamentDuplicateRate, uniqueSwissOutcomes: scenarioCounts.size, uniquePlayoffPodiums: playoffScenarioCounts.size, uniqueFinalOutcomes: uniqueFinalOutcomes.size, formatVersion: "hidden-groups-r1-r3-playoff-v2" };
+  return runForecast(answers, iterations, seed, { matches: options.liveMatches ?? [], stats: options.statisticalModel });
 }
 
 function TeamMark({ team, small = false }: { team: Team; small?: boolean }) {
@@ -931,7 +670,7 @@ export default function Home() {
   const scheduledLiveMatches = useMemo(() => liveMatches.filter((match) => !match.winner), [liveMatches]);
   const forecastSource = useMemo(() => {
     const base = forecastMode === "stats" ? statisticalAnswers(stats) : forecastMode === "mixed" ? mixedAnswers(answers, stats, opinionWeight) : completePersonalAnswers(answers);
-    return applyLiveEvidence(base, completedLiveMatches);
+    return applyLiveEvidence(base, completedLiveMatches, stats);
   }, [answers, completedLiveMatches, forecastMode, opinionWeight, stats]);
   const likelyBracket = useMemo(() => buildLikelyBracket(forecastSource, liveMatches), [forecastSource, liveMatches]);
   const likelyPlayoff = useMemo(() => buildLikelyPlayoff(likelyBracket, forecastSource, liveMatches), [forecastSource, likelyBracket, liveMatches]);
@@ -1020,7 +759,7 @@ export default function Home() {
     previousLiveSignature.current = liveConstraintSignature;
     if (!liveConstraintSignature) return;
     const baseSource = forecastMode === "stats" ? statisticalAnswers(stats) : forecastMode === "mixed" ? mixedAnswers(answers, stats, opinionWeight) : answers;
-    const source = applyLiveEvidence(baseSource, completedLiveMatches);
+    const source = applyLiveEvidence(baseSource, completedLiveMatches, stats);
     const timer = window.setTimeout(() => {
       setResult(runSimulation(source, iterationCount, undefined, { liveMatches, statisticalModel: stats }));
       setAdminMessage("Прогноз автоматически пересчитан с учётом официальных пар и результатов TI.");
@@ -1076,7 +815,7 @@ export default function Home() {
         : forecastMode === "mixed"
           ? mixedAnswers(answers, stats, opinionWeight)
           : answers;
-      const source = applyLiveEvidence(baseSource, completedLiveMatches);
+      const source = applyLiveEvidence(baseSource, completedLiveMatches, stats);
       const simulation = runSimulation(source, iterationCount, undefined, { liveMatches, statisticalModel: stats });
       setResult(simulation);
       if (serverAvailable && serverState?.isAdmin) {
@@ -1146,7 +885,7 @@ export default function Home() {
   const addLiveMatch = async (event: React.FormEvent) => {
     event.preventDefault();
     const baseSource = forecastMode === "stats" ? statisticalAnswers(stats) : forecastMode === "mixed" ? mixedAnswers(answers, stats, opinionWeight) : answers;
-    const source = applyLiveEvidence(baseSource, completedLiveMatches);
+    const source = applyLiveEvidence(baseSource, completedLiveMatches, stats);
     const predictedProbability = (storedProbability(matchTeamA, matchTeamB, source) ?? 50);
     const response = await fetch("/api/admin/matches", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stage: matchStage, round: matchRound, teamA: matchTeamA, teamB: matchTeamB, winner: matchWinner, predictedProbability }) });
     if (!response.ok) { setAdminMessage("Матч не сохранён: проверьте команды и раунд."); return; }
@@ -1218,6 +957,7 @@ export default function Home() {
           <a href="#matchups">Матчапы</a>
           <a href="#forecast">Прогноз</a>
           <a href="/drafts">Пики</a>
+          <a href="/intel">Разведка</a>
           <a href="#format">Формат</a>
         </nav>
         <div className="live-pill"><span /> TI 2026</div>
@@ -1296,7 +1036,7 @@ export default function Home() {
           {snapshots.length ? <div className="snapshot-list">{snapshots.map((snapshot) => {
             const evaluation = snapshotEvaluation(snapshot, completedLiveMatches);
             return <details key={snapshot.id}>
-              <summary><time>{new Date(snapshot.created_at).toLocaleString("ru-RU")}</time><b>{snapshot.trigger === "manual_run" ? "ручной прогон" : snapshot.trigger.startsWith("pre_") ? "до начала раунда" : snapshot.trigger.startsWith("auto_pairing_") ? "после публикации пар" : snapshot.trigger.startsWith("auto_") ? "после результата" : snapshot.trigger} · {snapshot.forecast_mode === "mixed" ? `смесь ${snapshot.opinion_weight}% мнения` : snapshot.forecast_mode === "stats" ? "только статистика" : "только мнение"} · {snapshot.result.formatVersion === "hidden-groups-r1-r3-playoff-v2" ? "Swiss + плей-офф" : snapshot.result.formatVersion === "hidden-groups-r1-r3-v1" ? "группы R1–R3" : "старый формат"}</b><span>{evaluation.count ? `${evaluation.correct}/${evaluation.count} верно` : "ждёт новых матчей"}</span></summary>
+              <summary><time>{new Date(snapshot.created_at).toLocaleString("ru-RU")}</time><b>{snapshot.trigger === "manual_run" ? "ручной прогон" : snapshot.trigger.startsWith("pre_") ? "до начала раунда" : snapshot.trigger.startsWith("auto_pairing_") ? "после публикации пар" : snapshot.trigger.startsWith("auto_") ? "после результата" : snapshot.trigger} · {snapshot.forecast_mode === "mixed" ? `смесь ${snapshot.opinion_weight}% мнения` : snapshot.forecast_mode === "stats" ? "только статистика" : "только мнение"} · {snapshot.result.formatVersion?.startsWith("hidden-groups-r1-r3-playoff-") ? "Swiss + плей-офф" : snapshot.result.formatVersion === "hidden-groups-r1-r3-v1" ? "группы R1–R3" : "старый формат"}</b><span>{evaluation.count ? `${evaluation.correct}/${evaluation.count} верно` : "ждёт новых матчей"}</span></summary>
               <div className="snapshot-metrics">
                 <div><b>{snapshot.iterations.toLocaleString("ru-RU")}</b><span>прогонов</span></div>
                 <div><b>{snapshot.result.uniqueBrackets?.toLocaleString("ru-RU") ?? "—"}</b><span>уникальных путей</span></div>
@@ -1461,7 +1201,7 @@ export default function Home() {
         </div>
 
         <div className="likely-bracket">
-          <div className="likely-bracket__head"><div><p className="eyebrow">ВЕРОЯТНЕЙШИЙ СЦЕНАРИЙ</p><h3>Одна конкретная сетка</h3></div><span>Фаворит выигрывает каждый матч; R1–R3 жеребятся внутри скрытой группы, R4–R5 — среди всех команд с тем же счётом. Реванши исключаются, пока возможно. Фактические результаты отмечены точкой.</span></div>
+          <div className="likely-bracket__head"><div><p className="eyebrow">ЭКСПЕРИМЕНТАЛЬНЫЙ СЦЕНАРИЙ · НЕ ГОТОВЫЕ КОЭФФИЦИЕНТЫ</p><h3>Одна конкретная сетка</h3></div><span>Фаворит выигрывает каждый матч; R1–R3 жеребятся внутри скрытой группы, R4–R5 — среди всех команд с тем же счётом. Реванши исключаются, пока возможно. Фактические результаты отмечены точкой.</span></div>
           <div className="likely-bracket__scroll">
             <table>
               <thead><tr><th>#</th><th>Команда</th><th>Группа</th><th>Счёт</th>{[1, 2, 3, 4, 5].map((round) => <th key={round}>Раунд {round}</th>)}<th>Итог</th></tr></thead>

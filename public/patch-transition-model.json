@@ -1,0 +1,1006 @@
+{
+  "schemaVersion": 2,
+  "modelId": "3bbbfa17c9e0c900",
+  "generatedAt": "2026-08-12T13:25:07.292Z",
+  "sourceTimelineChecksum": "16d2d0d54e9761cc331fbe99ce3aecafc19bfd87947e34d6b4c3d5aa6d8baa22",
+  "researchWindow": {
+    "years": 2,
+    "start": "2024-08-11T22:16:42.000Z",
+    "end": "2026-08-12T09:55:06.000Z"
+  },
+  "deploymentStatus": "experimental",
+  "currentVersion": "7.41e",
+  "previousVersion": "7.41d",
+  "target": {
+    "name": "team_opponent_adjusted_hero_residual",
+    "formula": "4 * sum(sideOutcome - pre-map online team+side expectation) / (heroGames + 40)",
+    "leakageControl": "team and side state updated only after each map"
+  },
+  "featureNames": [
+    "previousStrength",
+    "logPreviousGames",
+    "changed",
+    "logNotes",
+    "numericNotes",
+    "increaseWords",
+    "decreaseWords",
+    "reworkWords",
+    "abilityNotes",
+    "talentNotes",
+    "majorPatch",
+    "logGlobalNotes"
+  ],
+  "heroForecasts": {
+    "1": {
+      "previousStrength": -0.001978346411032534,
+      "predictedDelta": -0.0038995468786532815,
+      "predictedStrength": -0.005877893289685816,
+      "previousGames": 26,
+      "changed": false
+    },
+    "2": {
+      "previousStrength": -0.057304196244002535,
+      "predictedDelta": 0.03213514937157514,
+      "predictedStrength": -0.025169046872427395,
+      "previousGames": 267,
+      "changed": true
+    },
+    "3": {
+      "previousStrength": 0.33145702520720755,
+      "predictedDelta": -0.2535034392426053,
+      "predictedStrength": 0.07795358596460222,
+      "previousGames": 243,
+      "changed": true
+    },
+    "4": {
+      "previousStrength": -0.004000112969053134,
+      "predictedDelta": 0.0004242346190105886,
+      "predictedStrength": -0.003575878350042545,
+      "previousGames": 8,
+      "changed": false
+    },
+    "5": {
+      "previousStrength": -0.0019313261750731948,
+      "predictedDelta": -0.004979672569775308,
+      "predictedStrength": -0.006910998744848502,
+      "previousGames": 40,
+      "changed": false
+    },
+    "6": {
+      "previousStrength": -0.07166768036241658,
+      "predictedDelta": 0.05880459046016657,
+      "predictedStrength": -0.012863089902250012,
+      "previousGames": 245,
+      "changed": true
+    },
+    "7": {
+      "previousStrength": -0.007352537616279714,
+      "predictedDelta": -0.0001246523382079087,
+      "predictedStrength": -0.007477189954487623,
+      "previousGames": 31,
+      "changed": false
+    },
+    "8": {
+      "previousStrength": 0.18352615612205456,
+      "predictedDelta": -0.14956653845691398,
+      "predictedStrength": 0.03395961766514058,
+      "previousGames": 35,
+      "changed": false
+    },
+    "9": {
+      "previousStrength": 0.06263438385197174,
+      "predictedDelta": -0.05709926805492526,
+      "predictedStrength": 0.0055351157970464845,
+      "previousGames": 79,
+      "changed": false
+    },
+    "10": {
+      "previousStrength": 0.02110013778037283,
+      "predictedDelta": -0.008597281558245969,
+      "predictedStrength": 0.012502856222126862,
+      "previousGames": 23,
+      "changed": true
+    },
+    "11": {
+      "previousStrength": 0.09017101852571965,
+      "predictedDelta": -0.09103817777135902,
+      "predictedStrength": -0.0008671592456393623,
+      "previousGames": 328,
+      "changed": true
+    },
+    "12": {
+      "previousStrength": -0.06759259653047989,
+      "predictedDelta": 0.05337976210059772,
+      "predictedStrength": -0.014212834429882165,
+      "previousGames": 52,
+      "changed": true
+    },
+    "13": {
+      "previousStrength": 0.1515090760834441,
+      "predictedDelta": -0.1210226741712149,
+      "predictedStrength": 0.030486401912229205,
+      "previousGames": 190,
+      "changed": true
+    },
+    "14": {
+      "previousStrength": -0.3415014163617635,
+      "predictedDelta": 0.25871346010310564,
+      "predictedStrength": -0.08278795625865787,
+      "previousGames": 78,
+      "changed": false
+    },
+    "15": {
+      "previousStrength": -0.23333123430594474,
+      "predictedDelta": 0.1762978601877539,
+      "predictedStrength": -0.057033374118190844,
+      "previousGames": 33,
+      "changed": false
+    },
+    "16": {
+      "previousStrength": -0.2265756635864946,
+      "predictedDelta": 0.17342056641311704,
+      "predictedStrength": -0.053155097173377575,
+      "previousGames": 12,
+      "changed": false
+    },
+    "17": {
+      "previousStrength": -0.05117381231693299,
+      "predictedDelta": 0.02946505978894767,
+      "predictedStrength": -0.021708752527985323,
+      "previousGames": 205,
+      "changed": false
+    },
+    "18": {
+      "previousStrength": 0.04659301598806624,
+      "predictedDelta": -0.04334055834110697,
+      "predictedStrength": 0.003252457646959271,
+      "previousGames": 48,
+      "changed": false
+    },
+    "19": {
+      "previousStrength": -0.0838760531784632,
+      "predictedDelta": 0.05110393862342282,
+      "predictedStrength": -0.03277211455504037,
+      "previousGames": 234,
+      "changed": true
+    },
+    "20": {
+      "previousStrength": 0.06183270138108847,
+      "predictedDelta": -0.045035199057037664,
+      "predictedStrength": 0.016797502324050806,
+      "previousGames": 64,
+      "changed": true
+    },
+    "21": {
+      "previousStrength": -0.08239549873285297,
+      "predictedDelta": 0.05358562524387766,
+      "predictedStrength": -0.02880987348897531,
+      "previousGames": 229,
+      "changed": false
+    },
+    "22": {
+      "previousStrength": -0.13578598437037986,
+      "predictedDelta": 0.1100619901034012,
+      "predictedStrength": -0.02572399426697866,
+      "previousGames": 124,
+      "changed": true
+    },
+    "23": {
+      "previousStrength": 0.0726841108559518,
+      "predictedDelta": -0.06431521670639499,
+      "predictedStrength": 0.008368894149556813,
+      "previousGames": 61,
+      "changed": false
+    },
+    "25": {
+      "previousStrength": -0.1327165146159133,
+      "predictedDelta": 0.0907453951938984,
+      "predictedStrength": -0.041971119422014896,
+      "previousGames": 129,
+      "changed": true
+    },
+    "26": {
+      "previousStrength": 0.031944862143477464,
+      "predictedDelta": -0.03599504715410047,
+      "predictedStrength": -0.004050185010623007,
+      "previousGames": 252,
+      "changed": false
+    },
+    "27": {
+      "previousStrength": 0.07600183661494217,
+      "predictedDelta": -0.0664197757525729,
+      "predictedStrength": 0.009582060862369277,
+      "previousGames": 50,
+      "changed": false
+    },
+    "28": {
+      "previousStrength": 0.10624852848382967,
+      "predictedDelta": -0.09219097587441304,
+      "predictedStrength": 0.01405755260941663,
+      "previousGames": 119,
+      "changed": false
+    },
+    "29": {
+      "previousStrength": 0.09223822128329916,
+      "predictedDelta": -0.08180103248395482,
+      "predictedStrength": 0.01043718879934434,
+      "previousGames": 149,
+      "changed": false
+    },
+    "30": {
+      "previousStrength": 0.04892008255571215,
+      "predictedDelta": -0.041612340393360994,
+      "predictedStrength": 0.007307742162351152,
+      "previousGames": 70,
+      "changed": true
+    },
+    "31": {
+      "previousStrength": 0.03834782872010028,
+      "predictedDelta": -0.03942930613511029,
+      "predictedStrength": -0.0010814774150100098,
+      "previousGames": 134,
+      "changed": false
+    },
+    "32": {
+      "previousStrength": 0.09218134074948595,
+      "predictedDelta": -0.07410176423645129,
+      "predictedStrength": 0.018079576513034656,
+      "previousGames": 6,
+      "changed": false
+    },
+    "33": {
+      "previousStrength": 0.13569989130530963,
+      "predictedDelta": -0.11329990061674095,
+      "predictedStrength": 0.022399990688568683,
+      "previousGames": 55,
+      "changed": false
+    },
+    "34": {
+      "previousStrength": 0.026475208735452484,
+      "predictedDelta": -0.025838233373007957,
+      "predictedStrength": 0.0006369753624445272,
+      "previousGames": 23,
+      "changed": false
+    },
+    "35": {
+      "previousStrength": 0.05573865345384394,
+      "predictedDelta": -0.04052893075614651,
+      "predictedStrength": 0.01520972269769743,
+      "previousGames": 71,
+      "changed": true
+    },
+    "36": {
+      "previousStrength": 0.12244718409643816,
+      "predictedDelta": -0.09960048652080966,
+      "predictedStrength": 0.022846697575628502,
+      "previousGames": 165,
+      "changed": true
+    },
+    "37": {
+      "previousStrength": 0.06634289387929437,
+      "predictedDelta": -0.05940031737622445,
+      "predictedStrength": 0.006942576503069925,
+      "previousGames": 62,
+      "changed": false
+    },
+    "38": {
+      "previousStrength": 0.08334076901347486,
+      "predictedDelta": -0.08563164312737348,
+      "predictedStrength": -0.002290874113898625,
+      "previousGames": 132,
+      "changed": true
+    },
+    "39": {
+      "previousStrength": -0.28517771826186566,
+      "predictedDelta": 0.2272062746627109,
+      "predictedStrength": -0.057971443599154765,
+      "previousGames": 97,
+      "changed": true
+    },
+    "40": {
+      "previousStrength": -0.19150433460085742,
+      "predictedDelta": 0.15188580356089187,
+      "predictedStrength": -0.03961853103996554,
+      "previousGames": 26,
+      "changed": true
+    },
+    "41": {
+      "previousStrength": -0.16605880161520598,
+      "predictedDelta": 0.1222323487093207,
+      "predictedStrength": -0.04382645290588527,
+      "previousGames": 61,
+      "changed": false
+    },
+    "42": {
+      "previousStrength": -0.08075965426251042,
+      "predictedDelta": 0.05805862980516273,
+      "predictedStrength": -0.022701024457347688,
+      "previousGames": 22,
+      "changed": false
+    },
+    "43": {
+      "previousStrength": -0.18601593415959558,
+      "predictedDelta": 0.13801120966867464,
+      "predictedStrength": -0.04800472449092094,
+      "previousGames": 31,
+      "changed": true
+    },
+    "44": {
+      "previousStrength": 0.0771781026114536,
+      "predictedDelta": -0.053363202060244044,
+      "predictedStrength": 0.02381490055120955,
+      "previousGames": 14,
+      "changed": true
+    },
+    "45": {
+      "previousStrength": 0.04861437161177821,
+      "predictedDelta": -0.040129009397599585,
+      "predictedStrength": 0.008485362214178623,
+      "previousGames": 3,
+      "changed": true
+    },
+    "46": {
+      "previousStrength": -0.05122222832928982,
+      "predictedDelta": 0.04400878543168236,
+      "predictedStrength": -0.007213442897607461,
+      "previousGames": 48,
+      "changed": true
+    },
+    "47": {
+      "previousStrength": -0.22434646007385822,
+      "predictedDelta": 0.16676408638291265,
+      "predictedStrength": -0.05758237369094557,
+      "previousGames": 92,
+      "changed": false
+    },
+    "48": {
+      "previousStrength": -0.020259732391657435,
+      "predictedDelta": 0.006899462623245929,
+      "predictedStrength": -0.013360269768411506,
+      "previousGames": 108,
+      "changed": false
+    },
+    "49": {
+      "previousStrength": -0.20445559398386395,
+      "predictedDelta": 0.16263329712277913,
+      "predictedStrength": -0.04182229686108482,
+      "previousGames": 20,
+      "changed": true
+    },
+    "50": {
+      "previousStrength": -0.023036862566947907,
+      "predictedDelta": 0.014580511581659543,
+      "predictedStrength": -0.008456350985288364,
+      "previousGames": 11,
+      "changed": false
+    },
+    "51": {
+      "previousStrength": -0.07722031295941009,
+      "predictedDelta": 0.06236043257614216,
+      "predictedStrength": -0.01485988038326793,
+      "previousGames": 292,
+      "changed": true
+    },
+    "52": {
+      "previousStrength": -0.08807075851467294,
+      "predictedDelta": 0.06561365358937232,
+      "predictedStrength": -0.02245710492530062,
+      "previousGames": 10,
+      "changed": false
+    },
+    "53": {
+      "previousStrength": 0.06972251300590089,
+      "predictedDelta": -0.06407094210625258,
+      "predictedStrength": 0.005651570899648309,
+      "previousGames": 141,
+      "changed": false
+    },
+    "54": {
+      "previousStrength": 0.10289632463989241,
+      "predictedDelta": -0.08843079579753226,
+      "predictedStrength": 0.014465528842360159,
+      "previousGames": 75,
+      "changed": false
+    },
+    "55": {
+      "previousStrength": 0.14114258655030942,
+      "predictedDelta": -0.11889894454347225,
+      "predictedStrength": 0.022243642006837178,
+      "previousGames": 95,
+      "changed": false
+    },
+    "56": {
+      "previousStrength": 0.05240138930517898,
+      "predictedDelta": -0.04854611959905239,
+      "predictedStrength": 0.003855269706126589,
+      "previousGames": 63,
+      "changed": false
+    },
+    "57": {
+      "previousStrength": -0.03142071847932723,
+      "predictedDelta": 0.02731210620962369,
+      "predictedStrength": -0.004108612269703542,
+      "previousGames": 21,
+      "changed": true
+    },
+    "58": {
+      "previousStrength": 0.019017016012690575,
+      "predictedDelta": -0.023473167824130472,
+      "predictedStrength": -0.004456151811439896,
+      "previousGames": 95,
+      "changed": false
+    },
+    "59": {
+      "previousStrength": -0.08025362812513694,
+      "predictedDelta": 0.05668695967088409,
+      "predictedStrength": -0.023566668454252843,
+      "previousGames": 33,
+      "changed": false
+    },
+    "60": {
+      "previousStrength": 0.09507935514719112,
+      "predictedDelta": -0.07851471112233799,
+      "predictedStrength": 0.016564644024853137,
+      "previousGames": 79,
+      "changed": true
+    },
+    "61": {
+      "previousStrength": -0.07615407548582312,
+      "predictedDelta": 0.05630226426328595,
+      "predictedStrength": -0.019851811222537166,
+      "previousGames": 10,
+      "changed": false
+    },
+    "62": {
+      "previousStrength": -0.07480581550642898,
+      "predictedDelta": 0.05416146626098147,
+      "predictedStrength": -0.02064434924544751,
+      "previousGames": 16,
+      "changed": false
+    },
+    "63": {
+      "previousStrength": -0.16883825748034062,
+      "predictedDelta": 0.1346866333975465,
+      "predictedStrength": -0.034151624082794124,
+      "previousGames": 21,
+      "changed": true
+    },
+    "64": {
+      "previousStrength": -0.33309955106342115,
+      "predictedDelta": 0.25327231375002773,
+      "predictedStrength": -0.07982723731339342,
+      "previousGames": 53,
+      "changed": true
+    },
+    "65": {
+      "previousStrength": 0.07100183817285537,
+      "predictedDelta": -0.05238482740370883,
+      "predictedStrength": 0.018617010769146534,
+      "previousGames": 69,
+      "changed": true
+    },
+    "66": {
+      "previousStrength": -0.10972651991242217,
+      "predictedDelta": 0.08277296610154095,
+      "predictedStrength": -0.02695355381088123,
+      "previousGames": 9,
+      "changed": false
+    },
+    "67": {
+      "previousStrength": -0.05725049960664242,
+      "predictedDelta": 0.03871242273596708,
+      "predictedStrength": -0.018538076870675338,
+      "previousGames": 55,
+      "changed": true
+    },
+    "68": {
+      "previousStrength": 0.1117577906361292,
+      "predictedDelta": -0.08843332310166542,
+      "predictedStrength": 0.02332446753446378,
+      "previousGames": 22,
+      "changed": true
+    },
+    "69": {
+      "previousStrength": -0.02918631097255382,
+      "predictedDelta": 0.019424647935775176,
+      "predictedStrength": -0.009761663036778643,
+      "previousGames": 169,
+      "changed": true
+    },
+    "70": {
+      "previousStrength": 0.04277926830855112,
+      "predictedDelta": -0.04014789378377831,
+      "predictedStrength": 0.0026313745247728074,
+      "previousGames": 44,
+      "changed": false
+    },
+    "71": {
+      "previousStrength": -0.024944900686198684,
+      "predictedDelta": 0.01103874120583753,
+      "predictedStrength": -0.013906159480361153,
+      "previousGames": 89,
+      "changed": false
+    },
+    "72": {
+      "previousStrength": -0.0017521448292569899,
+      "predictedDelta": 0.0018012791420509275,
+      "predictedStrength": 0.00004913431279393761,
+      "previousGames": 36,
+      "changed": true
+    },
+    "73": {
+      "previousStrength": 0.15863759114716933,
+      "predictedDelta": -0.13159507779483942,
+      "predictedStrength": 0.027042513352329905,
+      "previousGames": 64,
+      "changed": false
+    },
+    "74": {
+      "previousStrength": 0.19794174644235982,
+      "predictedDelta": -0.15164664368216935,
+      "predictedStrength": 0.04629510276019047,
+      "previousGames": 142,
+      "changed": true
+    },
+    "75": {
+      "previousStrength": -0.1453814603982774,
+      "predictedDelta": 0.10480777775986329,
+      "predictedStrength": -0.04057368263841411,
+      "previousGames": 102,
+      "changed": false
+    },
+    "76": {
+      "previousStrength": 0.003995211708804867,
+      "predictedDelta": 0.01108144106176065,
+      "predictedStrength": 0.015076652770565517,
+      "previousGames": 10,
+      "changed": true
+    },
+    "77": {
+      "previousStrength": 0.3535308897882655,
+      "predictedDelta": -0.28399238204718763,
+      "predictedStrength": 0.06953850774107789,
+      "previousGames": 67,
+      "changed": false
+    },
+    "78": {
+      "previousStrength": 0.2101033500760216,
+      "predictedDelta": -0.17094552069171537,
+      "predictedStrength": 0.03915782938430623,
+      "previousGames": 45,
+      "changed": false
+    },
+    "79": {
+      "previousStrength": -0.09744735013673857,
+      "predictedDelta": 0.06910895336004862,
+      "predictedStrength": -0.02833839677668995,
+      "previousGames": 50,
+      "changed": false
+    },
+    "80": {
+      "previousStrength": 0.3849619494954064,
+      "predictedDelta": -0.31959809085623053,
+      "predictedStrength": 0.06536385863917588,
+      "previousGames": 66,
+      "changed": true
+    },
+    "81": {
+      "previousStrength": 0.19689826936343943,
+      "predictedDelta": -0.1504464881109534,
+      "predictedStrength": 0.04645178125248603,
+      "previousGames": 16,
+      "changed": true
+    },
+    "82": {
+      "previousStrength": 0.2242905399767879,
+      "predictedDelta": -0.1807002294541932,
+      "predictedStrength": 0.04359031052259471,
+      "previousGames": 26,
+      "changed": false
+    },
+    "83": {
+      "previousStrength": 0.2651992574279969,
+      "predictedDelta": -0.2142386613560397,
+      "predictedStrength": 0.05096059607195719,
+      "previousGames": 161,
+      "changed": true
+    },
+    "84": {
+      "previousStrength": 0.22195626002224605,
+      "predictedDelta": -0.18155786211648733,
+      "predictedStrength": 0.04039839790575872,
+      "previousGames": 78,
+      "changed": false
+    },
+    "85": {
+      "previousStrength": -0.14272867253205515,
+      "predictedDelta": 0.10360860443334288,
+      "predictedStrength": -0.03912006809871227,
+      "previousGames": 181,
+      "changed": true
+    },
+    "86": {
+      "previousStrength": -0.100239699158497,
+      "predictedDelta": 0.06639574623168777,
+      "predictedStrength": -0.03384395292680922,
+      "previousGames": 361,
+      "changed": false
+    },
+    "87": {
+      "previousStrength": -0.3234864380898157,
+      "predictedDelta": 0.24445417831557992,
+      "predictedStrength": -0.07903225977423578,
+      "previousGames": 84,
+      "changed": false
+    },
+    "88": {
+      "previousStrength": -0.099944909821718,
+      "predictedDelta": 0.07214778456380294,
+      "predictedStrength": -0.027797125257915056,
+      "previousGames": 32,
+      "changed": false
+    },
+    "89": {
+      "previousStrength": -0.1102862821226749,
+      "predictedDelta": 0.08174222376167195,
+      "predictedStrength": -0.028544058361002947,
+      "previousGames": 17,
+      "changed": false
+    },
+    "90": {
+      "previousStrength": 0.49897448429263197,
+      "predictedDelta": -0.3902251551333355,
+      "predictedStrength": 0.10874932915929647,
+      "previousGames": 177,
+      "changed": true
+    },
+    "91": {
+      "previousStrength": 0.15735127965807136,
+      "predictedDelta": -0.12848645094736819,
+      "predictedStrength": 0.028864828710703172,
+      "previousGames": 27,
+      "changed": false
+    },
+    "92": {
+      "previousStrength": -0.2362961470179061,
+      "predictedDelta": 0.19157750626733827,
+      "predictedStrength": -0.044718640750567834,
+      "previousGames": 14,
+      "changed": true
+    },
+    "93": {
+      "previousStrength": 0.061606425160277735,
+      "predictedDelta": -0.05339082332628082,
+      "predictedStrength": 0.008215601833996916,
+      "previousGames": 24,
+      "changed": false
+    },
+    "94": {
+      "previousStrength": -0.2579931527541836,
+      "predictedDelta": 0.2069720256763839,
+      "predictedStrength": -0.05102112707779971,
+      "previousGames": 27,
+      "changed": true
+    },
+    "95": {
+      "previousStrength": -0.11152953000404275,
+      "predictedDelta": 0.08944239051207858,
+      "predictedStrength": -0.02208713949196417,
+      "previousGames": 15,
+      "changed": true
+    },
+    "96": {
+      "previousStrength": 0.1663369461474286,
+      "predictedDelta": -0.13401237808627367,
+      "predictedStrength": 0.03232456806115494,
+      "previousGames": 173,
+      "changed": true
+    },
+    "97": {
+      "previousStrength": -0.004637606061722219,
+      "predictedDelta": 0.004384353383569522,
+      "predictedStrength": -0.000253252678152697,
+      "previousGames": 48,
+      "changed": true
+    },
+    "98": {
+      "previousStrength": 0.08439440533913696,
+      "predictedDelta": -0.07511472667924504,
+      "predictedStrength": 0.009279678659891918,
+      "previousGames": 119,
+      "changed": false
+    },
+    "99": {
+      "previousStrength": -0.16376526353462809,
+      "predictedDelta": 0.12147319970014635,
+      "predictedStrength": -0.04229206383448174,
+      "previousGames": 40,
+      "changed": false
+    },
+    "100": {
+      "previousStrength": -0.08636662868999792,
+      "predictedDelta": 0.056743461096788655,
+      "predictedStrength": -0.029623167593209265,
+      "previousGames": 224,
+      "changed": false
+    },
+    "101": {
+      "previousStrength": -0.229645261954838,
+      "predictedDelta": 0.17217139640174414,
+      "predictedStrength": -0.05747386555309386,
+      "previousGames": 55,
+      "changed": false
+    },
+    "102": {
+      "previousStrength": 0.09220830054207378,
+      "predictedDelta": -0.07698304902620398,
+      "predictedStrength": 0.0152252515158698,
+      "previousGames": 21,
+      "changed": false
+    },
+    "103": {
+      "previousStrength": 0.0012386367936419668,
+      "predictedDelta": 0.013757933447219844,
+      "predictedStrength": 0.01499657024086181,
+      "previousGames": 6,
+      "changed": true
+    },
+    "104": {
+      "previousStrength": -0.18074531165379581,
+      "predictedDelta": 0.11462072048115554,
+      "predictedStrength": -0.06612459117264027,
+      "previousGames": 22,
+      "changed": true
+    },
+    "105": {
+      "previousStrength": 0.019609417760786493,
+      "predictedDelta": -0.02513265500028112,
+      "predictedStrength": -0.005523237239494626,
+      "previousGames": 154,
+      "changed": false
+    },
+    "106": {
+      "previousStrength": 0.13685977531470084,
+      "predictedDelta": -0.12185517417811534,
+      "predictedStrength": 0.0150046011365855,
+      "previousGames": 284,
+      "changed": true
+    },
+    "107": {
+      "previousStrength": 0.08167753367786551,
+      "predictedDelta": -0.08416003978307793,
+      "predictedStrength": -0.0024825061052124175,
+      "previousGames": 188,
+      "changed": true
+    },
+    "108": {
+      "previousStrength": -0.4110223781734603,
+      "predictedDelta": 0.3226721655681322,
+      "predictedStrength": -0.0883502126053281,
+      "previousGames": 131,
+      "changed": true
+    },
+    "109": {
+      "previousStrength": -0.11834826080038269,
+      "predictedDelta": 0.08399412275842269,
+      "predictedStrength": -0.03435413804196,
+      "previousGames": 90,
+      "changed": false
+    },
+    "110": {
+      "previousStrength": -0.15280283062492564,
+      "predictedDelta": 0.10929702542648292,
+      "predictedStrength": -0.043505805198442715,
+      "previousGames": 173,
+      "changed": false
+    },
+    "111": {
+      "previousStrength": -0.21464929538814256,
+      "predictedDelta": 0.1795869865598851,
+      "predictedStrength": -0.03506230882825748,
+      "previousGames": 21,
+      "changed": true
+    },
+    "112": {
+      "previousStrength": -0.02083608548590079,
+      "predictedDelta": 0.006671687415023294,
+      "predictedStrength": -0.014164398070877495,
+      "previousGames": 142,
+      "changed": false
+    },
+    "113": {
+      "previousStrength": 0.0022637174659371835,
+      "predictedDelta": -0.003842448314183105,
+      "predictedStrength": -0.0015787308482459214,
+      "previousGames": 6,
+      "changed": false
+    },
+    "114": {
+      "previousStrength": -0.13106112730541344,
+      "predictedDelta": 0.09542335486473615,
+      "predictedStrength": -0.0356377724406773,
+      "previousGames": 49,
+      "changed": false
+    },
+    "119": {
+      "previousStrength": 0.03216068542803751,
+      "predictedDelta": -0.0342586632230928,
+      "predictedStrength": -0.0020979777950552933,
+      "previousGames": 117,
+      "changed": false
+    },
+    "120": {
+      "previousStrength": -0.14506659770014063,
+      "predictedDelta": 0.10320943509006174,
+      "predictedStrength": -0.041857162610078893,
+      "previousGames": 176,
+      "changed": false
+    },
+    "121": {
+      "previousStrength": 0.0018708892458155397,
+      "predictedDelta": 0.0010892799788265765,
+      "predictedStrength": 0.002960169224642116,
+      "previousGames": 86,
+      "changed": true
+    },
+    "123": {
+      "previousStrength": 0.0420054680132201,
+      "predictedDelta": -0.030471092080997776,
+      "predictedStrength": 0.011534375932222327,
+      "previousGames": 347,
+      "changed": true
+    },
+    "126": {
+      "previousStrength": -0.18052334853937582,
+      "predictedDelta": 0.13257613563228718,
+      "predictedStrength": -0.04794721290708864,
+      "previousGames": 90,
+      "changed": false
+    },
+    "128": {
+      "previousStrength": 0.032674752013239994,
+      "predictedDelta": -0.052927733595788166,
+      "predictedStrength": -0.020252981582548173,
+      "previousGames": 314,
+      "changed": true
+    },
+    "129": {
+      "previousStrength": -0.4638994671472415,
+      "predictedDelta": 0.3552548192268013,
+      "predictedStrength": -0.10864464792044021,
+      "previousGames": 58,
+      "changed": true
+    },
+    "131": {
+      "previousStrength": 0.028004163987440708,
+      "predictedDelta": -0.024425856447511694,
+      "predictedStrength": 0.003578307539929014,
+      "previousGames": 183,
+      "changed": true
+    },
+    "135": {
+      "previousStrength": -0.05209333587769486,
+      "predictedDelta": 0.031026391186903805,
+      "predictedStrength": -0.021066944690791053,
+      "previousGames": 146,
+      "changed": false
+    },
+    "136": {
+      "previousStrength": 0.12369996654605664,
+      "predictedDelta": -0.10227982949618161,
+      "predictedStrength": 0.021420137049875027,
+      "previousGames": 28,
+      "changed": false
+    },
+    "137": {
+      "previousStrength": -0.04055752921597074,
+      "predictedDelta": 0.02456063393627858,
+      "predictedStrength": -0.015996895279692162,
+      "previousGames": 52,
+      "changed": false
+    },
+    "138": {
+      "previousStrength": 0.14171383956252384,
+      "predictedDelta": -0.10737420382555043,
+      "predictedStrength": 0.034339635736973406,
+      "previousGames": 62,
+      "changed": true
+    },
+    "145": {
+      "previousStrength": -0.08869757186810409,
+      "predictedDelta": 0.059714433720420054,
+      "predictedStrength": -0.028983138147684037,
+      "previousGames": 141,
+      "changed": false
+    },
+    "155": {
+      "previousStrength": 0.07085402407881965,
+      "predictedDelta": -0.06520589357632375,
+      "predictedStrength": 0.005648130502495893,
+      "previousGames": 156,
+      "changed": false
+    }
+  },
+  "pairForecastRule": {
+    "status": "disabled_until_direct_residual_transition_is_trained",
+    "synergy": "not inferred from hero deltas",
+    "counter": "not inferred from hero deltas",
+    "priorGames": 20
+  },
+  "validation": {
+    "notesAddValue": false,
+    "comparedWithCarryAndNoNotesAblation": true,
+    "targetOutcomesExcludedFromArtifact": true,
+    "teamOpponentAdjustedTarget": true
+  },
+  "backtest": {
+    "all": {
+      "baseline": {
+        "rows": 2238,
+        "weightedRmse": 0.17167369022817186,
+        "weightedMae": 0.1348522311849928,
+        "weightedCorrelation": 0
+      },
+      "noNotes": {
+        "rows": 2238,
+        "weightedRmse": 0.1363708023669814,
+        "weightedMae": 0.10605097673819508,
+        "weightedCorrelation": 0.6076734743812416
+      },
+      "ensemble": {
+        "rows": 2238,
+        "weightedRmse": 0.139432571308526,
+        "weightedMae": 0.10798850151813671,
+        "weightedCorrelation": 0.5871329830805952
+      },
+      "rmseImprovementVsCarry": 0.03224111891964587,
+      "rmseImprovementFromNotes": -0.003061768941544585
+    },
+    "changedHeroes": {
+      "baseline": {
+        "rows": 1154,
+        "weightedRmse": 0.1700493212482449,
+        "weightedMae": 0.13473022788710093,
+        "weightedCorrelation": 0
+      },
+      "noNotes": {
+        "rows": 1154,
+        "weightedRmse": 0.13930325414686415,
+        "weightedMae": 0.109455618903887,
+        "weightedCorrelation": 0.5720766629184858
+      },
+      "ensemble": {
+        "rows": 1154,
+        "weightedRmse": 0.14522118511075485,
+        "weightedMae": 0.1132145907928234,
+        "weightedCorrelation": 0.5348971213493374
+      }
+    },
+    "candidates": {
+      "ridge_0.1": {
+        "rows": 2238,
+        "weightedRmse": 0.14014326049169443,
+        "weightedMae": 0.10839466379009088,
+        "weightedCorrelation": 0.5831922241747972
+      },
+      "ridge_1": {
+        "rows": 2238,
+        "weightedRmse": 0.14004378561439257,
+        "weightedMae": 0.10833957245982824,
+        "weightedCorrelation": 0.5838107409602661
+      },
+      "ridge_10": {
+        "rows": 2238,
+        "weightedRmse": 0.1394948542412971,
+        "weightedMae": 0.10804066406668338,
+        "weightedCorrelation": 0.5871380294628852
+      },
+      "ridge_100": {
+        "rows": 2238,
+        "weightedRmse": 0.13841643777184692,
+        "weightedMae": 0.1073474204939105,
+        "weightedCorrelation": 0.5927276802447979
+      }
+    }
+  }
+}

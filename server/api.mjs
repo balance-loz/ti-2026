@@ -1,12 +1,13 @@
 import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { completedSeriesFromMaps, OPENDOTA_TEAMS } from "./live-series.mjs";
 import { scheduledSeriesFromCybersportHtml } from "./schedule-source.mjs";
 import { buildForecastSource, ROUND_ONE, runForecast } from "./forecast-engine.mjs";
+import { predictTemporalDraft } from "./draft-inference.mjs";
 
 const PORT = Number(process.env.API_PORT || 3001);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "data");
@@ -25,6 +26,12 @@ const SCHEDULE_TIMEZONE_OFFSET = process.env.SCHEDULE_TIMEZONE_OFFSET || "+03:00
 const AUTO_SNAPSHOT_ITERATIONS = Math.max(10_000, Number(process.env.AUTO_SNAPSHOT_ITERATIONS || 100_000));
 const TI_PLAYIN_START = Date.parse(process.env.TI_PLAYIN_START || "2026-08-17T00:00:00+08:00") / 1000;
 const TI_PLAYOFF_START = Date.parse(process.env.TI_PLAYOFF_START || "2026-08-20T00:00:00+08:00") / 1000;
+const DRAFT_TEMPORAL_MODEL = path.resolve(process.env.DRAFT_TEMPORAL_MODEL || "public/draft-temporal-model.json");
+const NEXTGEN_MODEL_FILES = {
+  team: path.resolve(process.env.ALL_PRO_TEAM_MODEL || "public/all-pro-team-model.json"),
+  draft: path.resolve(process.env.DRAFT_NEXTGEN_MODEL || "public/draft-nextgen-model.json"),
+  series: path.resolve(process.env.NEXTGEN_SERIES_CALIBRATION || "public/nextgen-series-calibration.json"),
+};
 
 mkdirSync(DATA_DIR, { recursive: true });
 const db = new DatabaseSync(DB_PATH);
@@ -91,6 +98,7 @@ let liveSyncPromise = null;
 let autoForecastRunning = false;
 let autoSnapshotTimer = null;
 const loginAttempts = new Map();
+let temporalModelCache = { mtimeMs: -1, value: null };
 const json = (res, status, value) => {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   res.end(JSON.stringify(value));
@@ -132,6 +140,41 @@ async function body(req) {
     chunks.push(chunk);
   }
   return chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
+}
+
+function currentTemporalModel() {
+  const mtimeMs = statSync(DRAFT_TEMPORAL_MODEL).mtimeMs;
+  if (temporalModelCache.mtimeMs !== mtimeMs) {
+    const value = JSON.parse(readFileSync(DRAFT_TEMPORAL_MODEL, "utf8"));
+    if (value.schemaVersion !== 1 || !value.modelId) throw new Error("invalid_temporal_model");
+    temporalModelCache = { mtimeMs, value };
+  }
+  return temporalModelCache.value;
+}
+
+function temporalModelMetadata(model) {
+  return {
+    modelId: model.modelId,
+    modelFamily: model.modelFamily,
+    trainedAt: model.trainedAt,
+    dataset: model.dataset,
+    deployment: model.deployment,
+    backtest: { eligiblePatches: model.backtest?.eligiblePatches ?? 0, aggregate: model.backtest?.aggregate ?? null },
+    arena: model.arena ? { leaderboard: model.arena.leaderboard, finalStack: model.arena.finalStack } : null,
+  };
+}
+
+function nextgenModelMetadata() {
+  const team = JSON.parse(readFileSync(NEXTGEN_MODEL_FILES.team, "utf8"));
+  const draft = JSON.parse(readFileSync(NEXTGEN_MODEL_FILES.draft, "utf8"));
+  const series = JSON.parse(readFileSync(NEXTGEN_MODEL_FILES.series, "utf8"));
+  return {
+    deployment: "diagnostic_only",
+    activeForecastUnchanged: true,
+    team: { modelId: team.modelId, status: team.status, selected: team.selected, training: team.training, frozenHoldout: team.validation?.frozenHoldout },
+    draft: { modelId: draft.modelId, status: draft.status, winner: draft.winner, training: draft.training, test: draft.test, sideFlip: draft.sideFlip },
+    series: { sourceModelId: series.sourceModelId, sourceModel: series.sourceModel, status: series.status, dataset: series.dataset, holdout: series.holdout, monteCarlo: series.monteCarlo },
+  };
 }
 
 function publicState() {
@@ -352,7 +395,29 @@ async function syncLiveMatches(trigger = "timer") {
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-    if (req.method === "GET" && url.pathname === "/api/health") return json(res, 200, { ok: true });
+    if (req.method === "GET" && url.pathname === "/api/health") {
+      let nextgen = false;
+      try { nextgen = Boolean(nextgenModelMetadata().team.modelId); } catch { nextgen = false; }
+      return json(res, 200, { ok: true, models: { temporal: Boolean(currentTemporalModel().modelId), nextgen } });
+    }
+    if (req.method === "GET" && url.pathname === "/api/models/nextgen") return json(res, 200, nextgenModelMetadata());
+    if (req.method === "GET" && url.pathname === "/api/draft/model") {
+      try { return json(res, 200, temporalModelMetadata(currentTemporalModel())); }
+      catch { return json(res, 503, { error: "temporal_model_unavailable" }); }
+    }
+    if (req.method === "POST" && url.pathname === "/api/draft/predict") {
+      if (!sameOrigin(req)) return json(res, 403, { error: "origin" });
+      try {
+        const data = await body(req);
+        const model = currentTemporalModel();
+        const prediction = predictTemporalDraft(model, data);
+        return json(res, 200, { ...prediction, deployment: model.deployment });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        const status = reason === "invalid_picks" || reason === "invalid_side" ? 400 : 503;
+        return json(res, status, { error: reason });
+      }
+    }
     if (req.method === "GET" && url.pathname === "/api/state") return json(res, 200, { ...publicState(), isAdmin: isAdmin(req) });
     if (req.method === "POST" && url.pathname === "/api/login") {
       if (!sameOrigin(req)) return json(res, 403, { error: "origin" });
