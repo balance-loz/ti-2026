@@ -7,6 +7,10 @@ import { buildForecastSource, ROUND_ONE, runForecast, SWISS_GROUPS, SWISS_GROUP_
 import { combineDraftSignals } from "../server/draft-combiner.mjs";
 import { predictTemporalDraft } from "../server/draft-inference.mjs";
 import { bestOfProbability, convertSeriesProbability } from "../server/team-model.mjs";
+import { assessPredictionConfidence } from "../server/prediction-confidence.mjs";
+import { externalFeatureDecision, pearsonCorrelation } from "../server/external-feature-gate.mjs";
+import { normalizeDatdotaPayload } from "../scripts/sync-datdota-source.mjs";
+import { predictionDecision, sharpenProbability } from "../server/prediction-decision.mjs";
 
 test("draft decides a matchup between equally strong teams", () => {
   const betterDraft = combineDraftSignals(0.5, [0.25]);
@@ -300,7 +304,10 @@ test("server forecast can create an automatic snapshot payload", async () => {
   assert.equal(result.scenarios[0].direct40.length, 1);
   assert.equal(result.scenarios[0].direct41.length, 2);
   assert.equal(result.scenarios[0].via.length, 5);
+  assert.ok(result.scenarios.every((scenario) => scenario.occurrences >= 1 && scenario.probability > 0));
+  assert.ok(result.scenarios.every((scenario) => Math.abs(scenario.probability - 100 * scenario.occurrences / result.iterations) < 1e-12));
   assert.equal(result.playoffScenarios.length, 3);
+  assert.ok(result.playoffScenarios.every((scenario) => scenario.occurrences >= 1));
   assert.ok(result.playoffScenarios.every((scenario) => new Set([scenario.champion, scenario.runnerUp, scenario.third]).size === 3));
   assert.ok(result.uniqueTournamentPaths <= result.iterations);
   assert.ok(result.uniqueSwissPaths <= result.iterations);
@@ -364,4 +371,41 @@ test("cross-page navigation does not depend on broken Vinext Link prefetch", asy
     assert.doesNotMatch(page, /from ["']next\/link["']/);
     assert.match(page, /<a[^>]+href="\/"[^>]*>.*Турнир/s);
   }
+});
+
+test("prediction confidence separates probability from evidence and flags roulette matches", () => {
+  const weak = assessPredictionConfidence({ modelEffectiveGames: 2.3, directEffectiveGames: 0, rosterReliability: .65 }, 61);
+  const strong = assessPredictionConfidence({ modelEffectiveGames: 18, directEffectiveGames: 2.5, rosterReliability: 1 }, 61);
+  const tossup = assessPredictionConfidence({ modelEffectiveGames: 3, directEffectiveGames: .2, rosterReliability: 1 }, 51);
+  assert.equal(weak.roulette, true);
+  assert.ok(weak.score < strong.score);
+  assert.equal(strong.roulette, false);
+  assert.equal(tossup.roulette, true);
+  assert.equal(assessPredictionConfidence(null, 70).roulette, true);
+  assert.equal(assessPredictionConfidence(null, 50, { fixed: true }).roulette, false);
+});
+
+test("external provider features stay shadow until they add temporally safe OOF value", () => {
+  assert.ok(pearsonCorrelation([1, 2, 3, 4], [2, 4, 6, 8]) > .99);
+  assert.equal(externalFeatureDecision({ correlations: [.4], logLossDelta: -.002, brierDelta: -.001, bootstrapUpper95: -.0002, temporalSafe: true, deduplicated: true, coverage: .9 }).activate, true);
+  const leaked = externalFeatureDecision({ correlations: [.3], logLossDelta: -.01, brierDelta: -.01, bootstrapUpper95: -.005, temporalSafe: false, deduplicated: true, coverage: 1 });
+  assert.equal(leaked.activate, false);
+  assert.match(leaked.reasons.join(" "), /утечка/);
+  assert.equal(externalFeatureDecision({ correlations: [.995], logLossDelta: -.001, brierDelta: -.001, bootstrapUpper95: -.0001, temporalSafe: true, deduplicated: true, coverage: 1 }).activate, false);
+});
+
+test("DatDota adapter preserves provenance and never activates imported aggregates", () => {
+  const normalized = normalizeDatdotaPayload(JSON.stringify({ data: [{ heroId: 1, position: 2, games: 10 }] }), { asOf: "2026-08-12T00:00:00Z" });
+  assert.equal(normalized.rows.length, 1);
+  assert.match(normalized.artifact.source.checksum, /^sha256:[a-f0-9]{64}$/);
+  assert.equal(normalized.artifact.modelPolicy.status, "shadow");
+  assert.equal(normalized.artifact.modelPolicy.aggregateRowsAreNotTrainingMatches, true);
+});
+
+test("decision layer can sharpen probabilities but refuses unreliable matches", () => {
+  assert.ok(sharpenProbability(60, .8) > 60);
+  assert.equal(sharpenProbability(50, .7), 50);
+  assert.equal(predictionDecision({ modelEffectiveGames: 2, directEffectiveGames: 0, rosterReliability: .6 }, 70, { temperature: .8 }).status, "roulette");
+  assert.equal(predictionDecision({ modelEffectiveGames: 30, directEffectiveGames: 4, rosterReliability: 1 }, 51).status, "even");
+  assert.equal(predictionDecision({ modelEffectiveGames: 30, directEffectiveGames: 4, rosterReliability: 1 }, 70).status, "pick");
 });

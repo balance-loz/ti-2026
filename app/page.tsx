@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { runForecast } from "../server/forecast-engine.mjs";
+import { assessPredictionConfidence } from "../server/prediction-confidence.mjs";
+import { predictionDecision } from "../server/prediction-decision.mjs";
 
 type Team = {
   id: string;
@@ -100,6 +102,7 @@ type ForecastOutcome = "direct" | "playinWin" | "playinLoss" | "swissOut";
 
 type Scenario = {
   probability: number;
+  occurrences?: number;
   direct40: string[];
   direct41: string[];
   via: string[];
@@ -107,6 +110,7 @@ type Scenario = {
 
 type PlayoffScenario = {
   probability: number;
+  occurrences?: number;
   champion: string;
   runnerUp: string;
   third: string;
@@ -138,12 +142,13 @@ type SimulationResult = {
   formatVersion?: string;
 };
 
-type LikelyRound = { opponent: string; won: boolean; fixed: boolean; probability: number } | null;
+type PredictionConfidence = ReturnType<typeof assessPredictionConfidence>;
+type LikelyRound = { opponent: string; won: boolean; fixed: boolean; probability: number; confidence: PredictionConfidence } | null;
 type LikelyBracket = {
   rows: { id: string; wins: number; losses: number; status: "direct" | "playinWin" | "playinLoss" | "out"; rounds: LikelyRound[] }[];
-  playins: { a: string; b: string; winner: string; probabilityA: number }[];
+  playins: { a: string; b: string; winner: string; probabilityA: number; confidence: PredictionConfidence }[];
 };
-type LikelyPlayoffMatch = { label: string; a: string; b: string; winner: string; probabilityA: number; format: "BO3" | "BO5" };
+type LikelyPlayoffMatch = { label: string; a: string; b: string; winner: string; probabilityA: number; format: "BO3" | "BO5"; confidence: PredictionConfidence };
 type LikelyPlayoff = { qualifiers: string[]; stages: { name: string; matches: LikelyPlayoffMatch[] }[] };
 
 type LiveMatch = {
@@ -200,12 +205,18 @@ type PredictionSnapshot = {
   probabilities: AnswerMap;
   result: SimulationResult;
   created_at: string;
+  inputs?: { answers?: AnswerMap; cutoffCompletedMatches?: number } | null;
+  snapshot_kind?: "original" | "revision";
+  root_snapshot_id?: number | null;
+  parent_snapshot_id?: number | null;
+  profile_key?: string | null;
 };
 
 type ServerState = {
   answers: AnswerMap;
   matches: LiveMatch[];
   snapshots: PredictionSnapshot[];
+  officialForecast?: { forecastMode: "stats"; opinionWeight: 0; iterations: number };
   isAdmin: boolean;
   refreshRunning: boolean;
   refresh: { value: string; updated_at: string } | null;
@@ -504,7 +515,17 @@ function deterministicPairs(ids: string[], records: Record<string, { wins: numbe
   return solve(ordered).pairs;
 }
 
-function buildLikelyBracket(answers: AnswerMap, liveMatches: LiveMatch[]): LikelyBracket {
+function pairConfidence(model: StatisticalModel | null, a: string, b: string, probability: number, fixed = false) {
+  return assessPredictionConfidence(model?.pairwise[pairKey(a, b)], probability, { fixed });
+}
+
+function ConfidenceBadge({ confidence, compact = false }: { confidence: PredictionConfidence; compact?: boolean }) {
+  return <span className={`prediction-confidence prediction-confidence--${confidence.level} ${confidence.roulette ? "is-roulette" : ""}`} title={`${confidence.roulette ? "Рулетка: " : ""}уверенность ${confidence.score}/100 · ${confidence.reasons.join(" · ")}`} aria-label={`${confidence.roulette ? "Рулетка, " : ""}уверенность модели ${confidence.score} из 100`}>
+    {confidence.roulette ? <b aria-hidden="true">🎰</b> : null}<i>{compact ? confidence.score : `уверенность ${confidence.score}/100`}</i>
+  </span>;
+}
+
+function buildLikelyBracket(answers: AnswerMap, liveMatches: LiveMatch[], model: StatisticalModel | null): LikelyBracket {
   const scores = teamScores(answers);
   const records = Object.fromEntries(TEAMS.map((team) => [team.id, { wins: 0, losses: 0, opponents: new Set<string>(), rounds: Array<LikelyRound>(5).fill(null) }])) as Record<string, { wins: number; losses: number; opponents: Set<string>; rounds: LikelyRound[] }>;
   const play = (round: number, a: string, b: string, fixedWinner?: string | null, savedProbabilityA?: number | null) => {
@@ -513,8 +534,9 @@ function buildLikelyBracket(answers: AnswerMap, liveMatches: LiveMatch[]): Likel
     const loser = winner === a ? b : a;
     records[winner].wins += 1; records[loser].losses += 1;
     records[a].opponents.add(b); records[b].opponents.add(a);
-    records[a].rounds[round - 1] = { opponent: b, won: winner === a, fixed: Boolean(fixedWinner), probability: probabilityA };
-    records[b].rounds[round - 1] = { opponent: a, won: winner === b, fixed: Boolean(fixedWinner), probability: 100 - probabilityA };
+    const confidence = pairConfidence(model, a, b, probabilityA, Boolean(fixedWinner));
+    records[a].rounds[round - 1] = { opponent: b, won: winner === a, fixed: Boolean(fixedWinner), probability: probabilityA, confidence };
+    records[b].rounds[round - 1] = { opponent: a, won: winner === b, fixed: Boolean(fixedWinner), probability: 100 - probabilityA, confidence };
   };
   for (let round = 1; round <= 5; round += 1) {
     const known = liveMatches.filter((match) => match.stage === "swiss" && match.round === round);
@@ -535,7 +557,7 @@ function buildLikelyBracket(answers: AnswerMap, liveMatches: LiveMatch[]): Likel
   const lower = TEAMS.filter((team) => records[team.id].wins === 2).map((team) => team.id).sort((a, b) => buchholz(a) - buchholz(b) || scores[a] - scores[b]);
   const knownPlayins = liveMatches.filter((match) => match.stage === "playin");
   const playinPairs = knownPlayins.length === 5 ? knownPlayins.map((match) => [match.team_a, match.team_b] as [string, string]) : upper.map((a, index) => [a, lower[index]] as [string, string]);
-  const playins = playinPairs.map(([a, b]) => { const actual = knownPlayins.find((match) => (match.team_a === a && match.team_b === b) || (match.team_a === b && match.team_b === a)); const probabilityA = actual ? (actual.team_a === a ? actual.predicted_probability : actual.predicted_probability === null ? null : 100 - actual.predicted_probability) ?? (storedProbability(a, b, answers) ?? 50) : storedProbability(a, b, answers) ?? 50; return { a, b, winner: actual?.winner ?? (probabilityA >= 50 ? a : b), probabilityA }; });
+  const playins = playinPairs.map(([a, b]) => { const actual = knownPlayins.find((match) => (match.team_a === a && match.team_b === b) || (match.team_a === b && match.team_b === a)); const probabilityA = actual ? (actual.team_a === a ? actual.predicted_probability : actual.predicted_probability === null ? null : 100 - actual.predicted_probability) ?? (storedProbability(a, b, answers) ?? 50) : storedProbability(a, b, answers) ?? 50; return { a, b, winner: actual?.winner ?? (probabilityA >= 50 ? a : b), probabilityA, confidence: pairConfidence(model, a, b, probabilityA, Boolean(actual?.winner)) }; });
   const playinWinners = new Set(playins.map((match) => match.winner));
   const playinLosers = new Set(playins.map((match) => match.winner === match.a ? match.b : match.a));
   const statusOrder = { direct: 0, playinWin: 1, playinLoss: 2, out: 3 };
@@ -549,14 +571,14 @@ function buildLikelyBracket(answers: AnswerMap, liveMatches: LiveMatch[]): Likel
   return { rows, playins };
 }
 
-function buildLikelyPlayoff(swiss: LikelyBracket, answers: AnswerMap, liveMatches: LiveMatch[]): LikelyPlayoff {
+function buildLikelyPlayoff(swiss: LikelyBracket, answers: AnswerMap, liveMatches: LiveMatch[], model: StatisticalModel | null): LikelyPlayoff {
   const direct = swiss.rows.filter((row) => row.status === "direct").map((row) => row.id);
   const qualifiers = [...direct, ...swiss.playins.map((match) => match.winner)].slice(0, 8);
   const versus = (label: string, a: string, b: string, format: "BO3" | "BO5" = "BO3"): LikelyPlayoffMatch => {
     const actual = liveMatches.find((match) => match.stage === "playoff" && ((match.team_a === a && match.team_b === b) || (match.team_a === b && match.team_b === a)));
     const saved = actual?.predicted_probability === null || actual?.predicted_probability === undefined ? null : actual.team_a === a ? actual.predicted_probability : 100 - actual.predicted_probability;
     const probabilityA = saved ?? storedProbability(a, b, answers) ?? 50;
-    return { label, a, b, winner: actual?.winner ?? (probabilityA >= 50 ? a : b), probabilityA, format };
+    return { label, a, b, winner: actual?.winner ?? (probabilityA >= 50 ? a : b), probabilityA, format, confidence: pairConfidence(model, a, b, probabilityA, Boolean(actual?.winner)) };
   };
   if (qualifiers.length < 8) return { qualifiers, stages: [] };
   const knownOpening = liveMatches.filter((match) => match.stage === "playoff" && match.round === 1).slice(0, 4);
@@ -580,6 +602,11 @@ function runSimulation(
   options: { liveMatches?: LiveMatch[]; statisticalModel?: StatisticalModel | null } = {},
 ): SimulationResult {
   return runForecast(answers, iterations, seed, { matches: options.liveMatches ?? [], stats: options.statisticalModel });
+}
+
+function formatRareScenarioProbability(probability: number) {
+  if (!Number.isFinite(probability) || probability <= 0) return "—";
+  return probability < .01 ? "<0.01%" : `${probability.toFixed(2)}%`;
 }
 
 function TeamMark({ team, small = false }: { team: Team; small?: boolean }) {
@@ -619,7 +646,7 @@ function MatchupBreakdown({ a, explanation, open = false, compact = false }: { a
 
 function PlayoffMatchCard({ match, explanation }: { match: LikelyPlayoffMatch; explanation: ReturnType<typeof predictionExplanation> }) {
   return <article className="playoff-match">
-    <header><span>{match.label}</span><b>{match.format}</b></header>
+    <header><span>{match.label}</span><ConfidenceBadge confidence={match.confidence} compact /><b>{match.format}</b></header>
     <div className={match.winner === match.a ? "is-winner" : ""}><TeamMark team={getTeam(match.a)} small /><strong>{getTeam(match.a).name}</strong><em>{match.probabilityA.toFixed(0)}%</em></div>
     <div className={match.winner === match.b ? "is-winner" : ""}><TeamMark team={getTeam(match.b)} small /><strong>{getTeam(match.b).name}</strong><em>{(100 - match.probabilityA).toFixed(0)}%</em></div>
     <MatchupBreakdown a={match.a} explanation={explanation} compact />
@@ -636,9 +663,11 @@ export default function Home() {
   const [answersLoaded, setAnswersLoaded] = useState(false);
   const [backupMessage, setBackupMessage] = useState("");
   const [stats, setStats] = useState<StatisticalModel | null>(null);
-  const [forecastMode, setForecastMode] = useState<"personal" | "mixed" | "stats">("mixed");
-  const [opinionWeight, setOpinionWeight] = useState(50);
-  const [iterationCount, setIterationCount] = useState(100000);
+  const [forecastMode, setForecastMode] = useState<"personal" | "mixed" | "stats">("stats");
+  const [opinionWeight, setOpinionWeight] = useState(0);
+  const [iterationCount, setIterationCount] = useState(250000);
+  const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
+  const [decisionPolicy, setDecisionPolicy] = useState({ probabilityTemperature: 1, selectivePrediction: { minMarginPp: 5 } });
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [serverState, setServerState] = useState<ServerState | null>(null);
   const [serverAvailable, setServerAvailable] = useState(false);
@@ -672,25 +701,74 @@ export default function Home() {
     const base = forecastMode === "stats" ? statisticalAnswers(stats) : forecastMode === "mixed" ? mixedAnswers(answers, stats, opinionWeight) : completePersonalAnswers(answers);
     return applyLiveEvidence(base, completedLiveMatches, stats);
   }, [answers, completedLiveMatches, forecastMode, opinionWeight, stats]);
-  const likelyBracket = useMemo(() => buildLikelyBracket(forecastSource, liveMatches), [forecastSource, liveMatches]);
-  const likelyPlayoff = useMemo(() => buildLikelyPlayoff(likelyBracket, forecastSource, liveMatches), [forecastSource, likelyBracket, liveMatches]);
+  const likelyBracket = useMemo(() => buildLikelyBracket(forecastSource, liveMatches, stats), [forecastSource, liveMatches, stats]);
+  const likelyPlayoff = useMemo(() => buildLikelyPlayoff(likelyBracket, forecastSource, liveMatches, stats), [forecastSource, likelyBracket, liveMatches, stats]);
   const playoffMatches = useMemo(() => Object.fromEntries(likelyPlayoff.stages.flatMap((stage) => stage.matches).map((match) => [match.label, match])) as Record<string, LikelyPlayoffMatch>, [likelyPlayoff]);
   const liveConstraintSignature = liveMatches.map((match) => `${match.id}:${match.stage}:${match.round}:${match.team_a}:${match.team_b}:${match.winner ?? "scheduled"}:${match.score_a ?? ""}:${match.score_b ?? ""}`).join(";");
   const snapshots = useMemo(() => serverState?.snapshots ?? [], [serverState?.snapshots]);
+  const selectedSnapshot = useMemo(() => selectedRunId ? snapshots.find((snapshot) => snapshot.id === selectedRunId) ?? null : null, [selectedRunId, snapshots]);
+  const selectedRoot = useMemo(() => selectedSnapshot ? snapshots.find((snapshot) => snapshot.id === (selectedSnapshot.root_snapshot_id ?? selectedSnapshot.id)) ?? selectedSnapshot : null, [selectedSnapshot, snapshots]);
+  const selectedLatest = useMemo(() => selectedRoot ? snapshots.filter((snapshot) => (snapshot.root_snapshot_id ?? snapshot.id) === selectedRoot.id).sort((a, b) => b.completed_match_count - a.completed_match_count || b.id - a.id)[0] ?? selectedRoot : null, [selectedRoot, snapshots]);
+  const displayedResult = selectedLatest?.result ?? result;
+  const displayedProbabilities = selectedLatest?.probabilities ?? forecastSource;
   const matchMetrics = useMemo(() => matchEvaluation(completedLiveMatches), [completedLiveMatches]);
   const stageMetrics = useMemo(() => (["swiss", "playin", "playoff"] as const).map((stage) => ({ stage, ...matchEvaluation(completedLiveMatches.filter((match) => match.stage === stage)) })), [completedLiveMatches]);
+  const decisionAudit = useMemo(() => {
+    const rows = completedLiveMatches.filter((match) => Number.isFinite(match.predicted_probability)).map((match) => {
+      const decision = predictionDecision(stats?.pairwise[pairKey(match.team_a, match.team_b)], match.predicted_probability ?? 50, { temperature: decisionPolicy.probabilityTemperature, minMarginPp: decisionPolicy.selectivePrediction.minMarginPp });
+      const predicted = (match.predicted_probability ?? 50) >= 50 ? match.team_a : match.team_b;
+      return { decision, correct: predicted === match.winner };
+    });
+    const accepted = rows.filter((row) => row.decision.status === "pick");
+    return { total: rows.length, accepted: accepted.length, correct: accepted.filter((row) => row.correct).length, pass: rows.length - accepted.length };
+  }, [completedLiveMatches, decisionPolicy, stats]);
   const matchHistoryPoints = useMemo(() => {
     const ordered = [...completedLiveMatches].filter((match) => Number.isFinite(match.predicted_probability)).sort((a, b) => Date.parse(a.scheduled_at || a.created_at) - Date.parse(b.scheduled_at || b.created_at));
     return ordered.map((match, index) => ({ match, ...matchEvaluation(ordered.slice(0, index + 1)) })).slice(-24);
   }, [completedLiveMatches]);
+  const hypotheticalBranches = useMemo(() => scheduledLiveMatches.slice(0, 8).map((match) => {
+    const branch = (winner: string) => {
+      const hypothetical = { ...match, winner };
+      const branchMatches = liveMatches.map((item) => item.id === match.id ? hypothetical : item);
+      const branchSource = applyLiveEvidence(forecastSource, [hypothetical], stats);
+      const swiss = buildLikelyBracket(branchSource, branchMatches, stats);
+      const playoff = buildLikelyPlayoff(swiss, branchSource, branchMatches, stats);
+      const final = playoff.stages.at(-1)?.matches.at(-1);
+      return { champion: final?.winner ?? null, direct: swiss.rows.filter((row) => row.status === "direct").map((row) => row.id) };
+    };
+    return { match, aWins: branch(match.team_a), bWins: branch(match.team_b) };
+  }), [forecastSource, liveMatches, scheduledLiveMatches, stats]);
   const currentExplanation = predictionExplanation(currentPair[0], currentPair[1], answers, stats, forecastMode, opinionWeight, completedLiveMatches);
   const explainMatchup = (a: string, b: string) => predictionExplanation(a, b, answers, stats, forecastMode, opinionWeight, completedLiveMatches);
-  const likelyOutcomes = useMemo(() => result ? likelyOutcomePartition(result.teams) : {}, [result]);
+  const likelyOutcomes = useMemo(() => displayedResult ? likelyOutcomePartition(displayedResult.teams) : {}, [displayedResult]);
   const filteredTeams = useMemo(() => {
-    if (!result) return [];
-    if (view !== "all") return result.teams.filter((team) => likelyOutcomes[team.id] === view);
-    return result.teams;
-  }, [likelyOutcomes, result, view]);
+    if (!displayedResult) return [];
+    if (view !== "all") return displayedResult.teams.filter((team) => likelyOutcomes[team.id] === view);
+    return displayedResult.teams;
+  }, [displayedResult, likelyOutcomes, view]);
+
+  useEffect(() => {
+    const run = Number(new URLSearchParams(window.location.search).get("run"));
+    if (Number.isInteger(run) && run > 0) setSelectedRunId(run);
+  }, []);
+
+  const selectSnapshot = (snapshot: PredictionSnapshot | null) => {
+    const id = snapshot?.id ?? null;
+    setSelectedRunId(id);
+    const url = new URL(window.location.href);
+    if (id) url.searchParams.set("run", String(id)); else url.searchParams.delete("run");
+    window.history.replaceState({}, "", url);
+    if (snapshot) {
+      const rootId = snapshot.root_snapshot_id ?? snapshot.id;
+      const latest = snapshots.filter((item) => (item.root_snapshot_id ?? item.id) === rootId).sort((a, b) => b.completed_match_count - a.completed_match_count || b.id - a.id)[0] ?? snapshot;
+      setForecastMode(snapshot.forecast_mode); setOpinionWeight(snapshot.opinion_weight); setIterationCount(snapshot.iterations);
+      if (snapshot.inputs?.answers) setAnswers(snapshot.inputs.answers);
+      setResult(latest.result);
+    } else {
+      setForecastMode("stats"); setOpinionWeight(0); setIterationCount(250000);
+      if (stats) setResult(runSimulation(applyLiveEvidence(statisticalAnswers(stats), completedLiveMatches, stats), 250000, undefined, { liveMatches, statisticalModel: stats }));
+    }
+  };
 
   useEffect(() => {
     try {
@@ -743,6 +821,8 @@ export default function Home() {
       .then((data: StatisticalModel) => setStats(data))
       .catch(() => setStats(null));
   }, []);
+
+  useEffect(() => { fetch("/decision-policy.json").then((response) => response.ok ? response.json() : Promise.reject()).then(setDecisionPolicy).catch(() => undefined); }, []);
 
   useEffect(() => {
     if (!answersLoaded) return;
@@ -822,7 +902,7 @@ export default function Home() {
         void fetch("/api/admin/snapshots", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ trigger: "manual_run", forecastMode, opinionWeight, iterations: simulation.iterations, seed: simulation.seed, completedMatchCount: completedLiveMatches.length, modelGeneratedAt: stats?.generatedAt ?? null, probabilities: source, result: simulation }),
+          body: JSON.stringify({ trigger: "manual_run", forecastMode, opinionWeight, answers, iterations: simulation.iterations, seed: simulation.seed, completedMatchCount: completedLiveMatches.length, modelGeneratedAt: stats?.generatedAt ?? null, probabilities: source, result: simulation }),
         }).then((response) => response.ok ? loadServerState() : Promise.reject(new Error("snapshot")))
           .catch(() => setAdminMessage("Прогон рассчитан, но не удалось сохранить его в историю."));
       }
@@ -995,6 +1075,7 @@ export default function Home() {
         </p>}
         {serverState?.liveSync.lastSync?.scheduleError ? <p className="sync-warning">Расписание Cybersport.ru временно не прочитано: {serverState.liveSync.lastSync.scheduleError}. Результаты OpenDota продолжают обновляться независимо.</p> : null}
         {matchMetrics.count > 0 && <div className="stage-score-grid">{stageMetrics.map((metric) => <article key={metric.stage}><span>{metric.stage === "swiss" ? "ШВЕЙЦАРКА" : metric.stage === "playin" ? "СТЫКИ" : "ПЛЕЙ-ОФФ"}</span><b>{metric.count ? `${metric.correct}/${metric.count}` : "—"}</b><small>точность {metric.count ? `${(100 * metric.correct / metric.count).toFixed(0)}%` : "—"}</small><small>Brier {metric.brier === null ? "—" : metric.brier.toFixed(3)} · log loss {metric.logLoss === null ? "—" : metric.logLoss.toFixed(3)}</small></article>)}</div>}
+        {decisionAudit.total > 0 && <div className="decision-audit"><div><b>{decisionAudit.accepted ? `${decisionAudit.correct}/${decisionAudit.accepted}` : "—"}</b><span>точность среди матчей, где модель сказала «да»</span></div><div><b>{decisionAudit.total ? `${Math.round(100 * decisionAudit.accepted / decisionAudit.total)}%` : "—"}</b><span>coverage · доля принятых решений</span></div><div><b>{decisionAudit.pass}</b><span>матчей честно отправлено в PASS</span></div></div>}
         {serverState?.liveSync.lastSync?.unknownTeamIds?.length ? <p className="sync-warning">В OpenDota появились неизвестные team ID: {serverState.liveSync.lastSync.unknownTeamIds.join(", ")}. Эти карты пока не записаны — требуется проверить соответствие команды.</p> : null}
         {serverAvailable ? (
           serverState?.isAdmin ? (
@@ -1015,6 +1096,7 @@ export default function Home() {
         ) : <p className="local-mode">Локальный режим: серверное API не запущено, редактирование и автосохранение работают только в этом браузере.</p>}
         {adminMessage && <p className="admin-message">{adminMessage}</p>}
         {scheduledLiveMatches.length > 0 && <div className="scheduled-results"><b>ОФИЦИАЛЬНО ОБЪЯВЛЕННЫЕ ПАРЫ</b>{scheduledLiveMatches.map((match) => <span key={match.id}>{match.stage === "swiss" ? "SW" : match.stage === "playin" ? "PI" : "PO"} R{match.round} · {getTeam(match.team_a).name} — {getTeam(match.team_b).name} · {match.predicted_probability === null ? "прогноз ещё не сохранён" : `зафиксировано ${getTeam(match.team_a).short} ${match.predicted_probability.toFixed(1)}%`}{match.scheduled_at ? ` · ${new Date(match.scheduled_at).toLocaleString("ru-RU")}` : ""}</span>)}</div>}
+        {hypotheticalBranches.length > 0 && <div className="hypothesis-grid"><b>УСЛОВНЫЕ ВЕТКИ · НЕ ОБУЧЕНИЕ НА ВЫМЫШЛЕННЫХ РЕЗУЛЬТАТАХ</b>{hypotheticalBranches.map(({ match, aWins, bWins }) => <article key={match.id}><strong>{getTeam(match.team_a).name} — {getTeam(match.team_b).name}</strong><span>Если {getTeam(match.team_a).short} победит → чемпион ветки {aWins.champion ? getTeam(aWins.champion).name : "уточняется"}</span><span>Если {getTeam(match.team_b).short} победит → чемпион ветки {bWins.champion ? getTeam(bWins.champion).name : "уточняется"}</span></article>)}</div>}
         {completedLiveMatches.length > 0 && <div className="live-results">{completedLiveMatches.map((match) => {
           const hasSavedPrediction = Number.isFinite(match.predicted_probability);
           const pA = match.predicted_probability ?? 50;
@@ -1024,19 +1106,21 @@ export default function Home() {
           const brier = ((pA / 100) - outcome) ** 2;
           const winnerProbability = match.winner === match.team_a ? pA / 100 : 1 - pA / 100;
           const logLoss = -Math.log(Math.min(.999, Math.max(.001, winnerProbability)));
+          const decision = predictionDecision(stats?.pairwise[pairKey(match.team_a, match.team_b)], pA, { temperature: decisionPolicy.probabilityTemperature, minMarginPp: decisionPolicy.selectivePrediction.minMarginPp });
           const explanation = predictionExplanation(match.team_a, match.team_b, answers, stats, forecastMode, opinionWeight, completedLiveMatches.filter((item) => item.id < match.id));
-          return <article key={match.id} className="live-result-card"><div><span>{match.stage === "swiss" ? "SW" : match.stage === "playin" ? "PI" : "PO"} R{match.round}</span><strong><TeamMark team={getTeam(match.team_a)} small />{getTeam(match.team_a).name} — {getTeam(match.team_b).name}<TeamMark team={getTeam(match.team_b)} small /></strong><b>{match.score_a ?? "?"}–{match.score_b ?? "?"} · {getTeam(match.winner!).name}</b><i className={!hasSavedPrediction ? "is-unscored" : correct ? "is-correct" : "is-wrong"}>{!hasSavedPrediction ? "НЕТ PRE-MATCH" : correct ? "ПРОГНОЗ ВЕРЕН" : "ОШИБКА"}</i></div><details><summary>{hasSavedPrediction ? `До матча: ${getTeam(match.team_a).name} ${pA.toFixed(1)}% · Brier ${brier.toFixed(3)} · log loss ${logLoss.toFixed(3)}` : "До начала матча вероятность не была сохранена — результат не участвует в оценке"}</summary>{hasSavedPrediction && <div>{explanation.items.map((item) => <span key={item.label}><b>{item.label}</b><em>{item.value >= 0 ? "+" : ""}{item.value.toFixed(1)} п.п.</em><small>{item.text}</small></span>)}</div>}</details></article>;
+          return <article key={match.id} className="live-result-card"><div><span>{match.stage === "swiss" ? "SW" : match.stage === "playin" ? "PI" : "PO"} R{match.round}</span><strong><TeamMark team={getTeam(match.team_a)} small />{getTeam(match.team_a).name} — {getTeam(match.team_b).name}<TeamMark team={getTeam(match.team_b)} small /></strong><b>{match.score_a ?? "?"}–{match.score_b ?? "?"} · {getTeam(match.winner!).name}</b><i className={!hasSavedPrediction ? "is-unscored" : correct ? "is-correct" : "is-wrong"}>{!hasSavedPrediction ? "НЕТ PRE-MATCH" : correct ? "ПРОГНОЗ ВЕРЕН" : "ОШИБКА"}</i></div><div className={`match-decision match-decision--${decision.status}`}><b>{decision.label}</b><span>уверенность {decision.confidence.score}/100 · интервал {decision.interval.low.toFixed(0)}–{decision.interval.high.toFixed(0)}%</span></div><details><summary>{hasSavedPrediction ? `До матча: ${getTeam(match.team_a).name} ${pA.toFixed(1)}% · Brier ${brier.toFixed(3)} · log loss ${logLoss.toFixed(3)}` : "До начала матча вероятность не была сохранена — результат не участвует в оценке"}</summary>{hasSavedPrediction && <div>{explanation.items.map((item) => <span key={item.label}><b>{item.label}</b><em>{item.value >= 0 ? "+" : ""}{item.value.toFixed(1)} п.п.</em><small>{item.text}</small></span>)}</div>}</details></article>;
         })}</div>}
         <div className="prediction-history">
           <div className="prediction-history__head"><div><p className="eyebrow">ИСТОРИЯ МОДЕЛИ</p><h3>Что модель думала до результатов</h3></div><span>{snapshots.length} сохранённых прогонов</span></div>
+          {selectedRoot && selectedLatest ? <div className="selected-run-banner"><div><b>ПРОГНОЗ #{selectedRoot.id} · {selectedRoot.forecast_mode === "mixed" ? `${selectedRoot.opinion_weight}% личного мнения` : selectedRoot.forecast_mode === "stats" ? "официальная статистическая база" : "личный сценарий"}</b><span>Оригинал от {new Date(selectedRoot.created_at).toLocaleString("ru-RU")} сохранён неизменным. На странице показана ревизия #{selectedLatest.id}, учитывающая {selectedLatest.completed_match_count} завершённых серий.</span></div><button type="button" onClick={() => selectSnapshot(null)}>Вернуться к Official baseline</button></div> : <div className="official-baseline-banner"><b>OFFICIAL BASELINE</b><span>Только статистика · 0% личного мнения · 250 000 симуляций · автоматически пересчитывается после результатов</span></div>}
           {matchHistoryPoints.length > 0 && <div className="history-chart">
             <div className="history-chart__controls"><strong>НАКОПИТЕЛЬНАЯ ТОЧНОСТЬ ПОСЛЕ КАЖДОГО МАТЧА</strong><span>Наведи на столбец: увидишь пару, Brier и log loss на тот момент</span></div>
             <div className="history-chart__bars">{matchHistoryPoints.map((point) => { const accuracy = 100 * point.correct / point.count; return <div key={point.match.id} title={`${getTeam(point.match.team_a).name} — ${getTeam(point.match.team_b).name} · точность ${accuracy.toFixed(1)}% · Brier ${point.brier?.toFixed(3)} · log loss ${point.logLoss?.toFixed(3)}`}><b>{accuracy.toFixed(0)}%</b><i style={{ height: `${Math.max(3, accuracy)}%` }} /><small>{point.match.stage === "swiss" ? `S${point.match.round}` : point.match.stage === "playin" ? "PI" : "PO"}</small></div>; })}</div>
           </div>}
           {snapshots.length ? <div className="snapshot-list">{snapshots.map((snapshot) => {
             const evaluation = snapshotEvaluation(snapshot, completedLiveMatches);
-            return <details key={snapshot.id}>
-              <summary><time>{new Date(snapshot.created_at).toLocaleString("ru-RU")}</time><b>{snapshot.trigger === "manual_run" ? "ручной прогон" : snapshot.trigger.startsWith("pre_") ? "до начала раунда" : snapshot.trigger.startsWith("auto_pairing_") ? "после публикации пар" : snapshot.trigger.startsWith("auto_") ? "после результата" : snapshot.trigger} · {snapshot.forecast_mode === "mixed" ? `смесь ${snapshot.opinion_weight}% мнения` : snapshot.forecast_mode === "stats" ? "только статистика" : "только мнение"} · {snapshot.result.formatVersion?.startsWith("hidden-groups-r1-r3-playoff-") ? "Swiss + плей-офф" : snapshot.result.formatVersion === "hidden-groups-r1-r3-v1" ? "группы R1–R3" : "старый формат"}</b><span>{evaluation.count ? `${evaluation.correct}/${evaluation.count} верно` : "ждёт новых матчей"}</span></summary>
+            return <details key={snapshot.id} open={selectedRunId === snapshot.id}>
+              <summary onClick={(event) => { event.preventDefault(); selectSnapshot(snapshot); }}><time>{new Date(snapshot.created_at).toLocaleString("ru-RU")}</time><b>{snapshot.snapshot_kind === "revision" ? `ревизия прогноза #${snapshot.root_snapshot_id}` : snapshot.trigger === "manual_run" ? "ручной прогон" : "Official baseline"} · {snapshot.forecast_mode === "mixed" ? `смесь ${snapshot.opinion_weight}% мнения` : snapshot.forecast_mode === "stats" ? "только статистика" : "только мнение"} · {snapshot.iterations.toLocaleString("ru-RU")} прогонов</b><span>{evaluation.count ? `${evaluation.correct}/${evaluation.count} верно` : "ждёт новых матчей"}</span></summary>
               <div className="snapshot-metrics">
                 <div><b>{snapshot.iterations.toLocaleString("ru-RU")}</b><span>прогонов</span></div>
                 <div><b>{snapshot.result.uniqueBrackets?.toLocaleString("ru-RU") ?? "—"}</b><span>уникальных путей</span></div>
@@ -1201,7 +1285,7 @@ export default function Home() {
         </div>
 
         <div className="likely-bracket">
-          <div className="likely-bracket__head"><div><p className="eyebrow">ЭКСПЕРИМЕНТАЛЬНЫЙ СЦЕНАРИЙ · НЕ ГОТОВЫЕ КОЭФФИЦИЕНТЫ</p><h3>Одна конкретная сетка</h3></div><span>Фаворит выигрывает каждый матч; R1–R3 жеребятся внутри скрытой группы, R4–R5 — среди всех команд с тем же счётом. Реванши исключаются, пока возможно. Фактические результаты отмечены точкой.</span></div>
+          <div className="likely-bracket__head"><div><p className="eyebrow">ЭКСПЕРИМЕНТАЛЬНЫЙ СЦЕНАРИЙ · НЕ ГОТОВЫЕ КОЭФФИЦИЕНТЫ</p><h3>Одна конкретная сетка</h3></div><span>Фаворит выигрывает каждый матч; R1–R3 жеребятся внутри скрытой группы, R4–R5 — среди всех команд с тем же счётом. 🎰 означает низкую надёжность данных или неустойчивую ветку около 50/50 — ставить по такой карточке особенно рискованно.</span></div>
           <div className="likely-bracket__scroll">
             <table>
               <thead><tr><th>#</th><th>Команда</th><th>Группа</th><th>Счёт</th>{[1, 2, 3, 4, 5].map((round) => <th key={round}>Раунд {round}</th>)}<th>Итог</th></tr></thead>
@@ -1210,12 +1294,12 @@ export default function Home() {
                 <td><TeamMark team={getTeam(row.id)} small /><strong>{getTeam(row.id).name}</strong></td>
                 <td><span className={`group-badge group-badge--${SWISS_GROUP_BY_TEAM[row.id].toLowerCase()}`}>{SWISS_GROUP_BY_TEAM[row.id] === "A" ? "A" : "Б"}</span></td>
                 <td><b>{row.wins}–{row.losses}</b></td>
-                {row.rounds.map((round, roundIndex) => <td key={roundIndex}>{round ? <span className={`round-opponent ${round.won ? "is-win" : "is-loss"} ${round.fixed ? "is-fixed" : ""}`} title={`${round.probability.toFixed(1)}% на ${getTeam(row.id).name}`}><TeamMark team={getTeam(round.opponent)} small />{getTeam(round.opponent).short}<i>{round.won ? "W" : "L"}</i></span> : <span className="round-empty">—</span>}</td>)}
+                {row.rounds.map((round, roundIndex) => <td key={roundIndex}>{round ? <span className={`round-opponent ${round.won ? "is-win" : "is-loss"} ${round.fixed ? "is-fixed" : ""}`} title={`${round.probability.toFixed(1)}% на ${getTeam(row.id).name} · уверенность ${round.confidence.score}/100 · ${round.confidence.reasons.join(" · ")}`}><TeamMark team={getTeam(round.opponent)} small />{getTeam(round.opponent).short}<small className={`round-confidence round-confidence--${round.confidence.level}`}>{round.confidence.score}</small>{round.confidence.roulette ? <b className="roulette-icon" aria-label="Низкая уверенность">🎰</b> : null}<i>{round.won ? "W" : "L"}</i></span> : <span className="round-empty">—</span>}</td>)}
                 <td><span className={`bracket-status bracket-status--${row.status}`}>{row.status === "direct" ? "НАПРЯМУЮ" : row.status === "playinWin" ? "ПРОШЁЛ СТЫК" : row.status === "playinLoss" ? "НЕ ПРОШЁЛ СТЫК" : "ВЫЛЕТ В SWISS"}</span></td>
               </tr>)}</tbody>
             </table>
           </div>
-          <div className="likely-playins"><b>ВЕРОЯТНЕЙШИЕ СТЫКИ</b>{likelyBracket.playins.map((match) => <div key={`${match.a}-${match.b}`}><span><TeamMark team={getTeam(match.a)} small />{getTeam(match.a).name}</span><em>{match.probabilityA.toFixed(0)}% : {(100 - match.probabilityA).toFixed(0)}%</em><span>{getTeam(match.b).name}<TeamMark team={getTeam(match.b)} small /></span><strong>→ {getTeam(match.winner).name}</strong></div>)}</div>
+          <div className="likely-playins"><b>ВЕРОЯТНЕЙШИЕ СТЫКИ</b>{likelyBracket.playins.map((match) => <div key={`${match.a}-${match.b}`}><span><TeamMark team={getTeam(match.a)} small />{getTeam(match.a).name}</span><em>{match.probabilityA.toFixed(0)}% : {(100 - match.probabilityA).toFixed(0)}%</em><span>{getTeam(match.b).name}<TeamMark team={getTeam(match.b)} small /></span><ConfidenceBadge confidence={match.confidence} /><strong>→ {getTeam(match.winner).name}</strong></div>)}</div>
         </div>
 
         {likelyPlayoff.stages.length > 0 && <div className="likely-playoff">
@@ -1305,11 +1389,12 @@ export default function Home() {
             <div className="scenario-intro">
               <p className="eyebrow">ТОП-3 СЦЕНАРИЯ</p>
               <h3>Самые частые<br />финальные расклады</h3>
-              <p>Точное сочетание команды 4–0, двух команд 4–1 и пяти победителей стыков — итоговая восьмёрка плей-офф.</p>
+              <p>Точное сочетание команды 4–0, двух команд 4–1 и пяти победителей стыков — итоговая восьмёрка плей-офф. Это редкие совместные исходы, а не вероятность прохода отдельной команды.</p>
             </div>
             {result.scenarios.map((scenario, index) => (
               <article className="scenario-card" key={`${scenario.direct40.join("-")}-${scenario.direct41.join("-")}-${scenario.via.join("-")}`}>
-                <header><span>0{index + 1}</span><b>{scenario.probability.toFixed(2)}%</b></header>
+                <header><span>0{index + 1}</span><b title={`${scenario.occurrences ?? 0} попаданий из ${result.iterations.toLocaleString("ru-RU")} симуляций`}>{formatRareScenarioProbability(scenario.probability)}</b></header>
+                {(scenario.occurrences ?? 0) <= 1 ? <small className="scenario-rarity">ЕДИНИЧНОЕ ПОПАДАНИЕ · НЕУСТОЙЧИВО</small> : null}
                 <p>4–0 · БЕЗ ПОРАЖЕНИЙ</p>
                 <div>{scenario.direct40.map((id) => <span className="team-chip team-chip--lime" key={id}><TeamMark team={getTeam(id)} small />{getTeam(id).name}</span>)}</div>
                 <p>4–1 · НАПРЯМУЮ</p>
@@ -1330,7 +1415,8 @@ export default function Home() {
             </div>
             {result.playoffScenarios.map((scenario, index) => (
               <article className="scenario-card playoff-scenario-card" key={`${scenario.champion}-${scenario.runnerUp}-${scenario.third}`}>
-                <header><span>0{index + 1}</span><b>{scenario.probability.toFixed(2)}%</b></header>
+                <header><span>0{index + 1}</span><b title={`${scenario.occurrences ?? 0} попаданий из ${result.iterations.toLocaleString("ru-RU")} симуляций`}>{formatRareScenarioProbability(scenario.probability)}</b></header>
+                {(scenario.occurrences ?? 0) <= 1 ? <small className="scenario-rarity">ЕДИНИЧНОЕ ПОПАДАНИЕ · НЕУСТОЙЧИВО</small> : null}
                 <p>ЧЕМПИОН</p><div><span className="team-chip team-chip--lime"><TeamMark team={getTeam(scenario.champion)} small />{getTeam(scenario.champion).name}</span></div>
                 <p>ФИНАЛИСТ</p><div><span className="team-chip team-chip--green"><TeamMark team={getTeam(scenario.runnerUp)} small />{getTeam(scenario.runnerUp).name}</span></div>
                 <p>ТРЕТЬЕ МЕСТО</p><div><span className="team-chip team-chip--amber"><TeamMark team={getTeam(scenario.third)} small />{getTeam(scenario.third).name}</span></div>

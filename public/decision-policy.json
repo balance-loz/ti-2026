@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-12T18:16:34.744Z",
+  "probabilityTemperature": 1,
+  "source": "/work/sharpness-arena.json",
+  "status": {
+    "probabilitySharpness": "shadow",
+    "selectivePrediction": "candidate"
+  },
+  "selectivePrediction": {
+    "labels": [
+      "pick",
+      "pass",
+      "even",
+      "roulette"
+    ],
+    "minMarginPp": 7,
+    "frozenCoverage": 0.4399423734918062,
+    "frozenAccuracy": 0.6745804338927548
+  }
+}

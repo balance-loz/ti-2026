@@ -23,7 +23,8 @@ const OPENDOTA_API_URL = process.env.OPENDOTA_API_URL || "https://api.opendota.c
 const SCHEDULE_SYNC_ENABLED = process.env.SCHEDULE_SYNC_ENABLED !== "false";
 const SCHEDULE_SOURCE_URL = process.env.SCHEDULE_SOURCE_URL || "https://www.cybersport.ru/tournaments/dota-2/the-international-2026";
 const SCHEDULE_TIMEZONE_OFFSET = process.env.SCHEDULE_TIMEZONE_OFFSET || "+03:00";
-const AUTO_SNAPSHOT_ITERATIONS = Math.max(10_000, Number(process.env.AUTO_SNAPSHOT_ITERATIONS || 100_000));
+const AUTO_SNAPSHOT_ITERATIONS = Math.max(10_000, Number(process.env.AUTO_SNAPSHOT_ITERATIONS || 250_000));
+const OFFICIAL_FORECAST_CONFIG = Object.freeze({ forecastMode: "stats", opinionWeight: 0, iterations: AUTO_SNAPSHOT_ITERATIONS });
 const TI_PLAYIN_START = Date.parse(process.env.TI_PLAYIN_START || "2026-08-17T00:00:00+08:00") / 1000;
 const TI_PLAYOFF_START = Date.parse(process.env.TI_PLAYOFF_START || "2026-08-20T00:00:00+08:00") / 1000;
 const DRAFT_TEMPORAL_MODEL = path.resolve(process.env.DRAFT_TEMPORAL_MODEL || "public/draft-temporal-model.json");
@@ -78,6 +79,11 @@ db.exec(`
     model_generated_at TEXT,
     probabilities_json TEXT NOT NULL,
     result_json TEXT NOT NULL,
+    inputs_json TEXT,
+    snapshot_kind TEXT NOT NULL DEFAULT 'original',
+    root_snapshot_id INTEGER,
+    parent_snapshot_id INTEGER,
+    profile_key TEXT,
     created_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_prediction_snapshots_created_at
@@ -91,6 +97,11 @@ db.exec(`
     updated_at TEXT NOT NULL
   );
 `);
+const snapshotColumns = new Set(db.prepare("PRAGMA table_info(prediction_snapshots)").all().map((row) => row.name));
+for (const [name, definition] of Object.entries({ inputs_json: "TEXT", snapshot_kind: "TEXT NOT NULL DEFAULT 'original'", root_snapshot_id: "INTEGER", parent_snapshot_id: "INTEGER", profile_key: "TEXT" })) {
+  if (!snapshotColumns.has(name)) db.exec(`ALTER TABLE prediction_snapshots ADD COLUMN ${name} ${definition}`);
+}
+db.exec("CREATE INDEX IF NOT EXISTS idx_prediction_snapshots_root ON prediction_snapshots(root_snapshot_id, completed_match_count DESC); CREATE INDEX IF NOT EXISTS idx_prediction_snapshots_profile ON prediction_snapshots(profile_key, completed_match_count DESC)");
 db.exec("PRAGMA optimize");
 
 let refreshProcess = null;
@@ -181,13 +192,13 @@ function publicState() {
   const answers = Object.fromEntries(db.prepare("SELECT pair_key, probability FROM answers").all().map((row) => [row.pair_key, row.probability]));
   const matches = db.prepare("SELECT * FROM matches ORDER BY round, id").all();
   const refresh = db.prepare("SELECT value, updated_at FROM settings WHERE key = 'last_refresh'").get() || null;
-  const snapshots = db.prepare("SELECT id, trigger, forecast_mode, opinion_weight, iterations, seed, completed_match_count, model_generated_at, probabilities_json, result_json, created_at FROM prediction_snapshots ORDER BY id DESC LIMIT 50").all()
-    .map((row) => ({ ...row, probabilities: JSON.parse(row.probabilities_json), result: JSON.parse(row.result_json), probabilities_json: undefined, result_json: undefined }));
+  const snapshots = db.prepare("SELECT id, trigger, forecast_mode, opinion_weight, iterations, seed, completed_match_count, model_generated_at, probabilities_json, result_json, inputs_json, snapshot_kind, root_snapshot_id, parent_snapshot_id, profile_key, created_at FROM prediction_snapshots ORDER BY id DESC LIMIT 150").all()
+    .map((row) => ({ ...row, probabilities: JSON.parse(row.probabilities_json), result: JSON.parse(row.result_json), inputs: row.inputs_json ? JSON.parse(row.inputs_json) : null, probabilities_json: undefined, result_json: undefined, inputs_json: undefined }));
   const liveSyncRow = db.prepare("SELECT value, updated_at FROM settings WHERE key = 'live_sync'").get() || null;
   let lastSync = null;
   try { lastSync = liveSyncRow ? { ...JSON.parse(liveSyncRow.value), updatedAt: liveSyncRow.updated_at } : null; } catch { lastSync = null; }
   return {
-    answers, matches, snapshots, refresh, refreshRunning: Boolean(refreshProcess),
+    answers, matches, snapshots, officialForecast: OFFICIAL_FORECAST_CONFIG, refresh, refreshRunning: Boolean(refreshProcess),
     liveSync: { enabled: LIVE_SYNC_ENABLED, scheduleEnabled: SCHEDULE_SYNC_ENABLED, leagueId: TI_LEAGUE_ID, intervalMinutes: LIVE_SYNC_INTERVAL_MINUTES, running: Boolean(liveSyncPromise), lastSync, autoForecastRunning },
   };
 }
@@ -196,42 +207,54 @@ function audit(kind, payload) {
   db.prepare("INSERT INTO events(kind, payload, created_at) VALUES (?, ?, ?)").run(kind, JSON.stringify(payload), now());
 }
 
-function forecastConfig() {
-  const row = db.prepare("SELECT value FROM settings WHERE key = 'forecast_config'").get();
-  if (row) try { return JSON.parse(row.value); } catch { /* use defaults */ }
-  const snapshot = db.prepare("SELECT forecast_mode, opinion_weight FROM prediction_snapshots ORDER BY id DESC LIMIT 1").get();
-  return { forecastMode: snapshot?.forecast_mode || "mixed", opinionWeight: Number(snapshot?.opinion_weight ?? 50) };
+function profileKey(mode, opinionWeight, answers) {
+  return createHash("sha256").update(JSON.stringify({ mode, opinionWeight: Number(opinionWeight), answers })).digest("hex").slice(0, 24);
 }
 
-function currentForecast() {
+function currentForecast(config = OFFICIAL_FORECAST_CONFIG, profileAnswers = null) {
   const answers = Object.fromEntries(db.prepare("SELECT pair_key, probability FROM answers").all().map((row) => [row.pair_key, row.probability]));
+  const selectedAnswers = profileAnswers ?? answers;
   const matches = db.prepare("SELECT * FROM matches ORDER BY round, id").all();
   const stats = JSON.parse(readFileSync(path.resolve("public/team-stats.json"), "utf8"));
-  const config = forecastConfig();
-  const probabilities = buildForecastSource({ answers, stats, matches, mode: config.forecastMode, opinionWeight: config.opinionWeight });
-  return { answers, matches, stats, config, probabilities };
+  const probabilities = buildForecastSource({ answers: selectedAnswers, stats, matches, mode: config.forecastMode, opinionWeight: config.opinionWeight });
+  return { answers: selectedAnswers, matches, stats, config, probabilities };
 }
 
-function saveAutomaticSnapshot(trigger) {
+function insertSnapshot({ trigger, config, probabilities, result, stats, matches, inputs, kind = "original", rootId = null, parentId = null, key }) {
+  const completedMatchCount = matches.filter((match) => match.winner).length;
+  const stamp = now();
+  const inserted = db.prepare(`INSERT INTO prediction_snapshots(trigger, forecast_mode, opinion_weight, iterations, seed, completed_match_count, model_generated_at, probabilities_json, result_json, inputs_json, snapshot_kind, root_snapshot_id, parent_snapshot_id, profile_key, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(trigger, config.forecastMode, Number(config.opinionWeight), result.iterations, result.seed, completedMatchCount, stats.generatedAt || null, JSON.stringify(probabilities), JSON.stringify(result), JSON.stringify(inputs), kind, rootId, parentId, key, stamp);
+  const id = Number(inserted.lastInsertRowid);
+  if (kind === "original" && !rootId) db.prepare("UPDATE prediction_snapshots SET root_snapshot_id=? WHERE id=?").run(id, id);
+  return id;
+}
+
+function saveProfileSnapshot(trigger, config, profileAnswers, { kind = "original", rootId = null, parentId = null } = {}) {
+    const { matches, stats, probabilities } = currentForecast(config, profileAnswers);
+    const completedMatchCount = matches.filter((match) => match.winner).length;
+    const key = profileKey(config.forecastMode, config.opinionWeight, profileAnswers);
+    const existing = db.prepare("SELECT id FROM prediction_snapshots WHERE profile_key=? AND completed_match_count=? AND snapshot_kind=? ORDER BY id DESC LIMIT 1").get(key, completedMatchCount, kind);
+    if (existing) return Number(existing.id);
+    const seed = Math.floor(Date.now() % 0xffffffff);
+    const result = runForecast(probabilities, Number(config.iterations || AUTO_SNAPSHOT_ITERATIONS), seed, { matches, stats });
+    const id = insertSnapshot({ trigger, config, probabilities, result, stats, matches, inputs: { answers: profileAnswers, cutoffCompletedMatches: completedMatchCount }, kind, rootId, parentId, key });
+    audit("snapshot_saved", { id, trigger, completedMatchCount, kind, rootId, profileKey: key });
+    return id;
+}
+
+function saveAutomaticSnapshots(trigger) {
   if (autoForecastRunning) return null;
   autoForecastRunning = true;
   try {
-    const { matches, stats, config, probabilities } = currentForecast();
-    const completedMatchCount = matches.filter((match) => match.winner).length;
-    const previous = trigger.startsWith("auto_pairing_")
-      ? db.prepare("SELECT id FROM prediction_snapshots WHERE trigger = ? AND completed_match_count = ? ORDER BY id DESC LIMIT 1").get(trigger, completedMatchCount)
-      : trigger.startsWith("auto_")
-      ? db.prepare("SELECT id FROM prediction_snapshots WHERE trigger LIKE 'auto_%' AND completed_match_count = ? ORDER BY id DESC LIMIT 1").get(completedMatchCount)
-      : db.prepare("SELECT id FROM prediction_snapshots WHERE trigger = ? AND completed_match_count = ? ORDER BY id DESC LIMIT 1").get(trigger, completedMatchCount);
-    if (previous) return Number(previous.id);
-    const seed = Math.floor(Date.now() % 0xffffffff);
-    const result = runForecast(probabilities, AUTO_SNAPSHOT_ITERATIONS, seed, { matches, stats });
-    const stamp = now();
-    const inserted = db.prepare(`INSERT INTO prediction_snapshots(trigger, forecast_mode, opinion_weight, iterations, seed, completed_match_count, model_generated_at, probabilities_json, result_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(trigger, config.forecastMode, Number(config.opinionWeight), result.iterations, result.seed, completedMatchCount, stats.generatedAt || null, JSON.stringify(probabilities), JSON.stringify(result), stamp);
-    const id = Number(inserted.lastInsertRowid);
-    audit("automatic_snapshot_saved", { id, trigger, completedMatchCount });
-    return id;
+    const officialId = saveProfileSnapshot(trigger, OFFICIAL_FORECAST_CONFIG, {}, { kind: "original" });
+    const roots = db.prepare("SELECT * FROM prediction_snapshots WHERE snapshot_kind='original' AND id=root_snapshot_id AND forecast_mode!='stats' GROUP BY profile_key ORDER BY id").all();
+    for (const root of roots) {
+      let inputs = {}; try { inputs = root.inputs_json ? JSON.parse(root.inputs_json) : {}; } catch { inputs = {}; }
+      const parent = db.prepare("SELECT id FROM prediction_snapshots WHERE root_snapshot_id=? ORDER BY completed_match_count DESC,id DESC LIMIT 1").get(root.id);
+      saveProfileSnapshot(`revision_${trigger}`, { forecastMode: root.forecast_mode, opinionWeight: root.opinion_weight, iterations: AUTO_SNAPSHOT_ITERATIONS }, inputs.answers ?? {}, { kind: "revision", rootId: root.id, parentId: parent?.id ?? root.id });
+    }
+    return officialId;
   } finally { autoForecastRunning = false; }
 }
 
@@ -239,7 +262,7 @@ function queueAutomaticSnapshot(trigger, delay = 100) {
   if (autoSnapshotTimer) clearTimeout(autoSnapshotTimer);
   autoSnapshotTimer = setTimeout(() => {
     autoSnapshotTimer = null;
-    try { saveAutomaticSnapshot(trigger); } catch (error) { console.error("Automatic forecast failed:", error); audit("automatic_snapshot_failed", { trigger, error: error instanceof Error ? error.message : String(error) }); }
+    try { saveAutomaticSnapshots(trigger); } catch (error) { console.error("Automatic forecast failed:", error); audit("automatic_snapshot_failed", { trigger, error: error instanceof Error ? error.message : String(error) }); }
   }, delay);
   autoSnapshotTimer.unref();
 }
@@ -490,14 +513,13 @@ const server = createServer(async (req, res) => {
       if (req.method === "POST" && url.pathname === "/api/admin/snapshots") {
         const data = await body(req);
         if (!data.probabilities || !data.result || !Number.isInteger(data.iterations) || !Number.isInteger(data.seed)) return json(res, 400, { error: "invalid_snapshot" });
-        const stamp = now();
-        const inserted = db.prepare(`INSERT INTO prediction_snapshots(trigger, forecast_mode, opinion_weight, iterations, seed, completed_match_count, model_generated_at, probabilities_json, result_json, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-          .run(data.trigger || "manual_run", data.forecastMode || "mixed", Number(data.opinionWeight || 0), data.iterations, data.seed, Number(data.completedMatchCount || 0), data.modelGeneratedAt || null, JSON.stringify(data.probabilities), JSON.stringify(data.result), stamp);
-        db.prepare("INSERT INTO settings(key,value,updated_at) VALUES ('forecast_config',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")
-          .run(JSON.stringify({ forecastMode: data.forecastMode || "mixed", opinionWeight: Number(data.opinionWeight || 0) }), stamp);
-        audit("snapshot_saved", { id: Number(inserted.lastInsertRowid), trigger: data.trigger || "manual_run" });
-        return json(res, 201, { ok: true, id: Number(inserted.lastInsertRowid) });
+        const config = { forecastMode: data.forecastMode || "mixed", opinionWeight: Number(data.opinionWeight || 0), iterations: data.iterations };
+        const profileAnswers = data.answers && typeof data.answers === "object" ? data.answers : {};
+        const matches = db.prepare("SELECT * FROM matches ORDER BY round,id").all();
+        const key = profileKey(config.forecastMode, config.opinionWeight, profileAnswers);
+        const id = insertSnapshot({ trigger: data.trigger || "manual_run", config, probabilities: data.probabilities, result: data.result, stats: { generatedAt: data.modelGeneratedAt || null }, matches, inputs: { answers: profileAnswers, cutoffCompletedMatches: Number(data.completedMatchCount || 0) }, kind: "original", key });
+        audit("snapshot_saved", { id, trigger: data.trigger || "manual_run", profileKey: key });
+        return json(res, 201, { ok: true, id });
       }
       if (req.method === "DELETE" && url.pathname.startsWith("/api/admin/snapshots/")) {
         const id = Number(url.pathname.split("/").at(-1));

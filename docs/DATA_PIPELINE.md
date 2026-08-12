@@ -48,6 +48,8 @@ The cross-patch model is intentionally a separate local pipeline: `npm run draft
 
 The component-by-component mathematical review, including failed models and disputed assumptions, is recorded in [MODEL_AUDIT_2026-08-12.md](MODEL_AUDIT_2026-08-12.md). `CANDIDATE` means a model passed its declared comparator; it does not mean betting-grade calibration.
 
+Decision abstention, the fixed 250K official baseline, immutable snapshot lineage/revisions and safe hypothetical branches are specified in [DECISION_AND_HISTORY.md](DECISION_AND_HISTORY.md).
+
 ## Replay-derived fields now used by `/intel`
 
 - net-worth advantage at 10:00;
@@ -77,6 +79,8 @@ Liquipedia's official API can add transfers, roster dates, tournament structure 
 ### Priority 4 — independent cross-check
 
 A second commercial/statistical provider such as STRATZ is valuable for anomaly detection: compare match IDs, rosters, durations and winner fields, then flag disagreements for review. Do not average providers blindly.
+
+DatDota follows the same rule. Its draft/position tables are cached with checksum and `asOf`, deduplicated by match ID where raw rows exist, and remain shadow-only until they add chronological OOF value after conditioning on existing features. See [DATDOTA_INTEGRATION.md](DATDOTA_INTEGRATION.md).
 
 ## Next metrics unlocked by own `.dem` parsing
 
