@@ -26,3 +26,5 @@ Online team/player state may update after each real series. Full CatBoost/Deep S
 ## Hypothetical results
 
 Training on invented winners as if they were observations is prohibited: it creates self-confirmation bias, corrupts calibration and understates uncertainty. Conditional branches are allowed. Each branch clones the current state, applies one hypothetical outcome in memory, recomputes downstream pairings and then discards the clone. No hypothetical row reaches SQLite, model artifacts or evaluation history.
+
+Conditional UI comparisons freeze the pre-match team probabilities. A hypothetical winner changes only the tournament state and downstream pairings; it must not pass through the live evidence update. Both branches use the same seed and equal simulation budgets. The UI reports qualification probabilities and changes in championship probability, and suppresses championship narratives when their difference does not clear the conservative Monte Carlo noise threshold.

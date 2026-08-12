@@ -371,6 +371,15 @@ test("manual Monte Carlo UI exposes adaptive, 500K and 1M budgets", async () => 
   assert.match(page, /forecast-client-worker\.ts/);
 });
 
+test("conditional branches freeze ratings and compare probabilistic outcomes", async () => {
+  const page = await readFile("app/page.tsx", "utf8");
+  assert.doesNotMatch(page, /чемпион ветки/);
+  assert.match(page, /КАК РЕЗУЛЬТАТ ИЗМЕНИТ ТУРНИРНЫЕ ШАНСЫ/);
+  assert.match(page, /runSimulationInWorker\(forecastSource, iterations, seed/);
+  assert.match(page, /Рейтинг команд заморожен/);
+  assert.match(page, /Существенного влияния на чемпионство не обнаружено/);
+});
+
 test("intel artifact covers every team and complete tournament outcomes", async () => {
   const intel = JSON.parse(await readFile(new URL("../public/intel-stats.json", import.meta.url), "utf8"));
   assert.equal(Object.keys(intel.teams).length, 16);

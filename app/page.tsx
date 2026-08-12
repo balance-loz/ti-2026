@@ -155,6 +155,15 @@ type SimulationResult = {
   formatVersion?: string;
 };
 
+type ConditionalBranchAnalysis = {
+  loading: boolean;
+  error?: string;
+  iterations?: number;
+  noisePp?: number;
+  aWins?: SimulationResult;
+  bWins?: SimulationResult;
+};
+
 type PredictionConfidence = ReturnType<typeof assessPredictionConfidence>;
 type LikelyRound = { opponent: string; won: boolean; fixed: boolean; probability: number; confidence: PredictionConfidence } | null;
 type LikelyBracket = {
@@ -708,6 +717,7 @@ export default function Home() {
   const [opinionWeight, setOpinionWeight] = useState(0);
   const [iterationCount, setIterationCount] = useState(250000);
   const [adaptiveRun, setAdaptiveRun] = useState(true);
+  const [conditionalBranches, setConditionalBranches] = useState<Record<number, ConditionalBranchAnalysis>>({});
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const [decisionPolicy, setDecisionPolicy] = useState({ probabilityTemperature: 1, selectivePrediction: { minMarginPp: 5 } });
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
@@ -768,18 +778,6 @@ export default function Home() {
     const ordered = [...completedLiveMatches].filter((match) => Number.isFinite(match.predicted_probability)).sort((a, b) => Date.parse(a.scheduled_at || a.created_at) - Date.parse(b.scheduled_at || b.created_at));
     return ordered.map((match, index) => ({ match, ...matchEvaluation(ordered.slice(0, index + 1)) })).slice(-24);
   }, [completedLiveMatches]);
-  const hypotheticalBranches = useMemo(() => scheduledLiveMatches.slice(0, 8).map((match) => {
-    const branch = (winner: string) => {
-      const hypothetical = { ...match, winner };
-      const branchMatches = liveMatches.map((item) => item.id === match.id ? hypothetical : item);
-      const branchSource = applyLiveEvidence(forecastSource, [hypothetical], stats);
-      const swiss = buildLikelyBracket(branchSource, branchMatches, stats);
-      const playoff = buildLikelyPlayoff(swiss, branchSource, branchMatches, stats);
-      const final = playoff.stages.at(-1)?.matches.at(-1);
-      return { champion: final?.winner ?? null, direct: swiss.rows.filter((row) => row.status === "direct").map((row) => row.id) };
-    };
-    return { match, aWins: branch(match.team_a), bWins: branch(match.team_b) };
-  }), [forecastSource, liveMatches, scheduledLiveMatches, stats]);
   const currentExplanation = predictionExplanation(currentPair[0], currentPair[1], answers, stats, forecastMode, opinionWeight, completedLiveMatches);
   const explainMatchup = (a: string, b: string) => predictionExplanation(a, b, answers, stats, forecastMode, opinionWeight, completedLiveMatches);
   const likelyOutcomes = useMemo(() => displayedResult ? likelyOutcomePartition(displayedResult.teams) : {}, [displayedResult]);
@@ -957,6 +955,22 @@ export default function Home() {
         setIsCalculating(false);
       }
     }, 40);
+  };
+
+  const calculateConditionalBranches = async (match: LiveMatch) => {
+    setConditionalBranches((current) => ({ ...current, [match.id]: { loading: true } }));
+    const iterations = 50_000;
+    const seed = Math.floor(Math.random() * 0xffffffff);
+    const branchMatches = (winner: string) => liveMatches.map((item) => item.id === match.id ? { ...item, winner } : item);
+    try {
+      const [aWins, bWins] = await Promise.all([
+        runSimulationInWorker(forecastSource, iterations, seed, { liveMatches: branchMatches(match.team_a), statisticalModel: stats }),
+        runSimulationInWorker(forecastSource, iterations, seed, { liveMatches: branchMatches(match.team_b), statisticalModel: stats }),
+      ]);
+      setConditionalBranches((current) => ({ ...current, [match.id]: { loading: false, iterations, noisePp: 2 * samplingMargin(iterations), aWins, bWins } }));
+    } catch {
+      setConditionalBranches((current) => ({ ...current, [match.id]: { loading: false, error: "Не удалось рассчитать условные ветки." } }));
+    }
   };
 
   const login = async (event: React.FormEvent) => {
@@ -1144,7 +1158,22 @@ export default function Home() {
         ) : <p className="local-mode">Локальный режим: серверное API не запущено, редактирование и автосохранение работают только в этом браузере.</p>}
         {adminMessage && <p className="admin-message">{adminMessage}</p>}
         {scheduledLiveMatches.length > 0 && <div className="scheduled-results"><b>ОФИЦИАЛЬНО ОБЪЯВЛЕННЫЕ ПАРЫ</b>{scheduledLiveMatches.map((match) => <span key={match.id}>{match.stage === "swiss" ? "SW" : match.stage === "playin" ? "PI" : "PO"} R{match.round} · {getTeam(match.team_a).name} — {getTeam(match.team_b).name} · {match.predicted_probability === null ? "прогноз ещё не сохранён" : `зафиксировано ${getTeam(match.team_a).short} ${match.predicted_probability.toFixed(1)}%`}{match.scheduled_at ? ` · ${new Date(match.scheduled_at).toLocaleString("ru-RU")}` : ""}</span>)}</div>}
-        {hypotheticalBranches.length > 0 && <div className="hypothesis-grid"><b>УСЛОВНЫЕ ВЕТКИ · НЕ ОБУЧЕНИЕ НА ВЫМЫШЛЕННЫХ РЕЗУЛЬТАТАХ</b>{hypotheticalBranches.map(({ match, aWins, bWins }) => <article key={match.id}><strong>{getTeam(match.team_a).name} — {getTeam(match.team_b).name}</strong><span>Если {getTeam(match.team_a).short} победит → чемпион ветки {aWins.champion ? getTeam(aWins.champion).name : "уточняется"}</span><span>Если {getTeam(match.team_b).short} победит → чемпион ветки {bWins.champion ? getTeam(bWins.champion).name : "уточняется"}</span></article>)}</div>}
+        {scheduledLiveMatches.length > 0 && <div className="hypothesis-grid"><div className="hypothesis-grid__head"><b>КАК РЕЗУЛЬТАТ ИЗМЕНИТ ТУРНИРНЫЕ ШАНСЫ</b><span>Рейтинг команд заморожен. Гипотеза меняет только победителя матча и дальнейшую сетку; вымышленный результат не попадает в данные или обучение.</span></div>{scheduledLiveMatches.slice(0, 8).map((match) => {
+          const analysis = conditionalBranches[match.id];
+          const teamResult = (result: SimulationResult | undefined, id: string) => result?.teams.find((team) => team.id === id);
+          const aInA = teamResult(analysis?.aWins, match.team_a); const aInB = teamResult(analysis?.bWins, match.team_a);
+          const bInA = teamResult(analysis?.aWins, match.team_b); const bInB = teamResult(analysis?.bWins, match.team_b);
+          const championChanges = analysis?.aWins && analysis.bWins ? analysis.aWins.teams.map((team) => {
+            const other = analysis.bWins!.teams.find((item) => item.id === team.id)!;
+            return { id: team.id, a: team.champion, b: other.champion, delta: team.champion - other.champion };
+          }).sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta)).slice(0, 3) : [];
+          const meaningful = championChanges.some((item) => Math.abs(item.delta) > (analysis?.noisePp ?? Infinity));
+          return <article key={match.id}><header><strong>{getTeam(match.team_a).name} — {getTeam(match.team_b).name}</strong><small>{match.stage === "swiss" ? `SW R${match.round}` : match.stage === "playin" ? "СТЫК" : "ПЛЕЙ-ОФФ"}</small></header>{!analysis ? <button type="button" onClick={() => void calculateConditionalBranches(match)}>Сравнить две ветки</button> : analysis.loading ? <span>Считаю две ветки по 50 000…</span> : analysis.error ? <span>{analysis.error}</span> : <>
+            <div className="branch-table"><b>ЕСЛИ ПОБЕДИТ</b><b>{getTeam(match.team_a).short}</b><b>{getTeam(match.team_b).short}</b><span>Проход {getTeam(match.team_a).short}</span><em>{aInA?.qualify.toFixed(1)}%</em><em>{aInB?.qualify.toFixed(1)}%</em><span>Проход {getTeam(match.team_b).short}</span><em>{bInA?.qualify.toFixed(1)}%</em><em>{bInB?.qualify.toFixed(1)}%</em></div>
+            <div className="branch-impact"><b>ИЗМЕНЕНИЕ ШАНСА НА ЧЕМПИОНСТВО · {getTeam(match.team_a).short} ПОБЕДИЛА ПРОТИВ {getTeam(match.team_b).short} ПОБЕДИЛА</b>{meaningful ? championChanges.map((item) => <span key={item.id}><strong>{getTeam(item.id).name}</strong><em>{item.a.toFixed(2)}% → {item.b.toFixed(2)}%</em><i className={item.delta >= 0 ? "is-positive" : "is-negative"}>{item.delta >= 0 ? "+" : ""}{item.delta.toFixed(2)} п.п.</i></span>) : <span className="branch-no-effect">Существенного влияния на чемпионство не обнаружено: различия не превышают консервативный порог шума ±{analysis.noisePp?.toFixed(2)} п.п.</span>}</div>
+            <small className="branch-method">{analysis.iterations?.toLocaleString("ru-RU")} прогонов на ветку · одинаковый seed · никаких изменений рейтинга или обучения</small>
+          </>}</article>;
+        })}</div>}
         {completedLiveMatches.length > 0 && <div className="live-results">{completedLiveMatches.map((match) => {
           const hasSavedPrediction = Number.isFinite(match.predicted_probability);
           const pA = match.predicted_probability ?? 50;
