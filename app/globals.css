@@ -190,6 +190,10 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border: 5px s
 .iteration-picker button.active { border-color: var(--lime); color: var(--ink); background: var(--lime); }
 .calculate-button { width: 100%; display: flex; justify-content: space-between; background: var(--lime); color: var(--ink); padding: 16px 17px; }
 .calculate-button:disabled { opacity: .7; cursor: wait; }
+.simulation-status { margin: 9px 0 7px; border: 1px solid var(--line); padding: 9px 10px; color: #aeb7c3; font: 700 10px/1.45 var(--font-geist-mono); }
+.simulation-status--running { border-color: #6f7d31; color: var(--lime); }
+.simulation-status--success { border-color: #397a62; color: #86e5b8; }
+.simulation-status--error { border-color: #a84f55; color: #ff9da3; background: rgb(168 79 85 / 8%); }
 .simulation-card small { display: block; margin-top: 12px; color: #9da7b4; font-size: 10px; line-height: 1.55; }
 .simulation-card .stats-meta { color: #b0bd8b; }
 

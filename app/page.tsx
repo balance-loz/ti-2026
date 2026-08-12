@@ -710,6 +710,7 @@ export default function Home() {
   const [slider, setSlider] = useState(50);
   const [result, setResult] = useState<SimulationResult | null>(null);
   const [isCalculating, setIsCalculating] = useState(false);
+  const [simulationStatus, setSimulationStatus] = useState<{ kind: "idle" | "running" | "success" | "error"; message: string }>({ kind: "idle", message: "" });
   const [view, setView] = useState<"all" | ForecastOutcome>("all");
   const [answersLoaded, setAnswersLoaded] = useState(false);
   const [backupMessage, setBackupMessage] = useState("");
@@ -929,7 +930,15 @@ export default function Home() {
   };
 
   const calculate = () => {
+    const requestedIterations = adaptiveRun ? 250_000 : iterationCount;
+    const startedAt = performance.now();
     setIsCalculating(true);
+    setSimulationStatus({
+      kind: "running",
+      message: adaptiveRun
+        ? "Запущен адаптивный расчёт: первая проверка после 250 000 турниров. Не закрывайте вкладку."
+        : `Запущен расчёт ${requestedIterations.toLocaleString("ru-RU")} турниров. На телефоне 1M может занять больше минуты.`,
+    });
     window.setTimeout(async () => {
       const baseSource = forecastMode === "stats"
         ? statisticalAnswers(stats)
@@ -941,6 +950,8 @@ export default function Home() {
       try {
         const simulation = await runSimulationInWorker(source, adaptiveRun ? 250_000 : iterationCount, seed, { liveMatches, statisticalModel: stats, adaptive: adaptiveRun });
         setResult(simulation);
+        const elapsedSeconds = Math.max(.1, (performance.now() - startedAt) / 1000);
+        setSimulationStatus({ kind: "success", message: `Готово: ${simulation.iterations.toLocaleString("ru-RU")} турниров за ${elapsedSeconds.toFixed(1)} сек. Результат обновлён ниже.` });
         if (serverAvailable && serverState?.isAdmin) {
           void fetch("/api/admin/snapshots", {
             method: "POST",
@@ -951,7 +962,8 @@ export default function Home() {
         }
         document.getElementById("forecast")?.scrollIntoView({ behavior: "smooth", block: "start" });
       } catch (error) {
-        setAdminMessage(`Не удалось выполнить Monte Carlo: ${error instanceof Error ? error.message : String(error)}`);
+        const detail = error instanceof Error ? error.message : String(error);
+        setSimulationStatus({ kind: "error", message: `Прогон не выполнен: ${detail}. Попробуйте AUTO или 250K; эта ошибка не изменила предыдущий результат.` });
       } finally {
         setIsCalculating(false);
       }
@@ -1344,6 +1356,7 @@ export default function Home() {
               {isCalculating ? (adaptiveRun ? "Считаю до сходимости…" : `Считаю ${iterationCount.toLocaleString("ru-RU")} сеток…`) : "Запустить новый прогон"}
               <span>{isCalculating ? "···" : "↗"}</span>
             </button>
+            {simulationStatus.kind !== "idle" && <p className={`simulation-status simulation-status--${simulationStatus.kind}`} role={simulationStatus.kind === "error" ? "alert" : "status"}>{simulationStatus.message}</p>}
             <small>{adaptiveRun ? "AUTO: от 250 000 до 1 000 000; остановка после двух стабильных проверок с изменением ≤0,10 п.п." : `Фиксированный бюджет: ${iterationCount.toLocaleString("ru-RU")} полных турниров.`} Расчёт идёт в фоновом потоке и не должен блокировать интерфейс.</small>
             {result && <small className="stats-meta">Итоговых восьмёрок Swiss: {result.uniqueSwissOutcomes?.toLocaleString("ru-RU") ?? "—"}; вариантов подиума: {result.uniquePlayoffPodiums?.toLocaleString("ru-RU") ?? "—"}; полных итогов «восьмёрка + подиум»: {result.uniqueFinalOutcomes?.toLocaleString("ru-RU") ?? "—"}. Детальных путей всего турнира: {(result.uniqueTournamentPaths ?? result.uniqueBrackets).toLocaleString("ru-RU")} из {(result.pathSampleIterations ?? result.iterations).toLocaleString("ru-RU")} проверенных для уникальности ({(100 - (result.tournamentDuplicateRate ?? result.duplicateRate)).toFixed(3)}%). Это разные метрики: один итог может быть достигнут множеством разных жеребьёвок и результатов по раундам.</small>}
             {stats && <small className="stats-meta">{stats.totals.uniqueAcceptedGames} карт · одна контрольная карта на турнир · половина веса за {stats.methodology.recencyHalfLifeDays} дней</small>}
