@@ -1,6 +1,11 @@
+x-app-image: &app-image
+  image: ti2026-app:${IMAGE_TAG:-local}
+  build:
+    context: .
+
 services:
   web:
-    build: .
+    <<: *app-image
     command: npm start -- --hostname 0.0.0.0 --port 3000
     restart: unless-stopped
     environment:
@@ -13,7 +18,7 @@ services:
       timeout: 5s
       retries: 3
   api:
-    build: .
+    <<: *app-image
     command: node server/api.mjs
     restart: unless-stopped
     environment:

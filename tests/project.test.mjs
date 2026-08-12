@@ -135,12 +135,14 @@ test("two-year patch research uses exact versions and honest patch-note ablation
 test("active draft candidate beats a separately fitted team-plus-side frozen holdout", async () => {
   const report = JSON.parse(await readFile("work/active-draft-walkforward.json", "utf8"));
   const teamModel = JSON.parse(await readFile("public/team-model.json", "utf8"));
-  assert.equal(report.combiner.version, 2);
+  assert.equal(report.combiner.version, 3);
   assert.ok(report.dataset.frozenHoldoutMaps >= 10_000);
   assert.ok(report.metrics.frozenHoldout.model.logLoss < report.metrics.frozenHoldout.teamSide.logLoss);
   assert.ok(report.metrics.frozenHoldout.model.brier < report.metrics.frozenHoldout.teamSide.brier);
   assert.ok(report.bootstrap.frozenHoldoutVersusTeamSide.upper95 < 0);
   assert.equal(report.deployment.frozenHoldoutGatePassed, true);
+  assert.equal(report.draftPriority.incrementalGatePassed, report.bootstrap.draftPriorityIncremental.upper95 < 0 && report.metrics.frozenHoldout.draftPriorityLogLossDelta < 0 && report.metrics.frozenHoldout.model.brier < report.metrics.frozenHoldout.withoutDraftPriority.brier);
+  assert.equal(report.combiner.weights.draftPriority, report.draftPriority.incrementalGatePassed ? report.draftPriority.productionWeight : 0);
   assert.equal(report.teamPrior.modelId, teamModel.selected.id);
 });
 
@@ -196,7 +198,10 @@ test("draft lab contains current-patch heroes and regularized matchup evidence",
   assert.ok(Object.keys(stats.synergy).length > 0);
   assert.ok(Object.keys(stats.counters).length > 0);
   assert.ok(Object.keys(stats.lineups).length > 0);
-  assert.deepEqual(stats.activeSnapshot.featureContract, ["teamPrior", "side", "hero", "synergy", "counter", "teamPool", "playerPool", "roles"]);
+  assert.deepEqual(stats.activeSnapshot.featureContract, ["teamPrior", "side", "hero", "draftPriority", "synergy", "counter", "teamPool", "playerPool", "roles"]);
+  assert.ok(Object.keys(stats.activeSnapshot.heroPriority).length >= 120);
+  assert.ok(Object.values(stats.activeSnapshot.heroPriority).every((row) => row.pickRate >= 0 && row.banRate >= 0 && row.contestedRate >= row.pickRate && row.contestedRate >= row.banRate && row.flex >= 0 && row.flex <= 1));
+  assert.equal(stats.combiner.weights.draftPriority, stats.validation.activeFormula.draftPriority.incrementalGatePassed ? stats.validation.activeFormula.draftPriority.productionWeight : 0);
   assert.deepEqual(stats.activeSnapshot.teamPairwise, Object.fromEntries(Object.entries((await readFile("public/team-stats.json", "utf8").then(JSON.parse)).pairwise).map(([key, pair]) => [key, { probabilityA: pair.mapProbabilityA, modelId: pair.modelId }])));
   assert.ok(Object.values(stats.activeSnapshot.synergy).every((row) => Number.isFinite(row.coefficient)));
   assert.ok(Object.values(stats.activeSnapshot.counter).every((row) => Number.isFinite(row.coefficient)));
@@ -424,6 +429,19 @@ test("production image exposes next-generation artifacts without activating shad
   assert.match(compose, /ALL_PRO_TEAM_MODEL: \/app\/model\/all-pro-team-model\.json/);
   assert.match(api, /\/api\/models\/nextgen/);
   assert.match(api, /activeForecastUnchanged: true/);
+});
+
+test("docker build keeps research data out of context and shares one app image", async () => {
+  const dockerignore = await readFile(".dockerignore", "utf8");
+  const dockerfile = await readFile("Dockerfile", "utf8");
+  const compose = await readFile("docker-compose.yml", "utf8");
+  for (const directory of ["node_modules", "work", "data", ".git", "dist", ".vinext"]) {
+    assert.match(dockerignore, new RegExp(`^${directory.replace(".", "\\.")}$`, "m"));
+  }
+  assert.match(dockerfile, /--mount=type=cache,target=\/root\/\.npm/);
+  assert.match(dockerfile, /npm ci --no-audit --no-fund/);
+  assert.match(compose, /image: ti2026-app:\$\{IMAGE_TAG:-local\}/);
+  assert.equal((compose.match(/<<: \*app-image/g) ?? []).length, 2);
 });
 
 test("cross-page navigation does not depend on broken Vinext Link prefetch", async () => {

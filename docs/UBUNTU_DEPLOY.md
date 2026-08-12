@@ -86,6 +86,16 @@ docker compose ps
 curl http://127.0.0.1/api/health
 ```
 
+`web` и `api` используют один образ `ti2026-app`, поэтому приложение собирается один раз. `.dockerignore` исключает локальные `work/`, `node_modules`, `.git`, старые `dist/.next` и базы из build context. Повторная сборка также использует BuildKit-кэш npm. Обучающие базы и тяжёлые research-пайплайны в image build не запускаются.
+
+Для диагностики медленной сборки используйте подробный вывод:
+
+```bash
+docker compose build --progress=plain web
+```
+
+Если изменился только исходный код, шаг `npm ci` должен показывать `CACHED`. Без изменения `package-lock.json` повторная сборка обычно тратит время только на `npm run build`.
+
 Ожидаемый ответ проверки: `{"ok":true}`. После этого откройте в браузере:
 
 ```text

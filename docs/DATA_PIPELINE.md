@@ -40,7 +40,7 @@ The cross-patch model is intentionally a separate local pipeline: `npm run draft
 
 ## Validation contract
 
-- Active map formula: shared nested-arena `team prior → side/hero → residual synergy → residual counter → team pool → constrained player pool → learned hero×position`; all state is observed only after its OOF prediction. Combiner weights are fitted from OOF outcomes, then the same state/feature contract is exported to Draft Lab.
+- Active map formula: shared nested-arena `team prior → side/hero → draft priority → residual synergy → residual counter → team pool → constrained player pool → learned hero×position`; all state is observed only after its OOF prediction. Draft priority contains smoothed pick, ban, contested, first-phase and flex evidence from maps preceding the prediction. Its production weight stays zero unless it improves the same frozen model without that feature under a series-cluster bootstrap gate. Combiner weights are fitted from OOF outcomes, then the same state/feature contract is exported to Draft Lab.
 - `stats:update` also runs the 21-configuration nested team arena and historical tournament calibration. It exports `public/team-model.json` and `public/tournament-calibration.json` before either UI consumes probabilities.
 - Browser and API tournament forecasts share `server/forecast-engine.mjs`; there is no second Monte Carlo implementation in the client.
 - Temporal Model Arena: nine candidates are compared, but the backtest and export both use the named fixed four-member production stack. The Factorization Machine interaction is a difference of within-side interactions and has a mandatory side-flip invariant test.

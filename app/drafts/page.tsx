@@ -23,6 +23,7 @@ type Hero = {
   modelWinRate: number;
 };
 type Sample = { games: number; wins?: number; winRate: number; lastPlayedAt?: number };
+type HeroPriority = { maps: number; picks: number; bans: number; pickRate: number; banRate: number; contestedRate: number; firstPhaseRate: number; flex: number; score: number };
 type PlayerHeroStats = { accountId: number; name: string; games: number; heroes: Record<string, Sample> };
 type DraftStats = {
   generatedAt: string;
@@ -53,6 +54,7 @@ type DraftStats = {
     radiantWinRate: number;
     teamPairwise: Record<string, { probabilityA: number }>;
     hero: Record<string, Sample>;
+    heroPriority?: Record<string, HeroPriority>;
     synergy: Record<string, Sample>;
     counter: Record<string, Sample>;
     teamHero: Record<string, Sample>;
@@ -212,6 +214,16 @@ function calculateDraft(
   const metaA = average(heroesA.map(activeHeroRate));
   const metaB = average(heroesB.map(activeHeroRate));
   add("hero", "Мета героев", logit(metaA) - logit(metaB), `усреднённый walk-forward рейтинг пика ${teamById(teamA).short} ${(metaA * 100).toFixed(1)}% против ${(metaB * 100).toFixed(1)}%`);
+
+  const priorityFor = (heroes: Hero[]) => heroes.flatMap((hero) => {
+    const row = draftStats.activeSnapshot?.heroPriority?.[String(hero.id)];
+    return row ? [row] : [];
+  });
+  const priorityA = priorityFor(heroesA); const priorityB = priorityFor(heroesB);
+  const priorityScoreA = average(priorityA.map((row) => row.score), 0); const priorityScoreB = average(priorityB.map((row) => row.score), 0);
+  const prioritySummary = (rows: HeroPriority[]) => ({ contested: average(rows.map((row) => row.contestedRate), 0), bans: average(rows.map((row) => row.banRate), 0), early: average(rows.map((row) => row.firstPhaseRate), 0), flex: average(rows.map((row) => row.flex * 100), 0) });
+  const priorityMetaA = prioritySummary(priorityA); const priorityMetaB = prioritySummary(priorityB);
+  add("draftPriority", "Приоритет драфта", priorityScoreA - priorityScoreB, `prequential без утечки: contested ${priorityMetaA.contested.toFixed(1)}% / ${priorityMetaB.contested.toFixed(1)}%, bans ${priorityMetaA.bans.toFixed(1)}% / ${priorityMetaB.bans.toFixed(1)}%, early ${priorityMetaA.early.toFixed(1)}% / ${priorityMetaB.early.toFixed(1)}%, flex ${priorityMetaA.flex.toFixed(0)}% / ${priorityMetaB.flex.toFixed(0)}%`, priorityA.reduce((sum, row) => sum + row.picks + row.bans, 0) + priorityB.reduce((sum, row) => sum + row.picks + row.bans, 0));
 
   const synergyFor = (heroes: Hero[]) => {
     const rows: { a: Hero; b: Hero; sample: Sample }[] = [];
@@ -404,7 +416,7 @@ export default function DraftsPage() {
       <section className="hero-pool">
         <header><div><p className="eyebrow">ПУЛ ГЕРОЕВ</p><h2>Выбери героя для {active.side === "a" ? firstTeam.name : secondTeam.name}</h2></div><label><span>Поиск</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Например, Puck" /></label></header>
         <div className="hero-filters">{ATTRIBUTES.map((item) => <button type="button" key={item.id} className={attribute === item.id ? "active" : ""} onClick={() => setAttribute(item.id)}>{item.label}</button>)}</div>
-        <div className="hero-grid">{visibleHeroes.map((hero) => <button type="button" key={hero.id} disabled={selected.has(hero.id)} onClick={() => chooseHero(hero.id)} title={`${hero.roles.join(", ")} · модель ${hero.modelWinRate.toFixed(1)}%`}><img src={hero.image} alt="" /><span><b>{hero.name}</b><small>{hero.modelWinRate.toFixed(1)}% · {hero.proPicks + hero.proBans} pro P/B</small></span>{selected.has(hero.id) ? <i>В ПИКЕ</i> : null}</button>)}</div>
+        <div className="hero-grid">{visibleHeroes.map((hero) => { const priority = draftStats?.activeSnapshot?.heroPriority?.[String(hero.id)]; return <button type="button" key={hero.id} disabled={selected.has(hero.id)} onClick={() => chooseHero(hero.id)} title={`${hero.roles.join(", ")} · модель ${hero.modelWinRate.toFixed(1)}%${priority ? ` · pick ${priority.pickRate.toFixed(1)}% · ban ${priority.banRate.toFixed(1)}% · contested ${priority.contestedRate.toFixed(1)}%` : ""}`}><img src={hero.image} alt="" /><span><b>{hero.name}</b><small>{hero.modelWinRate.toFixed(1)}% · {priority ? `P ${priority.pickRate.toFixed(1)}% · B ${priority.banRate.toFixed(1)}%` : `${hero.proPicks + hero.proBans} pro P/B`}</small></span>{selected.has(hero.id) ? <i>В ПИКЕ</i> : null}</button>; })}</div>
       </section>
     </section>
 
@@ -412,7 +424,7 @@ export default function DraftsPage() {
       <div className="section-heading section-heading--light"><span className="step-number">02</span><div><p>ПРОЗРАЧНОСТЬ МОДЕЛИ</p><h2>Почему получилась эта вероятность</h2></div><span className="section-note">Каждая поправка ограничена и сжата к нулю,<br />если данных по сочетанию мало.</span></div>
       <div className="draft-model-grid">
         <article className="draft-breakdown"><header><span>СТАРТ</span><b>{(result.base * 100).toFixed(1)}%</b><p>Сила команд на карте до учёта драфта</p></header>{result.features.map((feature) => <div key={feature.label}><span><b>{feature.label}</b><small>{feature.detail}</small></span><strong className={feature.contribution > 0.04 ? "positive" : feature.contribution < -0.04 ? "negative" : "neutral"}>{signed(feature.contribution)}</strong></div>)}<footer><span>ИТОГ ДЛЯ {firstTeam.short}</span><b>{(result.probability * 100).toFixed(1)}%</b></footer></article>
-        <aside className="draft-method-card"><p className="eyebrow">ЧТО УЖЕ УЧИТЫВАЕМ</p><h3>Не чёрный ящик</h3><ul><li><b>Команды</b><span>Walk-forward map prior: для каждой карты используются только более ранние результаты.</span></li><li><b>Герой в патче</b><span>Базовая сила героя на всех загруженных pro-картах 7.41, а не только у участников TI.</span></li><li><b>Переход между патчами</b><span>{temporalModel ? `${temporalModel.dataset?.matches ?? 0} карт, ${temporalModel.dataset?.patches ?? 0} патча · ${temporalModel.deployment?.status === "candidate" ? "включена" : "SHADOW без влияния на прогноз"}` : "модель загружается"}.</span></li><li><b>Игрок × герой</b><span>Личная практика каждого из пяти игроков с байесовским сглаживанием.</span></li><li><b>Связки и контрпики</b><span>Все 10 пар союзников и 25 направленных матчапов против пика соперника.</span></li></ul><p>Отдельная SQLite-база содержит <b>{draftStats?.methodology.cachedPatchMaps ?? "—"} pro-карт</b> актуального патча. Коллектор постепенно проходит всю историю, стратифицируя очередь по времени, лигам и командам. Редкие сочетания почти не двигают прогноз.</p><small>Обновлено {draftStats ? new Date(draftStats.generatedAt).toLocaleString("ru-RU") : "—"} · патч {draftStats?.methodology.patchName ?? draftStats?.methodology.latestOpenDotaPatchId ?? "—"} · начало {draftStats?.methodology.patchStart ? new Date(draftStats.methodology.patchStart).toLocaleDateString("ru-RU") : "—"}</small></aside>
+        <aside className="draft-method-card"><p className="eyebrow">ЧТО УЖЕ УЧИТЫВАЕМ</p><h3>Не чёрный ящик</h3><ul><li><b>Команды</b><span>Walk-forward map prior: для каждой карты используются только более ранние результаты.</span></li><li><b>Герой в патче</b><span>Базовая сила героя на всех загруженных pro-картах 7.41, а не только у участников TI.</span></li><li><b>Приоритет драфта</b><span>Pick, ban, contested, ранняя фаза и flex считаются только по предыдущим картам; вес обучен на OOF и может быть нулевым.</span></li><li><b>Переход между патчами</b><span>{temporalModel ? `${temporalModel.dataset?.matches ?? 0} карт, ${temporalModel.dataset?.patches ?? 0} патча · ${temporalModel.deployment?.status === "candidate" ? "включена" : "SHADOW без влияния на прогноз"}` : "модель загружается"}.</span></li><li><b>Игрок × герой</b><span>Личная практика каждого из пяти игроков с байесовским сглаживанием.</span></li><li><b>Связки и контрпики</b><span>Все 10 пар союзников и 25 направленных матчапов против пика соперника.</span></li></ul><p>Отдельная SQLite-база содержит <b>{draftStats?.methodology.cachedPatchMaps ?? "—"} pro-карт</b> актуального патча. Коллектор постепенно проходит всю историю, стратифицируя очередь по времени, лигам и командам. Редкие сочетания почти не двигают прогноз.</p><small>Обновлено {draftStats ? new Date(draftStats.generatedAt).toLocaleString("ru-RU") : "—"} · патч {draftStats?.methodology.patchName ?? draftStats?.methodology.latestOpenDotaPatchId ?? "—"} · начало {draftStats?.methodology.patchStart ? new Date(draftStats.methodology.patchStart).toLocaleDateString("ru-RU") : "—"}</small></aside>
       </div>
       {temporalModel?.arena?.leaderboard?.length ? <article className="draft-arena-card">
         <header><div><p className="eyebrow">MODEL ARENA · PATCH WALK-FORWARD</p><h3>Какая модель действительно лучше</h3></div><span className={temporalModel.deployment?.status === "candidate" ? "is-candidate" : "is-shadow"}>{temporalModel.deployment?.status === "candidate" ? "CANDIDATE" : temporalModel.deployment?.status === "insufficient_data" ? "МАЛО ДАННЫХ" : "SHADOW"}</span></header>
