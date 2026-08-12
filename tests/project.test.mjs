@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { completedSeriesFromMaps } from "../server/live-series.mjs";
 import { scheduledSeriesFromCybersportHtml } from "../server/schedule-source.mjs";
-import { buildForecastSource, ROUND_ONE, runForecast, SWISS_GROUPS, SWISS_GROUP_BY_TEAM, swissBucketKey } from "../server/forecast-engine.mjs";
+import { buildForecastSource, ROUND_ONE, runForecast, SWISS_GROUPS, SWISS_GROUP_BY_TEAM, swissBucketKey, topGroupScenarios } from "../server/forecast-engine.mjs";
 import { combineDraftSignals } from "../server/draft-combiner.mjs";
 import { predictTemporalDraft } from "../server/draft-inference.mjs";
 import { bestOfProbability, convertSeriesProbability } from "../server/team-model.mjs";
@@ -308,6 +308,8 @@ test("server forecast can create an automatic snapshot payload", async () => {
   assert.equal(result.scenarios[0].via.length, 5);
   assert.ok(result.scenarios.every((scenario) => scenario.occurrences >= 1 && scenario.probability > 0));
   assert.ok(result.scenarios.every((scenario) => Math.abs(scenario.probability - 100 * scenario.occurrences / result.iterations) < 1e-12));
+  assert.deepEqual(result.scenarios.map((scenario) => scenario.occurrences), [...result.scenarios.map((scenario) => scenario.occurrences)].sort((a, b) => b - a));
+  assert.ok(result.scenarios.every((scenario) => scenario.scope === "group_and_playin"));
   assert.equal(result.playoffScenarios.length, 3);
   assert.ok(result.playoffScenarios.every((scenario) => scenario.occurrences >= 1));
   assert.ok(result.playoffScenarios.every((scenario) => new Set([scenario.champion, scenario.runnerUp, scenario.third]).size === 3));
@@ -319,6 +321,15 @@ test("server forecast can create an automatic snapshot payload", async () => {
   const total = (field) => Math.round(result.teams.reduce((sum, team) => sum + team[field], 0));
   assert.deepEqual({ direct: total("direct"), playinWin: total("viaPlayin"), playinLoss: total("playinLoss"), swissOut: total("swissOut") }, { direct: 300, playinWin: 500, playinLoss: 500, swissOut: 300 });
   for (const team of result.teams) assert.ok(Math.abs(team.direct + team.viaPlayin + team.playinLoss + team.swissOut - 100) < 0.001);
+});
+
+test("group scenarios rank raw counts before percentage conversion and exclude playoff identity", () => {
+  const make = (id) => JSON.stringify({ direct40: [id], direct41: ["b", "c"], via: ["d", "e", "f", "g", "h"] });
+  const ranked = topGroupScenarios(new Map([[make("third"), 11], [make("first"), 13], [make("second"), 12]]), 1_000_000);
+  assert.deepEqual(ranked.map((scenario) => scenario.occurrences), [13, 12, 11]);
+  assert.deepEqual(ranked.map((scenario) => scenario.rank), [1, 2, 3]);
+  assert.deepEqual(ranked.map((scenario) => scenario.probability), [.0013, .0012, .0011]);
+  assert.ok(ranked.every((scenario) => !("champion" in scenario)));
 });
 
 test("adaptive forecast respects its minimum, checkpoints and maximum budget", async () => {
@@ -351,6 +362,13 @@ test("forecast worker returns the same deterministic result as the engine", asyn
   });
   assert.deepEqual(actual.teams, expected.teams);
   assert.deepEqual(actual.convergence, expected.convergence);
+});
+
+test("manual Monte Carlo UI exposes adaptive, 500K and 1M budgets", async () => {
+  const page = await readFile("app/page.tsx", "utf8");
+  assert.match(page, /setAdaptiveRun\(true\)/);
+  assert.match(page, /500000, 1000000/);
+  assert.match(page, /forecast-client-worker\.ts/);
 });
 
 test("intel artifact covers every team and complete tournament outcomes", async () => {

@@ -617,9 +617,37 @@ function runSimulation(
   return runForecast(answers, iterations, seed, { matches: options.liveMatches ?? [], stats: options.statisticalModel });
 }
 
+function runSimulationInWorker(
+  answers: AnswerMap,
+  iterations: number,
+  seed: number,
+  options: { liveMatches?: LiveMatch[]; statisticalModel?: StatisticalModel | null; adaptive?: boolean } = {},
+): Promise<SimulationResult> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./forecast-client-worker.ts", import.meta.url), { type: "module" });
+    const cleanup = () => worker.terminate();
+    worker.onmessage = (event) => {
+      cleanup();
+      if (event.data?.ok) resolve(event.data.result as SimulationResult);
+      else reject(new Error(event.data?.error || "simulation_worker_failed"));
+    };
+    worker.onerror = (event) => { cleanup(); reject(new Error(event.message || "simulation_worker_failed")); };
+    const adaptive = options.adaptive ? { enabled: true, minIterations: 250_000, maxIterations: 1_000_000, batchSize: 250_000, tolerancePp: .1, stableChecksRequired: 2 } : null;
+    worker.postMessage({ answers, iterations, seed, matches: options.liveMatches ?? [], stats: options.statisticalModel, adaptive });
+  });
+}
+
+function iterationLabel(iterations: number) {
+  if (iterations >= 1_000_000) return `${iterations / 1_000_000}M`;
+  return iterations >= 1000 ? `${iterations / 1000}K` : String(iterations);
+}
+
 function formatRareScenarioProbability(probability: number) {
   if (!Number.isFinite(probability) || probability <= 0) return "—";
-  return probability < .01 ? "<0.01%" : `${probability.toFixed(2)}%`;
+  if (probability < .001) return `${probability.toFixed(5)}%`;
+  if (probability < .01) return `${probability.toFixed(4)}%`;
+  if (probability < .1) return `${probability.toFixed(3)}%`;
+  return `${probability.toFixed(2)}%`;
 }
 
 function TeamMark({ team, small = false }: { team: Team; small?: boolean }) {
@@ -679,6 +707,7 @@ export default function Home() {
   const [forecastMode, setForecastMode] = useState<"personal" | "mixed" | "stats">("stats");
   const [opinionWeight, setOpinionWeight] = useState(0);
   const [iterationCount, setIterationCount] = useState(250000);
+  const [adaptiveRun, setAdaptiveRun] = useState(true);
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const [decisionPolicy, setDecisionPolicy] = useState({ probabilityTemperature: 1, selectivePrediction: { minMarginPp: 5 } });
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
@@ -774,11 +803,11 @@ export default function Home() {
     if (snapshot) {
       const rootId = snapshot.root_snapshot_id ?? snapshot.id;
       const latest = snapshots.filter((item) => (item.root_snapshot_id ?? item.id) === rootId).sort((a, b) => b.completed_match_count - a.completed_match_count || b.id - a.id)[0] ?? snapshot;
-      setForecastMode(snapshot.forecast_mode); setOpinionWeight(snapshot.opinion_weight); setIterationCount(snapshot.iterations);
+      setForecastMode(snapshot.forecast_mode); setOpinionWeight(snapshot.opinion_weight); setIterationCount(snapshot.iterations); setAdaptiveRun(Boolean(latest.result.convergence?.adaptive));
       if (snapshot.inputs?.answers) setAnswers(snapshot.inputs.answers);
       setResult(latest.result);
     } else {
-      setForecastMode("stats"); setOpinionWeight(0); setIterationCount(250000);
+      setForecastMode("stats"); setOpinionWeight(0); setIterationCount(250000); setAdaptiveRun(true);
       if (stats) setResult(runSimulation(applyLiveEvidence(statisticalAnswers(stats), completedLiveMatches, stats), 250000, undefined, { liveMatches, statisticalModel: stats }));
     }
   };
@@ -902,25 +931,31 @@ export default function Home() {
 
   const calculate = () => {
     setIsCalculating(true);
-    window.setTimeout(() => {
+    window.setTimeout(async () => {
       const baseSource = forecastMode === "stats"
         ? statisticalAnswers(stats)
         : forecastMode === "mixed"
           ? mixedAnswers(answers, stats, opinionWeight)
           : answers;
       const source = applyLiveEvidence(baseSource, completedLiveMatches, stats);
-      const simulation = runSimulation(source, iterationCount, undefined, { liveMatches, statisticalModel: stats });
-      setResult(simulation);
-      if (serverAvailable && serverState?.isAdmin) {
-        void fetch("/api/admin/snapshots", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ trigger: "manual_run", forecastMode, opinionWeight, answers, iterations: simulation.iterations, seed: simulation.seed, completedMatchCount: completedLiveMatches.length, modelGeneratedAt: stats?.generatedAt ?? null, probabilities: source, result: simulation }),
-        }).then((response) => response.ok ? loadServerState() : Promise.reject(new Error("snapshot")))
-          .catch(() => setAdminMessage("Прогон рассчитан, но не удалось сохранить его в историю."));
+      const seed = Math.floor(Math.random() * 0xffffffff);
+      try {
+        const simulation = await runSimulationInWorker(source, adaptiveRun ? 250_000 : iterationCount, seed, { liveMatches, statisticalModel: stats, adaptive: adaptiveRun });
+        setResult(simulation);
+        if (serverAvailable && serverState?.isAdmin) {
+          void fetch("/api/admin/snapshots", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ trigger: "manual_run", forecastMode, opinionWeight, answers, iterations: simulation.iterations, seed: simulation.seed, completedMatchCount: completedLiveMatches.length, modelGeneratedAt: stats?.generatedAt ?? null, probabilities: source, result: simulation }),
+          }).then((response) => response.ok ? loadServerState() : Promise.reject(new Error("snapshot")))
+            .catch(() => setAdminMessage("Прогон рассчитан, но не удалось сохранить его в историю."));
+        }
+        document.getElementById("forecast")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      } catch {
+        setAdminMessage("Не удалось выполнить Monte Carlo в фоновом потоке.");
+      } finally {
+        setIsCalculating(false);
       }
-      setIsCalculating(false);
-      document.getElementById("forecast")?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 40);
   };
 
@@ -1245,7 +1280,7 @@ export default function Home() {
           </article>
 
           <aside className="simulation-card">
-            <div className="sim-orbit" aria-hidden="true"><span>{iterationCount >= 1000 ? `${iterationCount / 1000}K` : iterationCount}</span></div>
+            <div className="sim-orbit" aria-hidden="true"><span>{adaptiveRun ? "AUTO" : iterationLabel(iterationCount)}</span></div>
             <p className="eyebrow">МОНТЕ-КАРЛО</p>
             <h3>Развилка каждого<br />следующего раунда</h3>
             <p className="muted">
@@ -1270,13 +1305,16 @@ export default function Home() {
             )}
             <div className="iteration-picker">
               <span>КОЛИЧЕСТВО ПРОГОНОВ</span>
-              <div>{[10000, 50000, 100000, 250000].map((count) => <button key={count} className={iterationCount === count ? "active" : ""} onClick={() => setIterationCount(count)}>{count >= 1000 ? `${count / 1000}K` : count}</button>)}</div>
+              <div>
+                <button className={adaptiveRun ? "active" : ""} onClick={() => setAdaptiveRun(true)}>AUTO</button>
+                {[10000, 50000, 100000, 250000, 500000, 1000000].map((count) => <button key={count} className={!adaptiveRun && iterationCount === count ? "active" : ""} onClick={() => { setAdaptiveRun(false); setIterationCount(count); }}>{iterationLabel(count)}</button>)}
+              </div>
             </div>
             <button className="calculate-button" onClick={calculate} disabled={isCalculating || (forecastMode !== "personal" && !stats)}>
-              {isCalculating ? `Считаю ${iterationCount.toLocaleString("ru-RU")} сеток…` : "Запустить новый прогон"}
+              {isCalculating ? (adaptiveRun ? "Считаю до сходимости…" : `Считаю ${iterationCount.toLocaleString("ru-RU")} сеток…`) : "Запустить новый прогон"}
               <span>{isCalculating ? "···" : "↗"}</span>
             </button>
-            <small>Ручной прогон использует фиксированный бюджет, чтобы не замораживать вкладку. Official baseline на сервере адаптивно считает от 250 000 до 1 000 000.</small>
+            <small>{adaptiveRun ? "AUTO: от 250 000 до 1 000 000; остановка после двух стабильных проверок с изменением ≤0,10 п.п." : `Фиксированный бюджет: ${iterationCount.toLocaleString("ru-RU")} полных турниров.`} Расчёт идёт в фоновом потоке и не должен блокировать интерфейс.</small>
             {result && <small className="stats-meta">Итоговых восьмёрок Swiss: {result.uniqueSwissOutcomes?.toLocaleString("ru-RU") ?? "—"}; вариантов подиума: {result.uniquePlayoffPodiums?.toLocaleString("ru-RU") ?? "—"}; полных итогов «восьмёрка + подиум»: {result.uniqueFinalOutcomes?.toLocaleString("ru-RU") ?? "—"}. Детальных путей всего турнира: {(result.uniqueTournamentPaths ?? result.uniqueBrackets).toLocaleString("ru-RU")} из {(result.pathSampleIterations ?? result.iterations).toLocaleString("ru-RU")} проверенных для уникальности ({(100 - (result.tournamentDuplicateRate ?? result.duplicateRate)).toFixed(3)}%). Это разные метрики: один итог может быть достигнут множеством разных жеребьёвок и результатов по раундам.</small>}
             {stats && <small className="stats-meta">{stats.totals.uniqueAcceptedGames} карт · одна контрольная карта на турнир · половина веса за {stats.methodology.recencyHalfLifeDays} дней</small>}
           </aside>
@@ -1400,14 +1438,14 @@ export default function Home() {
         {result && (
           <div className="scenario-grid">
             <div className="scenario-intro">
-              <p className="eyebrow">3 НАБЛЮДАЕМЫХ СЦЕНАРИЯ</p>
-              <h3>Репрезентативные<br />финальные расклады</h3>
-              <p>Это самые частые точные пути именно в Monte Carlo-выборке, а не устойчивый рейтинг всех возможных сеток. Для решений используйте командные вероятности выше.</p>
+              <p className="eyebrow">ТОП-3 ГРУППОВОГО ЭТАПА</p>
+              <h3>Самые вероятные<br />итоги группы и стыков</h3>
+              <p>Сначала все симуляции объединяются по одинаковой итоговой восьмёрке без учёта дальнейшего плей‑офф. Три варианта выбираются по точному числу попаданий; процент округляется только после ранжирования.</p>
             </div>
             {result.scenarios.map((scenario, index) => (
               <article className="scenario-card" key={`${scenario.direct40.join("-")}-${scenario.direct41.join("-")}-${scenario.via.join("-")}`}>
                 <header><span>0{index + 1}</span><b title={`${scenario.occurrences ?? 0} попаданий из ${result.iterations.toLocaleString("ru-RU")} симуляций`}>{formatRareScenarioProbability(scenario.probability)}</b></header>
-                {(scenario.occurrences ?? 0) <= 1 ? <small className="scenario-rarity">ЕДИНИЧНОЕ ПОПАДАНИЕ · НЕУСТОЙЧИВО</small> : null}
+                <small className="scenario-rarity">{(scenario.occurrences ?? 0).toLocaleString("ru-RU")} ИЗ {result.iterations.toLocaleString("ru-RU")} ПРОГОНОВ{(scenario.occurrences ?? 0) <= 1 ? " · НЕУСТОЙЧИВО" : ""}</small>
                 <p>4–0 · БЕЗ ПОРАЖЕНИЙ</p>
                 <div>{scenario.direct40.map((id) => <span className="team-chip team-chip--lime" key={id}><TeamMark team={getTeam(id)} small />{getTeam(id).name}</span>)}</div>
                 <p>4–1 · НАПРЯМУЮ</p>

@@ -93,6 +93,20 @@ function pairBucket(ids, records, random) {
   return best;
 }
 
+export function topGroupScenarios(scenarioCounts, iterations, limit = 3) {
+  return [...scenarioCounts]
+    .sort(([signatureA, countA], [signatureB, countB]) => countB - countA || signatureA.localeCompare(signatureB))
+    .slice(0, limit)
+    .map(([signature, count], index) => ({
+      ...JSON.parse(signature),
+      rank: index + 1,
+      probability: 100 * count / iterations,
+      occurrences: count,
+      representative: true,
+      scope: "group_and_playin",
+    }));
+}
+
 export function runForecast(answers, iterations = 100000, seed = Math.floor(Math.random() * 0xffffffff), { matches = [], stats = null, adaptive = null } = {}) {
   const requestedIterations = Math.max(1, Math.floor(iterations));
   const adaptiveConfig = adaptive?.enabled ? {
@@ -177,7 +191,9 @@ export function runForecast(answers, iterations = 100000, seed = Math.floor(Math
     }
   }
   const teams = TEAMS.map((team) => ({ ...team, qualify: 100 * (totals[team.id].direct + totals[team.id].viaPlayin) / completedIterations, direct: 100 * totals[team.id].direct / completedIterations, playin: 100 * totals[team.id].playin / completedIterations, viaPlayin: 100 * totals[team.id].viaPlayin / completedIterations, playinLoss: 100 * totals[team.id].playinLoss / completedIterations, swissOut: 100 * totals[team.id].swissOut / completedIterations, out: 100 * totals[team.id].out / completedIterations, champion: 100 * totals[team.id].champion / completedIterations, final: 100 * totals[team.id].final / completedIterations, top3: 100 * totals[team.id].top3 / completedIterations, avgWins: totals[team.id].wins / completedIterations, avgLosses: totals[team.id].losses / completedIterations })).sort((a, b) => b.qualify - a.qualify || b.direct - a.direct);
-  const scenarios = [...scenarioCounts].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([signature, count]) => ({ ...JSON.parse(signature), probability: 100 * count / completedIterations, occurrences: count, representative: true }));
+  // Rank exact group/play-in outcomes by their raw occurrence counts before any percentage conversion or UI rounding.
+  // Playoff results are deliberately absent from `signature`, so every downstream playoff branch is aggregated here.
+  const scenarios = topGroupScenarios(scenarioCounts, completedIterations);
   const playoffScenarios = [...playoffScenarioCounts].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([signature, count]) => ({ ...JSON.parse(signature), probability: 100 * count / completedIterations, occurrences: count, representative: true }));
   const playinMatchups = [...matchupCounts].sort((a, b) => b[1].count - a[1].count).slice(0, 10).map(([key, value]) => { const [a, b] = key.split("|"); return { a, b, probability: 100 * value.count / completedIterations, aWinProbability: 100 * value.firstWins / value.count }; });
   const sampledIterations = Math.min(completedIterations, pathSampleLimit);

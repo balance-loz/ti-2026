@@ -185,7 +185,7 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border: 5px s
 .blend-control > div { display: flex; justify-content: space-between; color: #abb3bf; font: 700 10px var(--font-geist-mono); }
 .blend-control input[type="range"] { height: 3px; margin: 13px 0 9px; }
 .iteration-picker { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; color: #a0aab7; font: 700 10px var(--font-geist-mono); }
-.iteration-picker > div { display: flex; gap: 3px; }
+.iteration-picker > div { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 3px; }
 .iteration-picker button { border: 1px solid var(--line); padding: 7px 8px; background: transparent; color: #abb3bf; font: 700 10px var(--font-geist-mono); cursor: pointer; }
 .iteration-picker button.active { border-color: var(--lime); color: var(--ink); background: var(--lime); }
 .calculate-button { width: 100%; display: flex; justify-content: space-between; background: var(--lime); color: var(--ink); padding: 16px 17px; }
