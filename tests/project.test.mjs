@@ -407,6 +407,11 @@ test("manual Monte Carlo UI exposes adaptive, 500K and 1M budgets", async () => 
   assert.match(page, /round-cell--wrong/);
   assert.match(styles, /td\.round-cell--correct/);
   assert.match(styles, /td\.round-cell--wrong/);
+  assert.match(page, /const scenarioSource = selectedRoot\?\.probabilities \?\? forecastSource/);
+  assert.match(page, /buildLikelyBracket\(scenarioSource, liveMatches, stats, scenarioSnapshotCreatedAt\)/);
+  assert.match(page, /displayedResult = selectedRoot\?\.result \?\? result/);
+  assert.match(page, /resultHappenedAfter\(match, snapshotCreatedAt\)/);
+  assert.match(page, /ИСТОРИЧЕСКИЙ ПРОГНОЗ/);
 });
 
 test("conditional branches freeze ratings and compare probabilistic outcomes", async () => {
