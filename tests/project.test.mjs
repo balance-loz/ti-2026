@@ -276,6 +276,7 @@ test("Draft Lab polls and binds the selected live draft", async () => {
   assert.match(page, /setLastSelectedLiveDraft\(selectedLiveDraft\)/);
   assert.match(page, /точное распределение из live-feed/);
   assert.match(page, /гипотеза модели · не подтверждено/);
+  assert.match(page, /result\.assignmentA\?\.rows\.length/);
   assert.match(page, /function liveMapAssessment/);
   assert.match(page, /NO BET · ИСХОД СЛОЖИЛСЯ/);
   assert.match(page, /ЗАМОРОЖЕННЫЙ ПРОГНОЗ ПО ДРАФТУ/);
