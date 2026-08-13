@@ -220,6 +220,14 @@ test("draft lab contains current-patch heroes and regularized matchup evidence",
   assert.match(page, /MODEL ARENA/);
 });
 
+test("draft refresh discovers live TI league maps before training", async () => {
+  const updater = await readFile("scripts/update-draft-stats.mjs", "utf8");
+  assert.match(updater, /TI_LEAGUE_ID/);
+  assert.match(updater, /leagues\/\$\{TI_LEAGUE_ID\}\/matches/);
+  assert.match(updater, /addLiveTournamentMaps/);
+  assert.match(updater, /liveTournamentMapsAdded/);
+});
+
 test("deployment files do not contain the administrator password", async () => {
   const compose = await readFile("docker-compose.yml", "utf8");
   const example = await readFile(".env.example", "utf8");

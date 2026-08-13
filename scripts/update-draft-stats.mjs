@@ -16,6 +16,7 @@ const PAIR_PRIOR_GAMES = 8;
 const PLAYER_PRIOR_GAMES = 6;
 const REQUEST_GAP_MS = 1100;
 const MAX_NEW_MATCHES = Math.max(0, Number(process.env.DRAFT_MAX_NEW_MATCHES || 0));
+const TI_LEAGUE_ID = Number(process.env.TI_LEAGUE_ID || 19719);
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const pairKey = (a, b) => [Number(a), Number(b)].sort((left, right) => left - right).join("|");
@@ -79,6 +80,25 @@ function eligiblePatchMaps(teamStats, patchStartSeconds) {
     byTeam[teamId] = ids;
   }
   return { byTeam, all };
+}
+
+function addLiveTournamentMaps(eligible, teamStats, leagueMaps, patchStartSeconds) {
+  const teamByOpenDotaId = new Map();
+  for (const [teamId, team] of Object.entries(teamStats.teams)) {
+    for (const openDotaId of team.openDotaIds ?? [team.openDotaId]) teamByOpenDotaId.set(Number(openDotaId), teamId);
+  }
+  let added = 0;
+  for (const map of leagueMaps) {
+    const matchId = Number(map.match_id);
+    if (!matchId || Number(map.start_time) < patchStartSeconds) continue;
+    if (!eligible.all.has(matchId)) added += 1;
+    eligible.all.add(matchId);
+    for (const openDotaId of [map.radiant_team_id, map.dire_team_id]) {
+      const teamId = teamByOpenDotaId.get(Number(openDotaId));
+      if (teamId) eligible.byTeam[teamId].add(matchId);
+    }
+  }
+  return added;
 }
 
 async function downloadMissingMatches(matchIds) {
@@ -261,6 +281,13 @@ async function main() {
   const currentPatch = [...patches].sort((a, b) => Number(b.id) - Number(a.id))[0];
   const patchStartSeconds = Math.floor(Date.parse(currentPatch.date) / 1000);
   const eligible = eligiblePatchMaps(teamStats, patchStartSeconds);
+  let liveTournamentMaps = 0;
+  try {
+    const leagueMaps = await apiJson(`/leagues/${TI_LEAGUE_ID}/matches`);
+    liveTournamentMaps = addLiveTournamentMaps(eligible, teamStats, Array.isArray(leagueMaps) ? leagueMaps : [], patchStartSeconds);
+  } catch (error) {
+    process.stderr.write(`Live TI draft discovery skipped: ${error.message}\n`);
+  }
   const download = await downloadMissingMatches(eligible.all);
   const teamMatches = await loadCachedMatches(eligible.all, Number(currentPatch.id));
   const matches = await loadAllCachedProMatches(Number(currentPatch.id));
@@ -293,7 +320,7 @@ async function main() {
   const output = {
     generatedAt: new Date().toISOString(),
     provider: "OpenDota current-patch professional maps + heroStats",
-    methodology: { latestOpenDotaPatchId: Number(currentPatch.id), patchName: currentPatch.name, patchStart: currentPatch.date, eligiblePatchMaps: eligible.all.size, cachedPatchMaps: matches.length, tiTeamPatchMaps: teamMatches.length, globalProPatchMaps: matches.length, globalHeroPool: "all cached professional matches on the current patch, not only TI participants", missingPatchMaps: 0, downloadedThisRun: download.downloaded, proPriorGames: PRO_PRIOR_GAMES, patchPriorGames: PATCH_PRIOR_GAMES, pairPriorGames: PAIR_PRIOR_GAMES, playerPriorGames: PLAYER_PRIOR_GAMES, caveat: "Experimental research coefficients. Global hero/pair evidence uses all cached pro maps; TI-specific pools use only the matching roster. Every coefficient is sample-size regularized." },
+    methodology: { latestOpenDotaPatchId: Number(currentPatch.id), patchName: currentPatch.name, patchStart: currentPatch.date, eligiblePatchMaps: eligible.all.size, cachedPatchMaps: matches.length, tiTeamPatchMaps: teamMatches.length, liveTournamentMapsAdded: liveTournamentMaps, liveTournamentLeagueId: TI_LEAGUE_ID, globalProPatchMaps: matches.length, globalHeroPool: "all cached professional matches on the current patch, not only TI participants", missingPatchMaps: download.failed + Math.max(0, download.missing - download.downloaded - download.failed), downloadedThisRun: download.downloaded, proPriorGames: PRO_PRIOR_GAMES, patchPriorGames: PATCH_PRIOR_GAMES, pairPriorGames: PAIR_PRIOR_GAMES, playerPriorGames: PLAYER_PRIOR_GAMES, caveat: "Experimental research coefficients. Global hero/pair evidence uses all cached pro maps; TI-specific pools use only the matching roster. Every coefficient is sample-size regularized." },
     radiantWinRate: Math.round(patchStats.radiantWinRate * 1000) / 10,
     heroes,
     heroPatch,
