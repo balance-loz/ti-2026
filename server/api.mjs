@@ -247,7 +247,11 @@ async function saveProfileSnapshot(trigger, config, profileAnswers, { kind = "or
     const { matches, stats, probabilities } = currentForecast(config, profileAnswers);
     const completedMatchCount = matches.filter((match) => match.winner).length;
     const key = profileKey(config.forecastMode, config.opinionWeight, profileAnswers);
-    const existing = db.prepare("SELECT id FROM prediction_snapshots WHERE profile_key=? AND completed_match_count=? AND snapshot_kind=? ORDER BY id DESC LIMIT 1").get(key, completedMatchCount, kind);
+    // A newly published pairing changes the forecast constraints without
+    // changing completed_match_count. Pairing triggers include a hash of all
+    // official scheduled series, so include the trigger in deduplication and
+    // do not accidentally reuse the pre-draw baseline.
+    const existing = db.prepare("SELECT id FROM prediction_snapshots WHERE profile_key=? AND completed_match_count=? AND snapshot_kind=? AND trigger=? ORDER BY id DESC LIMIT 1").get(key, completedMatchCount, kind, trigger);
     if (existing) return Number(existing.id);
     const seed = Math.floor(Date.now() % 0xffffffff);
     const minimum = Number(config.iterations || AUTO_SNAPSHOT_ITERATIONS);

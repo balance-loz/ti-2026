@@ -44,3 +44,9 @@ export function latestSnapshotForHistoryRow(row, snapshots) {
 
   return candidates.sort((a, b) => Number(b.completed_match_count) - Number(a.completed_match_count) || Number(b.id) - Number(a.id))[0] ?? root;
 }
+
+export function latestOfficialBaseline(snapshots) {
+  return snapshots
+    .filter(isAutomaticOfficialRoot)
+    .sort((a, b) => Number(b.completed_match_count) - Number(a.completed_match_count) || Number(b.id) - Number(a.id))[0] ?? null;
+}

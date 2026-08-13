@@ -11,7 +11,7 @@ import { assessPredictionConfidence } from "../server/prediction-confidence.mjs"
 import { externalFeatureDecision, pearsonCorrelation } from "../server/external-feature-gate.mjs";
 import { normalizeDatdotaPayload } from "../scripts/sync-datdota-source.mjs";
 import { predictionDecision, sharpenProbability } from "../server/prediction-decision.mjs";
-import { latestSnapshotForHistoryRow, visibleSnapshotHistory } from "../server/snapshot-history.mjs";
+import { latestOfficialBaseline, latestSnapshotForHistoryRow, visibleSnapshotHistory } from "../server/snapshot-history.mjs";
 
 test("draft decides a matchup between equally strong teams", () => {
   const betterDraft = combineDraftSignals(0.5, [0.25]);
@@ -275,6 +275,7 @@ test("snapshot history keeps one visible row while internal revisions advance", 
   assert.deepEqual(rows.map((snapshot) => snapshot.id), [3, 1]);
   assert.equal(latestSnapshotForHistoryRow(rows[0], snapshots).id, 7);
   assert.equal(latestSnapshotForHistoryRow(rows[1], snapshots).id, 8);
+  assert.equal(latestOfficialBaseline(snapshots).id, 8);
 });
 
 test("Cybersport schedule becomes official pre-match series", () => {
@@ -284,6 +285,20 @@ test("Cybersport schedule becomes official pre-match series", () => {
   assert.deepEqual(scheduledSeriesFromCybersportHtml(html), [
     { teamA: "parivision", teamB: "nigma", round: 2, scheduledAt: "2026-08-14T05:00:00.000Z", source: "cybersport" },
     { teamA: "spirit", teamB: "xtreme", round: 2, scheduledAt: "2026-08-14T08:00:00.000Z", source: "cybersport" },
+  ]);
+});
+
+test("current Cybersport round parses UTF-8 today, LIVE and time-less official pairings", () => {
+  const html = `<h2>Расписание</h2>
+    <div class="tab_x isActive_y"><span>Раунд 2</span></div>
+    <div class="item_a"><div class="date_x">Сегодня в 13:00</div><div class="participant_a"><img alt="Falcons"></div><div class="participant_b"><img alt="PARIVISION"></div><span class="vs_x">vs</span><img alt="BetBoom"></div>
+    <div class="item_b"><div class="date_x"><span>LIVE</span></div><div class="participant_a"><img alt="OG"></div><div class="participant_b"><img alt="Nigma"></div><span>0:0</span></div>
+    <div class="item_c"><div class="date_x"></div><div class="participant_a"><img alt="Liquid"></div><div class="participant_b"><img alt="Yandex"></div><span class="vs_x">vs</span></div>
+    <div id="stage-participants"></div>`;
+  assert.deepEqual(scheduledSeriesFromCybersportHtml(html, { now: new Date("2026-08-13T10:15:00.000Z") }), [
+    { teamA: "falcons", teamB: "parivision", round: 2, scheduledAt: "2026-08-13T10:00:00.000Z", source: "cybersport" },
+    { teamA: "og", teamB: "nigma", round: 2, scheduledAt: "2026-08-13T10:15:00.000Z", source: "cybersport" },
+    { teamA: "liquid", teamB: "yandex", round: 2, scheduledAt: "2026-08-13T10:15:00.000Z", source: "cybersport" },
   ]);
 });
 
@@ -352,6 +367,13 @@ test("server forecast can create an automatic snapshot payload", async () => {
   for (const team of result.teams) assert.ok(Math.abs(team.direct + team.viaPlayin + team.playinLoss + team.swissOut - 100) < 0.001);
 });
 
+test("official pairing changes are part of automatic snapshot deduplication", async () => {
+  const api = await readFile("server/api.mjs", "utf8");
+  assert.match(api, /snapshot_kind=\? AND trigger=\?/);
+  assert.match(api, /queueAutomaticSnapshot\(officialPairingTrigger\(\)\)/);
+  assert.match(api, /auto_pairing_/);
+});
+
 test("group scenarios rank raw counts before percentage conversion and exclude playoff identity", () => {
   const make = (id) => JSON.stringify({ direct40: [id], direct41: ["b", "c"], via: ["d", "e", "f", "g", "h"] });
   const ranked = topGroupScenarios(new Map([[make("third"), 11], [make("first"), 13], [make("second"), 12]]), 1_000_000);
@@ -407,11 +429,15 @@ test("manual Monte Carlo UI exposes adaptive, 500K and 1M budgets", async () => 
   assert.match(page, /round-cell--wrong/);
   assert.match(styles, /td\.round-cell--correct/);
   assert.match(styles, /td\.round-cell--wrong/);
-  assert.match(page, /const scenarioSource = selectedRoot\?\.probabilities \?\? forecastSource/);
+  assert.match(page, /const scenarioSource = selectedRoot\?\.probabilities \?\? activeBaselineSnapshot\?\.probabilities \?\? forecastSource/);
   assert.match(page, /buildLikelyBracket\(scenarioSource, liveMatches, stats, scenarioSnapshotCreatedAt\)/);
   assert.match(page, /displayedResult = selectedRoot\?\.result \?\? result/);
   assert.match(page, /resultHappenedAfter\(match, snapshotCreatedAt\)/);
   assert.match(page, /ИСТОРИЧЕСКИЙ ПРОГНОЗ/);
+  assert.match(page, /ti26-official-baseline/);
+  assert.match(page, /latestOfficialBaseline\(snapshots\)/);
+  assert.match(page, /без нового пересчёта/);
+  assert.doesNotMatch(page, /setResult\(runSimulation\(parsed, 4000\)\)/);
 });
 
 test("conditional branches freeze ratings and compare probabilistic outcomes", async () => {

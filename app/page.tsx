@@ -5,7 +5,7 @@ import ForecastClientWorker from "./forecast-client-worker.ts?worker";
 import { runForecast } from "../server/forecast-engine.mjs";
 import { assessPredictionConfidence } from "../server/prediction-confidence.mjs";
 import { predictionDecision } from "../server/prediction-decision.mjs";
-import { latestSnapshotForHistoryRow, visibleSnapshotHistory } from "../server/snapshot-history.mjs";
+import { latestOfficialBaseline, latestSnapshotForHistoryRow, visibleSnapshotHistory } from "../server/snapshot-history.mjs";
 
 type Team = {
   id: string;
@@ -727,6 +727,7 @@ export default function Home() {
   const [questionIndex, setQuestionIndex] = useState(0);
   const [slider, setSlider] = useState(50);
   const [result, setResult] = useState<SimulationResult | null>(null);
+  const [activeBaselineSnapshot, setActiveBaselineSnapshot] = useState<PredictionSnapshot | null>(null);
   const [isCalculating, setIsCalculating] = useState(false);
   const [simulationStatus, setSimulationStatus] = useState<{ kind: "idle" | "running" | "success" | "error"; message: string }>({ kind: "idle", message: "" });
   const [view, setView] = useState<"all" | ForecastOutcome>("all");
@@ -770,6 +771,7 @@ export default function Home() {
   const completedLiveMatches = useMemo(() => liveMatches.filter((match) => match.winner), [liveMatches]);
   const scheduledLiveMatches = useMemo(() => liveMatches.filter((match) => !match.winner), [liveMatches]);
   const snapshots = useMemo(() => serverState?.snapshots ?? [], [serverState?.snapshots]);
+  const latestOfficialSnapshot = useMemo(() => latestOfficialBaseline(snapshots) as PredictionSnapshot | null, [snapshots]);
   const historySnapshots = useMemo(() => visibleSnapshotHistory(snapshots) as PredictionSnapshot[], [snapshots]);
   const selectedSnapshot = useMemo(() => selectedRunId ? snapshots.find((snapshot) => snapshot.id === selectedRunId) ?? null : null, [selectedRunId, snapshots]);
   const selectedRoot = useMemo(() => selectedSnapshot ? snapshots.find((snapshot) => snapshot.id === (selectedSnapshot.root_snapshot_id ?? selectedSnapshot.id)) ?? selectedSnapshot : null, [selectedSnapshot, snapshots]);
@@ -778,7 +780,7 @@ export default function Home() {
     const base = forecastMode === "stats" ? statisticalAnswers(stats) : forecastMode === "mixed" ? mixedAnswers(answers, stats, opinionWeight) : completePersonalAnswers(answers);
     return applyLiveEvidence(base, completedLiveMatches, stats);
   }, [answers, completedLiveMatches, forecastMode, opinionWeight, stats]);
-  const scenarioSource = selectedRoot?.probabilities ?? forecastSource;
+  const scenarioSource = selectedRoot?.probabilities ?? activeBaselineSnapshot?.probabilities ?? forecastSource;
   const scenarioSnapshotCreatedAt = selectedRoot?.created_at ?? null;
   const likelyBracket = useMemo(() => buildLikelyBracket(scenarioSource, liveMatches, stats, scenarioSnapshotCreatedAt), [liveMatches, scenarioSnapshotCreatedAt, scenarioSource, stats]);
   const likelyPlayoff = useMemo(() => buildLikelyPlayoff(likelyBracket, scenarioSource, liveMatches, stats, scenarioSnapshotCreatedAt), [likelyBracket, liveMatches, scenarioSnapshotCreatedAt, scenarioSource, stats]);
@@ -821,13 +823,15 @@ export default function Home() {
     if (id) url.searchParams.set("run", String(id)); else url.searchParams.delete("run");
     window.history.replaceState({}, "", url);
     if (snapshot) {
+      setActiveBaselineSnapshot(null);
       const latest = latestSnapshotForHistoryRow(snapshot, snapshots) as PredictionSnapshot;
       setForecastMode(snapshot.forecast_mode); setOpinionWeight(snapshot.opinion_weight); setIterationCount(snapshot.iterations); setAdaptiveRun(Boolean(latest.result.convergence?.adaptive));
       if (snapshot.inputs?.answers) setAnswers(snapshot.inputs.answers);
       setResult(snapshot.result);
     } else {
       setForecastMode("stats"); setOpinionWeight(0); setIterationCount(250000); setAdaptiveRun(true);
-      if (stats) setResult(runSimulation(applyLiveEvidence(statisticalAnswers(stats), completedLiveMatches, stats), 250000, undefined, { liveMatches, statisticalModel: stats }));
+      const baseline = latestOfficialSnapshot;
+      if (baseline) { setActiveBaselineSnapshot(baseline); setResult(baseline.result); }
     }
   };
 
@@ -847,13 +851,27 @@ export default function Home() {
       const initialIndex = firstUnanswered === -1 ? 0 : firstUnanswered;
       setQuestionIndex(initialIndex);
       setSlider(Math.round(storedProbability(...ALL_PAIRS[initialIndex], parsed) ?? 50));
-      setResult(runSimulation(parsed, 4000));
+      const cached = window.localStorage.getItem("ti26-official-baseline");
+      if (cached) {
+        const baseline = JSON.parse(cached) as PredictionSnapshot;
+        if (baseline?.result?.teams?.length === 16 && baseline?.probabilities) {
+          setActiveBaselineSnapshot(baseline);
+          setResult(baseline.result);
+        }
+      }
     } catch {
-      setResult(runSimulation({}, 4000));
+      // Invalid browser cache is ignored; the server snapshot will replace it.
     } finally {
       setAnswersLoaded(true);
     }
   }, []);
+
+  useEffect(() => {
+    if (!latestOfficialSnapshot || selectedRunId !== null) return;
+    setActiveBaselineSnapshot(latestOfficialSnapshot);
+    setResult(latestOfficialSnapshot.result);
+    try { window.localStorage.setItem("ti26-official-baseline", JSON.stringify(latestOfficialSnapshot)); } catch { /* storage may be unavailable */ }
+  }, [latestOfficialSnapshot?.id, selectedRunId]);
 
   const loadServerState = async () => {
     try {
@@ -899,6 +917,7 @@ export default function Home() {
     if (!answersLoaded || previousLiveSignature.current === liveConstraintSignature) return;
     previousLiveSignature.current = liveConstraintSignature;
     if (!liveConstraintSignature) return;
+    if (selectedRunId !== null || (forecastMode === "stats" && latestOfficialSnapshot)) return;
     const baseSource = forecastMode === "stats" ? statisticalAnswers(stats) : forecastMode === "mixed" ? mixedAnswers(answers, stats, opinionWeight) : answers;
     const source = applyLiveEvidence(baseSource, completedLiveMatches, stats);
     const timer = window.setTimeout(() => {
@@ -906,7 +925,7 @@ export default function Home() {
       setAdminMessage("Прогноз автоматически пересчитан с учётом официальных пар и результатов TI.");
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [answers, answersLoaded, completedLiveMatches, forecastMode, iterationCount, liveConstraintSignature, liveMatches, opinionWeight, stats]);
+  }, [answers, answersLoaded, completedLiveMatches, forecastMode, iterationCount, latestOfficialSnapshot, liveConstraintSignature, liveMatches, opinionWeight, selectedRunId, stats]);
 
   useEffect(() => {
     if (!selectedTeamId) return;
@@ -949,6 +968,7 @@ export default function Home() {
   };
 
   const calculate = () => {
+    setActiveBaselineSnapshot(null);
     const requestedIterations = adaptiveRun ? 250_000 : iterationCount;
     const startedAt = performance.now();
     setIsCalculating(true);
@@ -1072,6 +1092,7 @@ export default function Home() {
     setAnswers({});
     setQuestionIndex(0);
     setSlider(50);
+    setActiveBaselineSnapshot(null);
     setResult(runSimulation({}, 4000));
   };
 
@@ -1112,6 +1133,7 @@ export default function Home() {
     });
 
     const nextAnswers = { ...answers, ...imported };
+    setActiveBaselineSnapshot(null);
     setAnswers(nextAnswers);
     const firstUnanswered = ALL_PAIRS.findIndex(([a, b]) => nextAnswers[pairKey(a, b)] === undefined);
     moveToQuestion(firstUnanswered === -1 ? 0 : firstUnanswered, nextAnswers);
@@ -1221,7 +1243,7 @@ export default function Home() {
         })}</div>}
         <div className="prediction-history">
           <div className="prediction-history__head"><div><p className="eyebrow">ИСТОРИЯ МОДЕЛИ</p><h3>Что модель думала до результатов</h3></div><span>{historySnapshots.length} сохранённых прогнозов</span></div>
-          {selectedRoot && selectedLatest ? <div className="selected-run-banner"><div><b>ПРОГНОЗ #{selectedRoot.id} · {selectedRoot.forecast_mode === "mixed" ? `${selectedRoot.opinion_weight}% личного мнения` : selectedRoot.forecast_mode === "stats" ? "официальная статистическая база" : "личный сценарий"}</b><span>На странице и в сетке показан неизменный оригинал от {new Date(selectedRoot.created_at).toLocaleString("ru-RU")}. Его прогнозы сравниваются с последующими результатами; накопительная оценка уже учитывает {selectedLatest.completed_match_count} завершённых серий.</span></div><button type="button" onClick={() => selectSnapshot(null)}>Вернуться к Official baseline</button></div> : <div className="official-baseline-banner"><b>OFFICIAL BASELINE</b><span>Только статистика · 0% личного мнения · адаптивно от 250 000 до 1 000 000 симуляций · пересчёт после результатов</span></div>}
+          {selectedRoot && selectedLatest ? <div className="selected-run-banner"><div><b>ПРОГНОЗ #{selectedRoot.id} · {selectedRoot.forecast_mode === "mixed" ? `${selectedRoot.opinion_weight}% личного мнения` : selectedRoot.forecast_mode === "stats" ? "официальная статистическая база" : "личный сценарий"}</b><span>На странице и в сетке показан неизменный оригинал от {new Date(selectedRoot.created_at).toLocaleString("ru-RU")}. Его прогнозы сравниваются с последующими результатами; накопительная оценка уже учитывает {selectedLatest.completed_match_count} завершённых серий.</span></div><button type="button" onClick={() => selectSnapshot(null)}>Вернуться к Official baseline</button></div> : <div className="official-baseline-banner"><b>OFFICIAL BASELINE</b><span>{activeBaselineSnapshot ? `Загружен сохранённый снимок от ${new Date(activeBaselineSnapshot.created_at).toLocaleString("ru-RU")} · без нового пересчёта` : "Ожидаем первый сохранённый серверный снимок"}</span></div>}
           {matchHistoryPoints.length > 0 && <div className="history-chart">
             <div className="history-chart__controls"><strong>НАКОПИТЕЛЬНАЯ ТОЧНОСТЬ ПОСЛЕ КАЖДОГО МАТЧА</strong><span>Наведи на столбец: увидишь пару, Brier и log loss на тот момент</span></div>
             <div className="history-chart__bars">{matchHistoryPoints.map((point) => { const accuracy = 100 * point.correct / point.count; return <div key={point.match.id} title={`${getTeam(point.match.team_a).name} — ${getTeam(point.match.team_b).name} · точность ${accuracy.toFixed(1)}% · Brier ${point.brier?.toFixed(3)} · log loss ${point.logLoss?.toFixed(3)}`}><b>{accuracy.toFixed(0)}%</b><i style={{ height: `${Math.max(3, accuracy)}%` }} /><small>{point.match.stage === "swiss" ? `S${point.match.round}` : point.match.stage === "playin" ? "PI" : "PO"}</small></div>; })}</div>
@@ -1354,9 +1376,9 @@ export default function Home() {
               <li><span>04</span> Стык: команда 3–2 против 2–3</li>
             </ul>
             <div className="model-switch" aria-label="Источник вероятностей">
-              <button className={forecastMode === "personal" ? "active" : ""} onClick={() => setForecastMode("personal")}>Моё мнение</button>
-              <button className={forecastMode === "mixed" ? "active" : ""} onClick={() => setForecastMode("mixed")} disabled={!stats}>Смешанный</button>
-              <button className={forecastMode === "stats" ? "active" : ""} onClick={() => setForecastMode("stats")} disabled={!stats}>Статистика</button>
+              <button className={forecastMode === "personal" ? "active" : ""} onClick={() => { setActiveBaselineSnapshot(null); setForecastMode("personal"); }}>Моё мнение</button>
+              <button className={forecastMode === "mixed" ? "active" : ""} onClick={() => { setActiveBaselineSnapshot(null); setForecastMode("mixed"); }} disabled={!stats}>Смешанный</button>
+              <button className={forecastMode === "stats" ? "active" : ""} onClick={() => { setForecastMode("stats"); setOpinionWeight(0); if (latestOfficialSnapshot) { setActiveBaselineSnapshot(latestOfficialSnapshot); setResult(latestOfficialSnapshot.result); } }} disabled={!stats}>Статистика</button>
             </div>
             {forecastMode === "mixed" && (
               <div className="blend-control">
