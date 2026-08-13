@@ -11,6 +11,7 @@ import { assessPredictionConfidence } from "../server/prediction-confidence.mjs"
 import { externalFeatureDecision, pearsonCorrelation } from "../server/external-feature-gate.mjs";
 import { normalizeDatdotaPayload } from "../scripts/sync-datdota-source.mjs";
 import { predictionDecision, sharpenProbability } from "../server/prediction-decision.mjs";
+import { latestSnapshotForHistoryRow, visibleSnapshotHistory } from "../server/snapshot-history.mjs";
 
 test("draft decides a matchup between equally strong teams", () => {
   const betterDraft = combineDraftSignals(0.5, [0.25]);
@@ -253,6 +254,29 @@ test("former Tundra OpenDota team ID resolves to current 1w roster", () => {
   assert.deepEqual(completedSeriesFromMaps(maps)[0], { seriesId: "199", teamA: "1w", teamB: "nigma", winsA: 2, winsB: 0, startTime: 100, seriesType: 1, mapIds: [11, 12] });
 });
 
+test("Iron Wing OpenDota team ID resolves to current 1w roster", () => {
+  const maps = [
+    { match_id: 21, series_id: 299, start_time: 100, radiant_team_id: 10150413, dire_team_id: 10136357, radiant_win: true },
+    { match_id: 22, series_id: 299, start_time: 200, radiant_team_id: 10136357, dire_team_id: 10150413, radiant_win: false },
+  ];
+  assert.deepEqual(completedSeriesFromMaps(maps)[0], { seriesId: "299", teamA: "1w", teamB: "nigma", winsA: 2, winsB: 0, startTime: 100, seriesType: 1, mapIds: [21, 22] });
+});
+
+test("snapshot history keeps one visible row while internal revisions advance", () => {
+  const snapshots = [
+    { id: 8, trigger: "auto_live_result", forecast_mode: "stats", opinion_weight: 0, completed_match_count: 2, snapshot_kind: "original", root_snapshot_id: 8, profile_key: "official" },
+    { id: 7, trigger: "revision_auto_live_result", forecast_mode: "mixed", opinion_weight: 20, completed_match_count: 2, snapshot_kind: "revision", root_snapshot_id: 3, profile_key: "personal" },
+    { id: 6, trigger: "auto_live_result", forecast_mode: "stats", opinion_weight: 0, completed_match_count: 1, snapshot_kind: "original", root_snapshot_id: 6, profile_key: "official" },
+    { id: 5, trigger: "revision_auto_live_result", forecast_mode: "mixed", opinion_weight: 20, completed_match_count: 1, snapshot_kind: "revision", root_snapshot_id: 3, profile_key: "personal" },
+    { id: 3, trigger: "manual_run", forecast_mode: "mixed", opinion_weight: 20, completed_match_count: 0, snapshot_kind: "original", root_snapshot_id: 3, profile_key: "personal" },
+    { id: 1, trigger: "pre_round_1", forecast_mode: "stats", opinion_weight: 0, completed_match_count: 0, snapshot_kind: "original", root_snapshot_id: 1, profile_key: "official" },
+  ];
+  const rows = visibleSnapshotHistory(snapshots);
+  assert.deepEqual(rows.map((snapshot) => snapshot.id), [3, 1]);
+  assert.equal(latestSnapshotForHistoryRow(rows[0], snapshots).id, 7);
+  assert.equal(latestSnapshotForHistoryRow(rows[1], snapshots).id, 8);
+});
+
 test("Cybersport schedule becomes official pre-match series", () => {
   const html = `<div class="tab_x isActive_y"><span>Раунд 2</span></div>
     <div>14.08.26 в 08:00<img alt="PARIVISION"><img alt="Nigma Galaxy"><span class="vs_pcDDl">vs</span><img alt="BetBoom"></div>
@@ -371,12 +395,18 @@ test("forecast worker returns the same deterministic result as the engine", asyn
 
 test("manual Monte Carlo UI exposes adaptive, 500K and 1M budgets", async () => {
   const page = await readFile("app/page.tsx", "utf8");
+  const styles = await readFile("app/globals.css", "utf8");
   assert.match(page, /setAdaptiveRun\(true\)/);
   assert.match(page, /500000, 1000000/);
   assert.match(page, /forecast-client-worker\.ts\?worker/);
   assert.match(page, /Прогон не выполнен:/);
   assert.match(page, /Готово:.*simulation\.iterations/s);
   assert.match(page, /simulation-status--\$\{simulationStatus\.kind\}/);
+  assert.match(page, /predictionCorrect/);
+  assert.match(page, /round-cell--correct/);
+  assert.match(page, /round-cell--wrong/);
+  assert.match(styles, /td\.round-cell--correct/);
+  assert.match(styles, /td\.round-cell--wrong/);
 });
 
 test("conditional branches freeze ratings and compare probabilistic outcomes", async () => {
@@ -438,11 +468,11 @@ test("docker build keeps research data out of context and shares one app image",
   const dockerignore = await readFile(".dockerignore", "utf8");
   const dockerfile = await readFile("Dockerfile", "utf8");
   const compose = await readFile("docker-compose.yml", "utf8");
-  for (const directory of ["node_modules", "work", "data", ".git", "dist", ".vinext"]) {
-    assert.match(dockerignore, new RegExp(`^${directory.replace(".", "\\.")}$`, "m"));
-  }
+  const ignoredLines = new Set(dockerignore.split(/\r?\n/));
+  for (const directory of ["node_modules*", "work", "data", ".git", "dist", ".vinext"]) assert.ok(ignoredLines.has(directory));
   assert.match(dockerfile, /--mount=type=cache,target=\/root\/\.npm/);
   assert.match(dockerfile, /npm ci --no-audit --no-fund/);
+  assert.match(dockerfile, /npm prune --omit=dev --no-audit --no-fund/);
   assert.match(compose, /image: ti2026-app:\$\{IMAGE_TAG:-local\}/);
   assert.equal((compose.match(/<<: \*app-image/g) ?? []).length, 2);
 });

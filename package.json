@@ -40,7 +40,8 @@
   },
   "dependencies": {
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "vinext": "1.0.0-beta.2"
   },
   "devDependencies": {
     "@eslint/js": "9.39.4",
@@ -60,7 +61,6 @@
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
     "typescript-eslint": "8.59.3",
-    "vinext": "1.0.0-beta.2",
     "vite": "8.0.13"
   },
   "type": "module"

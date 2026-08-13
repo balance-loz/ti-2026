@@ -5,6 +5,7 @@ import ForecastClientWorker from "./forecast-client-worker.ts?worker";
 import { runForecast } from "../server/forecast-engine.mjs";
 import { assessPredictionConfidence } from "../server/prediction-confidence.mjs";
 import { predictionDecision } from "../server/prediction-decision.mjs";
+import { latestSnapshotForHistoryRow, visibleSnapshotHistory } from "../server/snapshot-history.mjs";
 
 type Team = {
   id: string;
@@ -166,7 +167,7 @@ type ConditionalBranchAnalysis = {
 };
 
 type PredictionConfidence = ReturnType<typeof assessPredictionConfidence>;
-type LikelyRound = { opponent: string; won: boolean; fixed: boolean; probability: number; confidence: PredictionConfidence } | null;
+type LikelyRound = { opponent: string; won: boolean; fixed: boolean; predictionCorrect: boolean | null; probability: number; confidence: PredictionConfidence } | null;
 type LikelyBracket = {
   rows: { id: string; wins: number; losses: number; status: "direct" | "playinWin" | "playinLoss" | "out"; rounds: LikelyRound[] }[];
   playins: { a: string; b: string; winner: string; probabilityA: number; confidence: PredictionConfidence }[];
@@ -555,11 +556,13 @@ function buildLikelyBracket(answers: AnswerMap, liveMatches: LiveMatch[], model:
     const probabilityA = savedProbabilityA ?? storedProbability(a, b, answers) ?? 50;
     const winner = fixedWinner === a || fixedWinner === b ? fixedWinner : probabilityA >= 50 ? a : b;
     const loser = winner === a ? b : a;
+    const hasSavedPrediction = typeof savedProbabilityA === "number" && Number.isFinite(savedProbabilityA);
+    const predictionCorrect = fixedWinner && hasSavedPrediction ? (probabilityA >= 50 ? a : b) === fixedWinner : null;
     records[winner].wins += 1; records[loser].losses += 1;
     records[a].opponents.add(b); records[b].opponents.add(a);
     const confidence = pairConfidence(model, a, b, probabilityA, Boolean(fixedWinner));
-    records[a].rounds[round - 1] = { opponent: b, won: winner === a, fixed: Boolean(fixedWinner), probability: probabilityA, confidence };
-    records[b].rounds[round - 1] = { opponent: a, won: winner === b, fixed: Boolean(fixedWinner), probability: 100 - probabilityA, confidence };
+    records[a].rounds[round - 1] = { opponent: b, won: winner === a, fixed: Boolean(fixedWinner), predictionCorrect, probability: probabilityA, confidence };
+    records[b].rounds[round - 1] = { opponent: a, won: winner === b, fixed: Boolean(fixedWinner), predictionCorrect, probability: 100 - probabilityA, confidence };
   };
   for (let round = 1; round <= 5; round += 1) {
     const known = liveMatches.filter((match) => match.stage === "swiss" && match.round === round);
@@ -760,9 +763,10 @@ export default function Home() {
   const playoffMatches = useMemo(() => Object.fromEntries(likelyPlayoff.stages.flatMap((stage) => stage.matches).map((match) => [match.label, match])) as Record<string, LikelyPlayoffMatch>, [likelyPlayoff]);
   const liveConstraintSignature = liveMatches.map((match) => `${match.id}:${match.stage}:${match.round}:${match.team_a}:${match.team_b}:${match.winner ?? "scheduled"}:${match.score_a ?? ""}:${match.score_b ?? ""}`).join(";");
   const snapshots = useMemo(() => serverState?.snapshots ?? [], [serverState?.snapshots]);
+  const historySnapshots = useMemo(() => visibleSnapshotHistory(snapshots) as PredictionSnapshot[], [snapshots]);
   const selectedSnapshot = useMemo(() => selectedRunId ? snapshots.find((snapshot) => snapshot.id === selectedRunId) ?? null : null, [selectedRunId, snapshots]);
   const selectedRoot = useMemo(() => selectedSnapshot ? snapshots.find((snapshot) => snapshot.id === (selectedSnapshot.root_snapshot_id ?? selectedSnapshot.id)) ?? selectedSnapshot : null, [selectedSnapshot, snapshots]);
-  const selectedLatest = useMemo(() => selectedRoot ? snapshots.filter((snapshot) => (snapshot.root_snapshot_id ?? snapshot.id) === selectedRoot.id).sort((a, b) => b.completed_match_count - a.completed_match_count || b.id - a.id)[0] ?? selectedRoot : null, [selectedRoot, snapshots]);
+  const selectedLatest = useMemo(() => selectedRoot ? latestSnapshotForHistoryRow(selectedRoot, snapshots) as PredictionSnapshot : null, [selectedRoot, snapshots]);
   const displayedResult = selectedLatest?.result ?? result;
   const displayedProbabilities = selectedLatest?.probabilities ?? forecastSource;
   const matchMetrics = useMemo(() => matchEvaluation(completedLiveMatches), [completedLiveMatches]);
@@ -801,8 +805,7 @@ export default function Home() {
     if (id) url.searchParams.set("run", String(id)); else url.searchParams.delete("run");
     window.history.replaceState({}, "", url);
     if (snapshot) {
-      const rootId = snapshot.root_snapshot_id ?? snapshot.id;
-      const latest = snapshots.filter((item) => (item.root_snapshot_id ?? item.id) === rootId).sort((a, b) => b.completed_match_count - a.completed_match_count || b.id - a.id)[0] ?? snapshot;
+      const latest = latestSnapshotForHistoryRow(snapshot, snapshots) as PredictionSnapshot;
       setForecastMode(snapshot.forecast_mode); setOpinionWeight(snapshot.opinion_weight); setIterationCount(snapshot.iterations); setAdaptiveRun(Boolean(latest.result.convergence?.adaptive));
       if (snapshot.inputs?.answers) setAnswers(snapshot.inputs.answers);
       setResult(latest.result);
@@ -1201,13 +1204,13 @@ export default function Home() {
           return <article key={match.id} className="live-result-card"><div><span>{match.stage === "swiss" ? "SW" : match.stage === "playin" ? "PI" : "PO"} R{match.round}</span><strong><TeamMark team={getTeam(match.team_a)} small />{getTeam(match.team_a).name} — {getTeam(match.team_b).name}<TeamMark team={getTeam(match.team_b)} small /></strong><b>{match.score_a ?? "?"}–{match.score_b ?? "?"} · {getTeam(match.winner!).name}</b><i className={!hasSavedPrediction ? "is-unscored" : correct ? "is-correct" : "is-wrong"}>{!hasSavedPrediction ? "НЕТ PRE-MATCH" : correct ? "ПРОГНОЗ ВЕРЕН" : "ОШИБКА"}</i></div><div className={`match-decision match-decision--${decision.status}`}><b>{decision.label}</b><span>уверенность {decision.confidence.score}/100 · интервал {decision.interval.low.toFixed(0)}–{decision.interval.high.toFixed(0)}%</span></div><details><summary>{hasSavedPrediction ? `До матча: ${getTeam(match.team_a).name} ${pA.toFixed(1)}% · Brier ${brier.toFixed(3)} · log loss ${logLoss.toFixed(3)}` : "До начала матча вероятность не была сохранена — результат не участвует в оценке"}</summary>{hasSavedPrediction && <div>{explanation.items.map((item) => <span key={item.label}><b>{item.label}</b><em>{item.value >= 0 ? "+" : ""}{item.value.toFixed(1)} п.п.</em><small>{item.text}</small></span>)}</div>}</details></article>;
         })}</div>}
         <div className="prediction-history">
-          <div className="prediction-history__head"><div><p className="eyebrow">ИСТОРИЯ МОДЕЛИ</p><h3>Что модель думала до результатов</h3></div><span>{snapshots.length} сохранённых прогонов</span></div>
+          <div className="prediction-history__head"><div><p className="eyebrow">ИСТОРИЯ МОДЕЛИ</p><h3>Что модель думала до результатов</h3></div><span>{historySnapshots.length} сохранённых прогнозов</span></div>
           {selectedRoot && selectedLatest ? <div className="selected-run-banner"><div><b>ПРОГНОЗ #{selectedRoot.id} · {selectedRoot.forecast_mode === "mixed" ? `${selectedRoot.opinion_weight}% личного мнения` : selectedRoot.forecast_mode === "stats" ? "официальная статистическая база" : "личный сценарий"}</b><span>Оригинал от {new Date(selectedRoot.created_at).toLocaleString("ru-RU")} сохранён неизменным. На странице показана ревизия #{selectedLatest.id}, учитывающая {selectedLatest.completed_match_count} завершённых серий.</span></div><button type="button" onClick={() => selectSnapshot(null)}>Вернуться к Official baseline</button></div> : <div className="official-baseline-banner"><b>OFFICIAL BASELINE</b><span>Только статистика · 0% личного мнения · адаптивно от 250 000 до 1 000 000 симуляций · пересчёт после результатов</span></div>}
           {matchHistoryPoints.length > 0 && <div className="history-chart">
             <div className="history-chart__controls"><strong>НАКОПИТЕЛЬНАЯ ТОЧНОСТЬ ПОСЛЕ КАЖДОГО МАТЧА</strong><span>Наведи на столбец: увидишь пару, Brier и log loss на тот момент</span></div>
             <div className="history-chart__bars">{matchHistoryPoints.map((point) => { const accuracy = 100 * point.correct / point.count; return <div key={point.match.id} title={`${getTeam(point.match.team_a).name} — ${getTeam(point.match.team_b).name} · точность ${accuracy.toFixed(1)}% · Brier ${point.brier?.toFixed(3)} · log loss ${point.logLoss?.toFixed(3)}`}><b>{accuracy.toFixed(0)}%</b><i style={{ height: `${Math.max(3, accuracy)}%` }} /><small>{point.match.stage === "swiss" ? `S${point.match.round}` : point.match.stage === "playin" ? "PI" : "PO"}</small></div>; })}</div>
           </div>}
-          {snapshots.length ? <div className="snapshot-list">{snapshots.map((snapshot) => {
+          {historySnapshots.length ? <div className="snapshot-list">{historySnapshots.map((snapshot) => {
             const evaluation = snapshotEvaluation(snapshot, completedLiveMatches);
             return <details key={snapshot.id} open={selectedRunId === snapshot.id}>
               <summary onClick={(event) => { event.preventDefault(); selectSnapshot(snapshot); }}><time>{new Date(snapshot.created_at).toLocaleString("ru-RU")}</time><b>{snapshot.snapshot_kind === "revision" ? `ревизия прогноза #${snapshot.root_snapshot_id}` : snapshot.trigger === "manual_run" ? "ручной прогон" : "Official baseline"} · {snapshot.forecast_mode === "mixed" ? `смесь ${snapshot.opinion_weight}% мнения` : snapshot.forecast_mode === "stats" ? "только статистика" : "только мнение"} · {snapshot.iterations.toLocaleString("ru-RU")} прогонов</b><span>{evaluation.count ? `${evaluation.correct}/${evaluation.count} верно` : "ждёт новых матчей"}</span></summary>
@@ -1388,7 +1391,7 @@ export default function Home() {
                 <td><TeamMark team={getTeam(row.id)} small /><strong>{getTeam(row.id).name}</strong></td>
                 <td><span className={`group-badge group-badge--${SWISS_GROUP_BY_TEAM[row.id].toLowerCase()}`}>{SWISS_GROUP_BY_TEAM[row.id] === "A" ? "A" : "Б"}</span></td>
                 <td><b>{row.wins}–{row.losses}</b></td>
-                {row.rounds.map((round, roundIndex) => <td key={roundIndex}>{round ? <span className={`round-opponent ${round.won ? "is-win" : "is-loss"} ${round.fixed ? "is-fixed" : ""}`} title={`${round.probability.toFixed(1)}% на ${getTeam(row.id).name} · уверенность ${round.confidence.score}/100 · ${round.confidence.reasons.join(" · ")}`}><TeamMark team={getTeam(round.opponent)} small />{getTeam(round.opponent).short}<small className={`round-confidence round-confidence--${round.confidence.level}`}>{round.confidence.score}</small>{round.confidence.roulette ? <b className="roulette-icon" aria-label="Низкая уверенность">🎰</b> : null}<i>{round.won ? "W" : "L"}</i></span> : <span className="round-empty">—</span>}</td>)}
+                {row.rounds.map((round, roundIndex) => <td key={roundIndex} className={round?.predictionCorrect === true ? "round-cell--correct" : round?.predictionCorrect === false ? "round-cell--wrong" : undefined}>{round ? <span className={`round-opponent ${round.won ? "is-win" : "is-loss"} ${round.fixed ? "is-fixed" : ""}`} title={`${round.probability.toFixed(1)}% на ${getTeam(row.id).name} · уверенность ${round.confidence.score}/100${round.predictionCorrect === null ? "" : round.predictionCorrect ? " · прогноз угадан" : " · прогноз не угадан"} · ${round.confidence.reasons.join(" · ")}`}><TeamMark team={getTeam(round.opponent)} small />{getTeam(round.opponent).short}<small className={`round-confidence round-confidence--${round.confidence.level}`}>{round.confidence.score}</small>{round.confidence.roulette ? <b className="roulette-icon" aria-label="Низкая уверенность">🎰</b> : null}<i>{round.won ? "W" : "L"}</i></span> : <span className="round-empty">—</span>}</td>)}
                 <td><span className={`bracket-status bracket-status--${row.status}`}>{row.status === "direct" ? "НАПРЯМУЮ" : row.status === "playinWin" ? "ПРОШЁЛ СТЫК" : row.status === "playinLoss" ? "НЕ ПРОШЁЛ СТЫК" : "ВЫЛЕТ В SWISS"}</span></td>
               </tr>)}</tbody>
             </table>

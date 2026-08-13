@@ -220,6 +220,8 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border: 5px s
 .likely-bracket table { width: 100%; min-width: 1080px; border-collapse: collapse; }
 .likely-bracket th { padding: 11px 8px; border-right: 1px solid #d3d0c7; border-bottom: 1px solid #d3d0c7; color: #51574f; font: 750 10px var(--font-geist-mono); text-align: left; text-transform: uppercase; }
 .likely-bracket td { height: 52px; padding: 7px 8px; border-right: 1px solid #d3d0c7; border-bottom: 1px solid #d3d0c7; font: 700 11px var(--font-geist-mono); }
+.likely-bracket td.round-cell--correct { background: rgba(85, 165, 72, .18); box-shadow: inset 0 0 0 1px rgba(62, 133, 51, .28); }
+.likely-bracket td.round-cell--wrong { background: rgba(218, 70, 83, .16); box-shadow: inset 0 0 0 1px rgba(184, 52, 65, .25); }
 .likely-bracket td:nth-child(2) { display: flex; align-items: center; gap: 8px; min-width: 145px; font-family: var(--font-geist-sans); font-size: 11px; }
 .group-badge { display: inline-grid; place-items: center; width: 23px; height: 23px; border: 1px solid #91978a; color: #4c5148; }
 .group-badge--b { border-color: #9a8948; color: #74631f; }

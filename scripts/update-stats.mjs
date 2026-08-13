@@ -30,8 +30,8 @@ const ROSTER_PROJECTIONS = {
 const TEAM_IDENTITY = {
   "1w": {
     canonicalName: "1w",
-    alternateOpenDotaIds: [8291895],
-    aliases: ["1W", "1W TEAM", "1WIN", "1WIN TEAM", "TUNDRA", "TUNDRA ESPORTS"],
+    alternateOpenDotaIds: [10150413, 8291895],
+    aliases: ["1W", "1W TEAM", "1WIN", "1WIN TEAM", "IRON WING", "IW", "TUNDRA", "TUNDRA ESPORTS"],
   },
   parivision: {
     canonicalName: "PARIVISION",
@@ -53,7 +53,7 @@ const DISPLAY_NAMES = {
 };
 
 const DEFAULT_ALIASES = {
-  "1w": ["1W", "1W TEAM", "1WIN", "1WIN TEAM", "TUNDRA", "TUNDRA ESPORTS"],
+  "1w": ["1W", "1W TEAM", "1WIN", "1WIN TEAM", "IRON WING", "IW", "TUNDRA", "TUNDRA ESPORTS"],
   aurora: ["AURORA", "AURORA GAMING"],
   betboom: ["BETBOOM", "BETBOOM TEAM", "BB TEAM", "BBT", "BOOMBOYS"],
   falcons: ["FALCONS", "TEAM FALCONS"],
