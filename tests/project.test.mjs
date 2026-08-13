@@ -472,9 +472,9 @@ test("docker build keeps research data out of context and shares one app image",
   for (const directory of ["node_modules*", "work", "data", ".git", "dist", ".vinext"]) assert.ok(ignoredLines.has(directory));
   assert.match(dockerfile, /--mount=type=cache,target=\/root\/\.npm/);
   assert.match(dockerfile, /npm ci --no-audit --no-fund/);
-  assert.match(dockerfile, /npm prune --omit=dev --no-audit --no-fund/);
   assert.match(compose, /image: ti2026-app:\$\{IMAGE_TAG:-local\}/);
   assert.equal((compose.match(/<<: \*app-image/g) ?? []).length, 2);
+  assert.equal((compose.match(/^\s+build:/gm) ?? []).length, 1);
 });
 
 test("cross-page navigation does not depend on broken Vinext Link prefetch", async () => {

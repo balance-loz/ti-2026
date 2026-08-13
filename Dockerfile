@@ -6,7 +6,6 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
     npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
-RUN npm prune --omit=dev --no-audit --no-fund
 
 FROM node:22-alpine AS runtime
 WORKDIR /app

@@ -1,11 +1,11 @@
 x-app-image: &app-image
   image: ti2026-app:${IMAGE_TAG:-local}
-  build:
-    context: .
 
 services:
   web:
     <<: *app-image
+    build:
+      context: .
     command: npm start -- --hostname 0.0.0.0 --port 3000
     restart: unless-stopped
     environment:

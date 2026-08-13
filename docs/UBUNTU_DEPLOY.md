@@ -86,7 +86,7 @@ docker compose ps
 curl http://127.0.0.1/api/health
 ```
 
-`web` и `api` используют один образ `ti2026-app`, поэтому приложение собирается один раз. `.dockerignore` исключает локальные `work/`, `node_modules`, `.git`, старые `dist/.next` и базы из build context. Повторная сборка также использует BuildKit-кэш npm. После компиляции `npm prune --omit=dev` удаляет из runtime-слоя TypeScript, линтеры, Wrangler и остальные инструменты сборки. Обучающие базы и тяжёлые research-пайплайны в image build не запускаются.
+`web` и `api` используют один образ `ti2026-app`, поэтому приложение собирается один раз. `.dockerignore` исключает локальные `work/`, `node_modules`, `.git`, старые `dist/.next` и базы из build context. Повторная сборка также использует BuildKit-кэш npm. Обучающие базы и тяжёлые research-пайплайны в image build не запускаются.
 
 Для диагностики медленной сборки используйте подробный вывод:
 
