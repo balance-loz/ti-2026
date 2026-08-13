@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { completedSeriesFromMaps } from "../server/live-series.mjs";
+import { liveDraftsFromOpenDota } from "../server/live-drafts.mjs";
 import { scheduledSeriesFromCybersportHtml } from "../server/schedule-source.mjs";
 import { buildForecastSource, ROUND_ONE, runForecast, SWISS_GROUPS, SWISS_GROUP_BY_TEAM, swissBucketKey, topGroupScenarios } from "../server/forecast-engine.mjs";
 import { combineDraftSignals } from "../server/draft-combiner.mjs";
@@ -245,6 +246,26 @@ test("OpenDota maps become a completed series only after two wins", () => {
   const series = completedSeriesFromMaps(maps);
   assert.equal(series.length, 1);
   assert.deepEqual(series[0], { seriesId: "99", teamA: "1w", teamB: "nigma", winsA: 2, winsB: 0, startTime: 100, seriesType: 1, mapIds: [1, 2] });
+});
+
+test("OpenDota live feed becomes a partial TI draft and rejects stale games", () => {
+  const rows = [{ league_id: 19719, match_id: 42, series_id: 7, team_id_radiant: 9247354, team_id_dire: 9572001, game_time: -30, delay: 10, last_update_time: 1_000,
+    players: [{ team: 0, team_slot: 2, hero_id: 59 }, { team: 0, team_slot: 1, hero_id: 80 }, { team: 1, team_slot: 1, hero_id: 55 }] }];
+  assert.deepEqual(liveDraftsFromOpenDota(rows, { nowSeconds: 1_030 }), [{
+    matchId: "42", seriesId: "7", radiantTeam: "falcons", direTeam: "parivision", radiantPicks: [80, 59], direPicks: [55], gameTime: -30, delay: 10,
+    radiantScore: 0, direScore: 0, lastUpdateAt: "1970-01-01T00:16:40.000Z", phase: "draft",
+  }]);
+  assert.deepEqual(liveDraftsFromOpenDota(rows, { nowSeconds: 1_301 }), []);
+});
+
+test("Draft Lab polls and binds the selected live draft", async () => {
+  const page = await readFile("app/drafts/page.tsx", "utf8");
+  const api = await readFile("server/api.mjs", "utf8");
+  assert.match(page, /fetch\("\/api\/draft\/live"/);
+  assert.match(page, /window\.setInterval\(load, 5_000\)/);
+  assert.match(page, /selectedLiveDraft\.radiantPicks/);
+  assert.match(api, /OPENDOTA_API_URL}\/live/);
+  assert.match(api, /liveDraftsFromOpenDota/);
 });
 
 test("OpenDota BO5 is not completed at 2-0", () => {

@@ -86,6 +86,11 @@ type TemporalPrediction = {
   components: { side: number; heroes: number; synergy: number; counters: number };
   evidence: { heroes: number; synergies: number; counters: number; trainingMatches: number; patches: number };
 };
+type LiveDraft = {
+  matchId: string; seriesId: string; radiantTeam: string; direTeam: string; radiantPicks: number[]; direPicks: number[];
+  gameTime: number; delay: number; radiantScore: number; direScore: number; lastUpdateAt: string | null; phase: "draft" | "game";
+};
+type LiveDraftState = { games: LiveDraft[]; fetchedAt: string | null; error: string | null };
 
 const TEAMS: Team[] = [
   { id: "1w", name: "1w", short: "1W", color: "#f1f4f7", logo: "/team-logos/1w.webp" },
@@ -282,8 +287,8 @@ function TeamLogo({ team }: { team: Team }) {
   return <span className="draft-team-logo" style={{ "--draft-team-color": team.color } as React.CSSProperties}><img src={team.logo} alt="" /></span>;
 }
 
-function HeroSlot({ hero, index, active, onClick }: { hero?: Hero; index: number; active: boolean; onClick: () => void }) {
-  return <button type="button" className={`draft-slot ${active ? "is-active" : ""} ${hero ? "is-filled" : ""}`} onClick={onClick} aria-label={hero ? `Убрать ${hero.name}` : `Выбрать героя в слот ${index + 1}`}>
+function HeroSlot({ hero, index, active, locked, onClick }: { hero?: Hero; index: number; active: boolean; locked?: boolean; onClick: () => void }) {
+  return <button type="button" className={`draft-slot ${active ? "is-active" : ""} ${hero ? "is-filled" : ""}`} disabled={locked} onClick={onClick} aria-label={hero ? `Убрать ${hero.name}` : `Выбрать героя в слот ${index + 1}`}>
     {hero ? <><img src={hero.image} alt="" /><span><b>{hero.name}</b><small>{hero.roles.slice(0, 2).join(" · ")}</small></span><i>×</i></> : <><em>0{index + 1}</em><span><b>Выбрать героя</b><small>нажмите на карточку ниже</small></span></>}
   </button>;
 }
@@ -303,6 +308,8 @@ export default function DraftsPage() {
   const [active, setActive] = useState<{ side: Side; index: number }>({ side: "a", index: 0 });
   const [search, setSearch] = useState("");
   const [attribute, setAttribute] = useState<(typeof ATTRIBUTES)[number]["id"]>("all");
+  const [liveDrafts, setLiveDrafts] = useState<LiveDraftState>({ games: [], fetchedAt: null, error: null });
+  const [liveDraftId, setLiveDraftId] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -310,6 +317,25 @@ export default function DraftsPage() {
       fetch("/team-stats.json").then((response) => response.ok ? response.json() : Promise.reject()),
     ]).then(([draft, teams]) => { setDraftStats(draft); setTeamStats(teams); }).catch(() => setLoadError(true));
   }, []);
+
+  useEffect(() => {
+    let activeRequest = true;
+    const load = () => fetch("/api/draft/live", { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : Promise.reject())
+      .then((state: LiveDraftState) => { if (activeRequest) setLiveDrafts(state); })
+      .catch(() => { if (activeRequest) setLiveDrafts((state) => ({ ...state, error: "live_feed_unavailable" })); });
+    void load();
+    const timer = window.setInterval(load, 5_000);
+    return () => { activeRequest = false; window.clearInterval(timer); };
+  }, []);
+
+  const selectedLiveDraft = liveDrafts.games.find((game) => game.matchId === liveDraftId) ?? null;
+  useEffect(() => {
+    if (!selectedLiveDraft) return;
+    const slots = (heroes: number[]): Pick[] => [...heroes.slice(0, 5), ...Array(Math.max(0, 5 - heroes.length)).fill(null)];
+    setTeamA(selectedLiveDraft.radiantTeam); setTeamB(selectedLiveDraft.direTeam); setRadiant("a");
+    setPicksA(slots(selectedLiveDraft.radiantPicks)); setPicksB(slots(selectedLiveDraft.direPicks));
+  }, [selectedLiveDraft?.matchId, selectedLiveDraft?.lastUpdateAt, selectedLiveDraft?.radiantPicks.join("|"), selectedLiveDraft?.direPicks.join("|")]);
 
   useEffect(() => {
     let activeRequest = true;
@@ -349,6 +375,7 @@ export default function DraftsPage() {
   const result = useMemo(() => calculateDraft(draftStats, teamStats, temporalModel, temporalPrediction, teamA, teamB, radiant, picksA, picksB), [draftStats, teamStats, temporalModel, temporalPrediction, teamA, teamB, radiant, picksA, picksB]);
 
   const chooseHero = (heroId: number) => {
+    if (selectedLiveDraft) return;
     if (selected.has(heroId)) return;
     const picks = active.side === "a" ? [...picksA] : [...picksB];
     picks[active.index] = heroId;
@@ -358,6 +385,7 @@ export default function DraftsPage() {
     else if (active.side === "a" && picksB.some((pick) => pick === null)) setActive({ side: "b", index: picksB.findIndex((pick) => pick === null) });
   };
   const selectSlot = (side: Side, index: number) => {
+    if (selectedLiveDraft) return;
     const picks = side === "a" ? [...picksA] : [...picksB];
     if (picks[index] !== null) {
       picks[index] = null;
@@ -366,6 +394,7 @@ export default function DraftsPage() {
     setActive({ side, index });
   };
   const swapTeams = () => {
+    if (selectedLiveDraft) return;
     setTeamA(teamB); setTeamB(teamA); setPicksA(picksB); setPicksB(picksA); setRadiant(radiant === "a" ? "b" : "a");
   };
   const reset = () => { setPicksA(emptyDraft()); setPicksB(emptyDraft()); setActive({ side: "a", index: 0 }); };
@@ -387,36 +416,42 @@ export default function DraftsPage() {
 
     {loadError ? <section className="draft-error">Не удалось загрузить статистику пиков. Обнови страницу или запусти обновление статистики из панели администратора.</section> : null}
 
+    <section className="live-draft-panel">
+      <header><div><p className="eyebrow"><i /> LIVE · THE INTERNATIONAL</p><h2>Драфты прямо сейчас</h2></div><span>{liveDrafts.error ? "Источник временно недоступен" : liveDrafts.games.length ? `Обновление каждые 5 сек · задержка источника ${Math.max(...liveDrafts.games.map((game) => game.delay), 0)} сек` : "Активных карт с известными командами пока нет"}</span></header>
+      {liveDrafts.games.length ? <div>{liveDrafts.games.map((game) => { const radiantTeam = teamById(game.radiantTeam); const direTeam = teamById(game.direTeam); const selected = game.matchId === liveDraftId; const minutes = Math.max(0, Math.floor(game.gameTime / 60)); const seconds = Math.max(0, game.gameTime % 60); return <button type="button" className={selected ? "is-selected" : ""} key={game.matchId} onClick={() => setLiveDraftId(selected ? null : game.matchId)}><span><TeamLogo team={radiantTeam} /><b>{radiantTeam.name}</b></span><strong>{game.phase === "draft" ? "ДРАФТ" : `${minutes}:${String(seconds).padStart(2, "0")}`}<small>{game.radiantPicks.length + game.direPicks.length}/10 пиков</small></strong><span><b>{direTeam.name}</b><TeamLogo team={direTeam} /></span><em>{selected ? "ПОДКЛЮЧЕНО" : "СМОТРЕТЬ"}</em></button>; })}</div> : null}
+      {liveDraftId && !selectedLiveDraft ? <small>Карта завершилась или пропала из live-feed. Последние пики оставлены на экране; выбери другую live-карту или продолжи вручную.</small> : null}
+    </section>
+
     <section className="draft-builder">
       <div className="draft-matchbar">
-        <label><span>КОМАНДА A</span><div><TeamLogo team={firstTeam} /><select value={teamA} onChange={(event) => { if (event.target.value !== teamB) setTeamA(event.target.value); }}>{TEAMS.map((team) => <option key={team.id} value={team.id} disabled={team.id === teamB}>{team.name}</option>)}</select></div></label>
-        <button type="button" className="draft-swap" onClick={swapTeams} aria-label="Поменять команды местами">⇄</button>
-        <label><span>КОМАНДА B</span><div><TeamLogo team={secondTeam} /><select value={teamB} onChange={(event) => { if (event.target.value !== teamA) setTeamB(event.target.value); }}>{TEAMS.map((team) => <option key={team.id} value={team.id} disabled={team.id === teamA}>{team.name}</option>)}</select></div></label>
-        <div className="side-picker"><span>СТОРОНА</span><button type="button" className={radiant === "a" ? "active" : ""} onClick={() => setRadiant("a")}>{firstTeam.short} · Radiant</button><button type="button" className={radiant === "b" ? "active" : ""} onClick={() => setRadiant("b")}>{secondTeam.short} · Radiant</button></div>
+        <label><span>КОМАНДА A</span><div><TeamLogo team={firstTeam} /><select disabled={Boolean(selectedLiveDraft)} value={teamA} onChange={(event) => { if (event.target.value !== teamB) setTeamA(event.target.value); }}>{TEAMS.map((team) => <option key={team.id} value={team.id} disabled={team.id === teamB}>{team.name}</option>)}</select></div></label>
+        <button type="button" className="draft-swap" disabled={Boolean(selectedLiveDraft)} onClick={swapTeams} aria-label="Поменять команды местами">⇄</button>
+        <label><span>КОМАНДА B</span><div><TeamLogo team={secondTeam} /><select disabled={Boolean(selectedLiveDraft)} value={teamB} onChange={(event) => { if (event.target.value !== teamA) setTeamB(event.target.value); }}>{TEAMS.map((team) => <option key={team.id} value={team.id} disabled={team.id === teamA}>{team.name}</option>)}</select></div></label>
+        <div className="side-picker"><span>СТОРОНА</span><button type="button" disabled={Boolean(selectedLiveDraft)} className={radiant === "a" ? "active" : ""} onClick={() => setRadiant("a")}>{firstTeam.short} · Radiant</button><button type="button" disabled={Boolean(selectedLiveDraft)} className={radiant === "b" ? "active" : ""} onClick={() => setRadiant("b")}>{secondTeam.short} · Radiant</button></div>
       </div>
 
       <div className="draft-columns">
         <article className={`draft-lineup ${active.side === "a" ? "is-active" : ""}`}>
           <header><TeamLogo team={firstTeam} /><div><span>ПИК A</span><h2>{firstTeam.name}</h2></div><b>{picksA.filter(Boolean).length}/5</b></header>
-          <div>{picksA.map((heroId, index) => <HeroSlot key={index} index={index} hero={heroId ? heroesById.get(heroId) : undefined} active={active.side === "a" && active.index === index} onClick={() => selectSlot("a", index)} />)}</div>
+          <div>{picksA.map((heroId, index) => <HeroSlot key={index} index={index} hero={heroId ? heroesById.get(heroId) : undefined} active={active.side === "a" && active.index === index} locked={Boolean(selectedLiveDraft)} onClick={() => selectSlot("a", index)} />)}</div>
         </article>
         <article className="draft-result-card">
-          <p>ПРОГНОЗ НА КАРТУ</p><div className="draft-probability"><b style={{ color: firstTeam.color }}>{(result.probability * 100).toFixed(1)}%</b><span>—</span><b style={{ color: secondTeam.color }}>{((1 - result.probability) * 100).toFixed(1)}%</b></div>
+          <p>{selectedLiveDraft ? `LIVE · ${selectedLiveDraft.phase === "draft" ? "ИДЁТ ДРАФТ" : "КАРТА ИДЁТ"}` : "ПРОГНОЗ НА КАРТУ"}</p><div className="draft-probability"><b style={{ color: firstTeam.color }}>{(result.probability * 100).toFixed(1)}%</b><span>—</span><b style={{ color: secondTeam.color }}>{((1 - result.probability) * 100).toFixed(1)}%</b></div>
           <div className="draft-probability-bar"><i style={{ width: `${result.probability * 100}%`, background: firstTeam.color }} /><i style={{ background: secondTeam.color }} /></div>
           <strong>{result.probability >= 0.5 ? firstTeam.name : secondTeam.name} — фаворит карты</strong>
           <small>Уверенность: {result.confidence}. Базовый прогноз без пиков — {(result.base * 100).toFixed(1)}% на {firstTeam.short}.</small>
-          <button type="button" onClick={reset}>Сбросить пики</button>
+          <button type="button" onClick={() => selectedLiveDraft ? setLiveDraftId(null) : reset()}>{selectedLiveDraft ? "Отключить LIVE" : "Сбросить пики"}</button>
         </article>
         <article className={`draft-lineup draft-lineup--dire ${active.side === "b" ? "is-active" : ""}`}>
           <header><TeamLogo team={secondTeam} /><div><span>ПИК B</span><h2>{secondTeam.name}</h2></div><b>{picksB.filter(Boolean).length}/5</b></header>
-          <div>{picksB.map((heroId, index) => <HeroSlot key={index} index={index} hero={heroId ? heroesById.get(heroId) : undefined} active={active.side === "b" && active.index === index} onClick={() => selectSlot("b", index)} />)}</div>
+          <div>{picksB.map((heroId, index) => <HeroSlot key={index} index={index} hero={heroId ? heroesById.get(heroId) : undefined} active={active.side === "b" && active.index === index} locked={Boolean(selectedLiveDraft)} onClick={() => selectSlot("b", index)} />)}</div>
         </article>
       </div>
 
       <section className="hero-pool">
         <header><div><p className="eyebrow">ПУЛ ГЕРОЕВ</p><h2>Выбери героя для {active.side === "a" ? firstTeam.name : secondTeam.name}</h2></div><label><span>Поиск</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Например, Puck" /></label></header>
         <div className="hero-filters">{ATTRIBUTES.map((item) => <button type="button" key={item.id} className={attribute === item.id ? "active" : ""} onClick={() => setAttribute(item.id)}>{item.label}</button>)}</div>
-        <div className="hero-grid">{visibleHeroes.map((hero) => { const priority = draftStats?.activeSnapshot?.heroPriority?.[String(hero.id)]; return <button type="button" key={hero.id} disabled={selected.has(hero.id)} onClick={() => chooseHero(hero.id)} title={`${hero.roles.join(", ")} · модель ${hero.modelWinRate.toFixed(1)}%${priority ? ` · pick ${priority.pickRate.toFixed(1)}% · ban ${priority.banRate.toFixed(1)}% · contested ${priority.contestedRate.toFixed(1)}%` : ""}`}><img src={hero.image} alt="" /><span><b>{hero.name}</b><small>{hero.modelWinRate.toFixed(1)}% · {priority ? `P ${priority.pickRate.toFixed(1)}% · B ${priority.banRate.toFixed(1)}%` : `${hero.proPicks + hero.proBans} pro P/B`}</small></span>{selected.has(hero.id) ? <i>В ПИКЕ</i> : null}</button>; })}</div>
+        <div className="hero-grid">{visibleHeroes.map((hero) => { const priority = draftStats?.activeSnapshot?.heroPriority?.[String(hero.id)]; return <button type="button" key={hero.id} disabled={selected.has(hero.id) || Boolean(selectedLiveDraft)} onClick={() => chooseHero(hero.id)} title={`${hero.roles.join(", ")} · модель ${hero.modelWinRate.toFixed(1)}%${priority ? ` · pick ${priority.pickRate.toFixed(1)}% · ban ${priority.banRate.toFixed(1)}% · contested ${priority.contestedRate.toFixed(1)}%` : ""}`}><img src={hero.image} alt="" /><span><b>{hero.name}</b><small>{hero.modelWinRate.toFixed(1)}% · {priority ? `P ${priority.pickRate.toFixed(1)}% · B ${priority.banRate.toFixed(1)}%` : `${hero.proPicks + hero.proBans} pro P/B`}</small></span>{selected.has(hero.id) ? <i>В ПИКЕ</i> : null}</button>; })}</div>
       </section>
     </section>
 

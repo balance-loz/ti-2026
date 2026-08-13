@@ -9,6 +9,7 @@ import { completedSeriesFromMaps, OPENDOTA_TEAMS } from "./live-series.mjs";
 import { scheduledSeriesFromCybersportHtml } from "./schedule-source.mjs";
 import { buildForecastSource, ROUND_ONE } from "./forecast-engine.mjs";
 import { predictTemporalDraft } from "./draft-inference.mjs";
+import { liveDraftsFromOpenDota } from "./live-drafts.mjs";
 
 const PORT = Number(process.env.API_PORT || 3001);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "data");
@@ -20,6 +21,7 @@ const SESSION_DAYS = 30;
 const TI_LEAGUE_ID = Number(process.env.TI_LEAGUE_ID || 19719);
 const LIVE_SYNC_ENABLED = process.env.LIVE_SYNC_ENABLED !== "false";
 const LIVE_SYNC_INTERVAL_MINUTES = Math.max(2, Number(process.env.LIVE_SYNC_INTERVAL_MINUTES || 10));
+const LIVE_DRAFT_INTERVAL_SECONDS = Math.max(5, Number(process.env.LIVE_DRAFT_INTERVAL_SECONDS || 10));
 const OPENDOTA_API_URL = process.env.OPENDOTA_API_URL || "https://api.opendota.com/api";
 const SCHEDULE_SYNC_ENABLED = process.env.SCHEDULE_SYNC_ENABLED !== "false";
 const SCHEDULE_SOURCE_URL = process.env.SCHEDULE_SOURCE_URL || "https://www.cybersport.ru/tournaments/dota-2/the-international-2026";
@@ -110,6 +112,8 @@ db.exec("PRAGMA optimize");
 
 let refreshProcess = null;
 let liveSyncPromise = null;
+let liveDraftPromise = null;
+let liveDraftCache = { games: [], fetchedAt: null, error: null };
 let autoForecastRunning = false;
 let autoSnapshotTimer = null;
 const loginAttempts = new Map();
@@ -434,6 +438,25 @@ async function syncLiveMatches(trigger = "timer") {
   return liveSyncPromise;
 }
 
+async function refreshLiveDrafts({ force = false } = {}) {
+  const freshFor = LIVE_DRAFT_INTERVAL_SECONDS * 1000;
+  if (!force && liveDraftCache.fetchedAt && Date.now() - Date.parse(liveDraftCache.fetchedAt) < freshFor) return liveDraftCache;
+  if (liveDraftPromise) return liveDraftPromise;
+  liveDraftPromise = (async () => {
+    try {
+      const response = await fetch(`${OPENDOTA_API_URL}/live`, { headers: { "user-agent": "ti-2026-predictor/1.0 (github.com/balance-loz/ti-2026)" }, signal: AbortSignal.timeout(10_000) });
+      if (!response.ok) throw new Error(`OpenDota live HTTP ${response.status}`);
+      const rows = await response.json();
+      const fetchedAt = now();
+      liveDraftCache = { games: liveDraftsFromOpenDota(rows, { leagueId: TI_LEAGUE_ID, nowSeconds: Date.parse(fetchedAt) / 1000 }), fetchedAt, error: null };
+    } catch (error) {
+      liveDraftCache = { ...liveDraftCache, error: error instanceof Error ? error.message : String(error) };
+    } finally { liveDraftPromise = null; }
+    return liveDraftCache;
+  })();
+  return liveDraftPromise;
+}
+
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
@@ -447,6 +470,7 @@ const server = createServer(async (req, res) => {
       try { return json(res, 200, temporalModelMetadata(currentTemporalModel())); }
       catch { return json(res, 503, { error: "temporal_model_unavailable" }); }
     }
+    if (req.method === "GET" && url.pathname === "/api/draft/live") return json(res, 200, await refreshLiveDrafts());
     if (req.method === "POST" && url.pathname === "/api/draft/predict") {
       if (!sameOrigin(req)) return json(res, 403, { error: "origin" });
       try {
