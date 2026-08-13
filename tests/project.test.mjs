@@ -588,7 +588,14 @@ test("prediction confidence separates probability from evidence and flags roulet
   assert.equal(strong.roulette, false);
   assert.equal(tossup.roulette, true);
   assert.equal(assessPredictionConfidence(null, 70).roulette, true);
-  assert.equal(assessPredictionConfidence(null, 50, { fixed: true }).roulette, false);
+  assert.equal(assessPredictionConfidence(null, 50).roulette, true);
+});
+
+test("known results preserve the original pre-match confidence warning", async () => {
+  const page = await readFile("app/page.tsx", "utf8");
+  const confidence = await readFile("server/prediction-confidence.mjs", "utf8");
+  assert.doesNotMatch(page, /pairConfidence\([^\n]+Boolean\((?:fixedWinner|actual\?\.winner)\)/);
+  assert.doesNotMatch(confidence, /if \(fixed\).*roulette: false/);
 });
 
 test("external provider features stay shadow until they add temporally safe OOF value", () => {

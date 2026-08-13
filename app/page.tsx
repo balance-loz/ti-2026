@@ -565,8 +565,8 @@ function deterministicPairs(ids: string[], records: Record<string, { wins: numbe
   return solve(ordered).pairs;
 }
 
-function pairConfidence(model: StatisticalModel | null, a: string, b: string, probability: number, fixed = false) {
-  return assessPredictionConfidence(model?.pairwise[pairKey(a, b)], probability, { fixed });
+function pairConfidence(model: StatisticalModel | null, a: string, b: string, probability: number) {
+  return assessPredictionConfidence(model?.pairwise[pairKey(a, b)], probability);
 }
 
 function ConfidenceBadge({ confidence, compact = false }: { confidence: PredictionConfidence; compact?: boolean }) {
@@ -591,7 +591,7 @@ function buildLikelyBracket(answers: AnswerMap, liveMatches: LiveMatch[], model:
     const predictionCorrect = fixedWinner && evaluatePrediction ? (probabilityA >= 50 ? a : b) === fixedWinner : null;
     records[winner].wins += 1; records[loser].losses += 1;
     records[a].opponents.add(b); records[b].opponents.add(a);
-    const confidence = pairConfidence(model, a, b, probabilityA, Boolean(fixedWinner));
+    const confidence = pairConfidence(model, a, b, probabilityA);
     records[a].rounds[round - 1] = { opponent: b, won: winner === a, fixed: Boolean(fixedWinner), predictionCorrect, probability: probabilityA, confidence };
     records[b].rounds[round - 1] = { opponent: a, won: winner === b, fixed: Boolean(fixedWinner), predictionCorrect, probability: 100 - probabilityA, confidence };
   };
@@ -621,7 +621,7 @@ function buildLikelyBracket(answers: AnswerMap, liveMatches: LiveMatch[], model:
     const probabilityA = useOfficialPrematch || !snapshotCreatedAt ? savedProbabilityA ?? snapshotProbabilityA ?? 50 : snapshotProbabilityA ?? savedProbabilityA ?? 50;
     const winner = actual?.winner ?? (probabilityA >= 50 ? a : b);
     const predictionCorrect = actual?.winner && resultHappenedAfter(actual, snapshotCreatedAt, useOfficialPrematch) ? (probabilityA >= 50 ? a : b) === actual.winner : null;
-    return { a, b, winner, probabilityA, predictionCorrect, confidence: pairConfidence(model, a, b, probabilityA, Boolean(actual?.winner)) };
+    return { a, b, winner, probabilityA, predictionCorrect, confidence: pairConfidence(model, a, b, probabilityA) };
   });
   const playinWinners = new Set(playins.map((match) => match.winner));
   const playinLosers = new Set(playins.map((match) => match.winner === match.a ? match.b : match.a));
@@ -646,7 +646,7 @@ function buildLikelyPlayoff(swiss: LikelyBracket, answers: AnswerMap, liveMatche
     const probabilityA = useOfficialPrematch || !snapshotCreatedAt ? saved ?? snapshotProbabilityA ?? 50 : snapshotProbabilityA ?? saved ?? 50;
     const winner = actual?.winner ?? (probabilityA >= 50 ? a : b);
     const predictionCorrect = actual?.winner && resultHappenedAfter(actual, snapshotCreatedAt, useOfficialPrematch) ? (probabilityA >= 50 ? a : b) === actual.winner : null;
-    return { label, a, b, winner, probabilityA, predictionCorrect, format, confidence: pairConfidence(model, a, b, probabilityA, Boolean(actual?.winner)) };
+    return { label, a, b, winner, probabilityA, predictionCorrect, format, confidence: pairConfidence(model, a, b, probabilityA) };
   };
   if (qualifiers.length < 8) return { qualifiers, stages: [] };
   const knownOpening = liveMatches.filter((match) => match.stage === "playoff" && match.round === 1).slice(0, 4);

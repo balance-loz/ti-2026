@@ -5,8 +5,7 @@ const clamp = (value, min = 0, max = 1) => Math.min(max, Math.max(min, Number(va
  * It measures whether the probability is supported by enough current-roster,
  * common-opponent and direct-match evidence, then discounts fragile 50/50 calls.
  */
-export function assessPredictionConfidence(pair, probability, { fixed = false } = {}) {
-  if (fixed) return { score: 100, evidenceScore: 100, stabilityScore: 100, level: "observed", roulette: false, reasons: ["результат уже известен"] };
+export function assessPredictionConfidence(pair, probability) {
   if (!pair) return { score: 10, evidenceScore: 10, stabilityScore: 7, level: "low", roulette: true, reasons: ["нет статистического профиля пары"] };
 
   const effectiveGames = Math.max(0, Number(pair.modelEffectiveGames) || 0);
