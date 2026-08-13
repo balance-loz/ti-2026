@@ -114,6 +114,7 @@ let refreshProcess = null;
 let liveSyncPromise = null;
 let liveDraftPromise = null;
 let liveDraftCache = { games: [], fetchedAt: null, error: null };
+let liveLeagueMapsCache = { maps: [], fetchedAt: null };
 let autoForecastRunning = false;
 let autoSnapshotTimer = null;
 const loginAttempts = new Map();
@@ -399,6 +400,7 @@ async function syncLiveMatches(trigger = "timer") {
         if (!response.ok) throw new Error(`OpenDota HTTP ${response.status}`);
         maps = await response.json();
         if (!Array.isArray(maps)) throw new Error("OpenDota returned an invalid payload");
+        liveLeagueMapsCache = { maps, fetchedAt: now() };
       } catch (error) { resultError = error instanceof Error ? error.message : String(error); }
       if (SCHEDULE_SYNC_ENABLED) try {
         const response = await fetch(SCHEDULE_SOURCE_URL, { headers: { "user-agent": "ti-2026-predictor/1.0 (github.com/balance-loz/ti-2026)" }, signal: AbortSignal.timeout(30_000) });
@@ -444,11 +446,20 @@ async function refreshLiveDrafts({ force = false } = {}) {
   if (liveDraftPromise) return liveDraftPromise;
   liveDraftPromise = (async () => {
     try {
-      const response = await fetch(`${OPENDOTA_API_URL}/live`, { headers: { "user-agent": "ti-2026-predictor/1.0 (github.com/balance-loz/ti-2026)" }, signal: AbortSignal.timeout(10_000) });
+      const headers = { "user-agent": "ti-2026-predictor/1.0 (github.com/balance-loz/ti-2026)" };
+      const mapsAreStale = !liveLeagueMapsCache.fetchedAt || Date.now() - Date.parse(liveLeagueMapsCache.fetchedAt) > 30_000;
+      const mapsPromise = mapsAreStale
+        ? fetch(`${OPENDOTA_API_URL}/leagues/${TI_LEAGUE_ID}/matches`, { headers, signal: AbortSignal.timeout(10_000) })
+          .then(async (response) => response.ok ? response.json() : Promise.reject(new Error(`OpenDota league HTTP ${response.status}`)))
+          .then((maps) => { if (Array.isArray(maps)) liveLeagueMapsCache = { maps, fetchedAt: now() }; return liveLeagueMapsCache.maps; })
+          .catch(() => liveLeagueMapsCache.maps)
+        : Promise.resolve(liveLeagueMapsCache.maps);
+      const response = await fetch(`${OPENDOTA_API_URL}/live`, { headers, signal: AbortSignal.timeout(10_000) });
       if (!response.ok) throw new Error(`OpenDota live HTTP ${response.status}`);
       const rows = await response.json();
+      const leagueMaps = await mapsPromise;
       const fetchedAt = now();
-      liveDraftCache = { games: liveDraftsFromOpenDota(rows, { leagueId: TI_LEAGUE_ID, nowSeconds: Date.parse(fetchedAt) / 1000 }), fetchedAt, error: null };
+      liveDraftCache = { games: liveDraftsFromOpenDota(rows, { leagueId: TI_LEAGUE_ID, nowSeconds: Date.parse(fetchedAt) / 1000, leagueMaps }), fetchedAt, error: null };
     } catch (error) {
       liveDraftCache = { ...liveDraftCache, error: error instanceof Error ? error.message : String(error) };
     } finally { liveDraftPromise = null; }

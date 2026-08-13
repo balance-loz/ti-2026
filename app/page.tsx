@@ -427,32 +427,58 @@ function predictionExplanation(
   return { beforeLive, afterLive, items, coefficients: { recencyHalfLifeDays: model?.methodology.recencyHalfLifeDays ?? 45, directPrior: model?.methodology.directMatchPriorSeries ?? 6, rosterWeights: model?.methodology.rosterWeights ?? { 5: 1, 4: 0.25, 3: 0.07 }, personalWeight: mode === "mixed" ? opinionWeight / 100 : mode === "personal" ? 1 : 0, liveGlobal: calibration.liveGlobal, liveRematch: calibration.liveRematch, uncertainty: pair?.uncertainty ?? calibration.seriesNoiseLogitSd, formShock: calibration.formLogitSd, inferenceScale: PERSONAL_INFERENCE_SCALE } };
 }
 
-function snapshotEvaluation(snapshot: PredictionSnapshot, matches: LiveMatch[]) {
-  const future = matches.filter((match) => match.winner && Date.parse(match.updated_at || match.created_at) > Date.parse(snapshot.created_at));
-  let correct = 0; let brier = 0; let logLoss = 0;
-  for (const match of future) {
-    const pA = (storedProbability(match.team_a, match.team_b, snapshot.probabilities) ?? 50) / 100;
-    const outcome = match.winner === match.team_a ? 1 : 0;
-    correct += (pA >= 0.5 ? match.team_a : match.team_b) === match.winner ? 1 : 0;
-    brier += (pA - outcome) ** 2;
-    const safe = Math.min(0.999, Math.max(0.001, pA));
-    logLoss += -(outcome * Math.log(safe) + (1 - outcome) * Math.log(1 - safe));
-  }
-  return { count: future.length, correct, brier: future.length ? brier / future.length : null, logLoss: future.length ? logLoss / future.length : null };
+type MatchScore = { probabilityA: number; predicted: string; correct: boolean; brier: number; logLoss: number };
+type AggregateScore = { count: number; correct: number; brier: number | null; logLoss: number | null };
+
+function scoreMatch(match: LiveMatch, probabilityA: number | null | undefined): MatchScore | null {
+  if (!match.winner || !Number.isFinite(probabilityA)) return null;
+  const raw = Number(probabilityA) / 100;
+  const outcome = match.winner === match.team_a ? 1 : 0;
+  const predicted = raw >= 0.5 ? match.team_a : match.team_b;
+  const safe = Math.min(0.999, Math.max(0.001, raw));
+  return {
+    probabilityA: Number(probabilityA),
+    predicted,
+    correct: predicted === match.winner,
+    brier: (raw - outcome) ** 2,
+    logLoss: -(outcome * Math.log(safe) + (1 - outcome) * Math.log(1 - safe)),
+  };
 }
 
-function matchEvaluation(matches: LiveMatch[]) {
-  const scored = matches.filter((match) => match.winner && Number.isFinite(match.predicted_probability));
+function matchEvaluation(matches: LiveMatch[], probabilityFor: (match: LiveMatch) => number | null | undefined = (match) => match.predicted_probability): AggregateScore {
+  const scored = matches.map((match) => scoreMatch(match, probabilityFor(match))).filter((score): score is MatchScore => Boolean(score));
   let correct = 0; let brier = 0; let logLoss = 0;
-  for (const match of scored) {
-    const pA = Number(match.predicted_probability) / 100;
-    const outcome = match.winner === match.team_a ? 1 : 0;
-    correct += (pA >= 0.5 ? match.team_a : match.team_b) === match.winner ? 1 : 0;
-    brier += (pA - outcome) ** 2;
-    const safe = Math.min(0.999, Math.max(0.001, pA));
-    logLoss += -(outcome * Math.log(safe) + (1 - outcome) * Math.log(1 - safe));
+  for (const score of scored) {
+    correct += score.correct ? 1 : 0;
+    brier += score.brier;
+    logLoss += score.logLoss;
   }
   return { count: scored.length, correct, brier: scored.length ? brier / scored.length : null, logLoss: scored.length ? logLoss / scored.length : null };
+}
+
+function initialGroupSnapshot(snapshots: PredictionSnapshot[]) {
+  return snapshots
+    .filter((snapshot) => snapshot.forecast_mode === "stats" && snapshot.completed_match_count === 0)
+    .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id - b.id)[0] ?? null;
+}
+
+function adaptiveSnapshotProbability(root: PredictionSnapshot, snapshots: PredictionSnapshot[], match: LiveMatch) {
+  if (root.forecast_mode === "stats" && Number.isFinite(match.predicted_probability)) return match.predicted_probability;
+  const rootId = Number(root.root_snapshot_id ?? root.id);
+  const cutoff = Date.parse(match.scheduled_at || match.created_at);
+  if (!Number.isFinite(cutoff)) return null;
+  const candidate = snapshots
+    .filter((snapshot) => Number(snapshot.root_snapshot_id ?? snapshot.id) === rootId && Date.parse(snapshot.created_at) <= cutoff)
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id)[0];
+  return candidate ? storedProbability(match.team_a, match.team_b, candidate.probabilities) : null;
+}
+
+function dualSnapshotEvaluation(root: PredictionSnapshot, snapshots: PredictionSnapshot[], matches: LiveMatch[]) {
+  const future = matches.filter((match) => match.winner && Date.parse(match.updated_at || match.created_at) > Date.parse(root.created_at));
+  return {
+    static: matchEvaluation(future, (match) => storedProbability(match.team_a, match.team_b, root.probabilities)),
+    adaptive: matchEvaluation(future, (match) => adaptiveSnapshotProbability(root, snapshots, match)),
+  };
 }
 
 function samplingMargin(iterations: number) {
@@ -549,16 +575,17 @@ function ConfidenceBadge({ confidence, compact = false }: { confidence: Predicti
   </span>;
 }
 
-function resultHappenedAfter(match: LiveMatch, cutoff: string | null) {
+function resultHappenedAfter(match: LiveMatch, cutoff: string | null, useOfficialPrematch = false) {
+  if (useOfficialPrematch && Number.isFinite(match.predicted_probability)) return true;
   return cutoff ? Date.parse(match.updated_at || match.created_at) > Date.parse(cutoff) : Number.isFinite(match.predicted_probability);
 }
 
-function buildLikelyBracket(answers: AnswerMap, liveMatches: LiveMatch[], model: StatisticalModel | null, snapshotCreatedAt: string | null = null): LikelyBracket {
+function buildLikelyBracket(answers: AnswerMap, liveMatches: LiveMatch[], model: StatisticalModel | null, snapshotCreatedAt: string | null = null, useOfficialPrematch = false): LikelyBracket {
   const scores = teamScores(answers);
   const records = Object.fromEntries(TEAMS.map((team) => [team.id, { wins: 0, losses: 0, opponents: new Set<string>(), rounds: Array<LikelyRound>(5).fill(null) }])) as Record<string, { wins: number; losses: number; opponents: Set<string>; rounds: LikelyRound[] }>;
   const play = (round: number, a: string, b: string, fixedWinner?: string | null, savedProbabilityA?: number | null, evaluatePrediction = false) => {
     const snapshotProbabilityA = storedProbability(a, b, answers);
-    const probabilityA = snapshotCreatedAt ? snapshotProbabilityA ?? savedProbabilityA ?? 50 : savedProbabilityA ?? snapshotProbabilityA ?? 50;
+    const probabilityA = useOfficialPrematch || !snapshotCreatedAt ? savedProbabilityA ?? snapshotProbabilityA ?? 50 : snapshotProbabilityA ?? savedProbabilityA ?? 50;
     const winner = fixedWinner === a || fixedWinner === b ? fixedWinner : probabilityA >= 50 ? a : b;
     const loser = winner === a ? b : a;
     const predictionCorrect = fixedWinner && evaluatePrediction ? (probabilityA >= 50 ? a : b) === fixedWinner : null;
@@ -571,7 +598,7 @@ function buildLikelyBracket(answers: AnswerMap, liveMatches: LiveMatch[], model:
   for (let round = 1; round <= 5; round += 1) {
     const known = liveMatches.filter((match) => match.stage === "swiss" && match.round === round);
     const occupied = new Set<string>();
-    for (const match of known) if (records[match.team_a] && records[match.team_b]) { play(round, match.team_a, match.team_b, match.winner, match.predicted_probability, Boolean(match.winner) && resultHappenedAfter(match, snapshotCreatedAt)); occupied.add(match.team_a); occupied.add(match.team_b); }
+    for (const match of known) if (records[match.team_a] && records[match.team_b]) { play(round, match.team_a, match.team_b, match.winner, match.predicted_probability, Boolean(match.winner) && resultHappenedAfter(match, snapshotCreatedAt, useOfficialPrematch)); occupied.add(match.team_a); occupied.add(match.team_b); }
     if (round === 1) ROUND_ONE.filter(([a, b]) => !occupied.has(a) && !occupied.has(b)).forEach(([a, b]) => play(round, a, b));
     else {
       const buckets = new Map<string, string[]>();
@@ -591,9 +618,9 @@ function buildLikelyBracket(answers: AnswerMap, liveMatches: LiveMatch[], model:
     const actual = knownPlayins.find((match) => (match.team_a === a && match.team_b === b) || (match.team_a === b && match.team_b === a));
     const savedProbabilityA = actual ? (actual.team_a === a ? actual.predicted_probability : actual.predicted_probability === null ? null : 100 - actual.predicted_probability) : null;
     const snapshotProbabilityA = storedProbability(a, b, answers);
-    const probabilityA = snapshotCreatedAt ? snapshotProbabilityA ?? savedProbabilityA ?? 50 : savedProbabilityA ?? snapshotProbabilityA ?? 50;
+    const probabilityA = useOfficialPrematch || !snapshotCreatedAt ? savedProbabilityA ?? snapshotProbabilityA ?? 50 : snapshotProbabilityA ?? savedProbabilityA ?? 50;
     const winner = actual?.winner ?? (probabilityA >= 50 ? a : b);
-    const predictionCorrect = actual?.winner && resultHappenedAfter(actual, snapshotCreatedAt) ? (probabilityA >= 50 ? a : b) === actual.winner : null;
+    const predictionCorrect = actual?.winner && resultHappenedAfter(actual, snapshotCreatedAt, useOfficialPrematch) ? (probabilityA >= 50 ? a : b) === actual.winner : null;
     return { a, b, winner, probabilityA, predictionCorrect, confidence: pairConfidence(model, a, b, probabilityA, Boolean(actual?.winner)) };
   });
   const playinWinners = new Set(playins.map((match) => match.winner));
@@ -609,16 +636,16 @@ function buildLikelyBracket(answers: AnswerMap, liveMatches: LiveMatch[], model:
   return { rows, playins };
 }
 
-function buildLikelyPlayoff(swiss: LikelyBracket, answers: AnswerMap, liveMatches: LiveMatch[], model: StatisticalModel | null, snapshotCreatedAt: string | null = null): LikelyPlayoff {
+function buildLikelyPlayoff(swiss: LikelyBracket, answers: AnswerMap, liveMatches: LiveMatch[], model: StatisticalModel | null, snapshotCreatedAt: string | null = null, useOfficialPrematch = false): LikelyPlayoff {
   const direct = swiss.rows.filter((row) => row.status === "direct").map((row) => row.id);
   const qualifiers = [...direct, ...swiss.playins.map((match) => match.winner)].slice(0, 8);
   const versus = (label: string, a: string, b: string, format: "BO3" | "BO5" = "BO3"): LikelyPlayoffMatch => {
     const actual = liveMatches.find((match) => match.stage === "playoff" && ((match.team_a === a && match.team_b === b) || (match.team_a === b && match.team_b === a)));
     const saved = actual?.predicted_probability === null || actual?.predicted_probability === undefined ? null : actual.team_a === a ? actual.predicted_probability : 100 - actual.predicted_probability;
     const snapshotProbabilityA = storedProbability(a, b, answers);
-    const probabilityA = snapshotCreatedAt ? snapshotProbabilityA ?? saved ?? 50 : saved ?? snapshotProbabilityA ?? 50;
+    const probabilityA = useOfficialPrematch || !snapshotCreatedAt ? saved ?? snapshotProbabilityA ?? 50 : snapshotProbabilityA ?? saved ?? 50;
     const winner = actual?.winner ?? (probabilityA >= 50 ? a : b);
-    const predictionCorrect = actual?.winner && resultHappenedAfter(actual, snapshotCreatedAt) ? (probabilityA >= 50 ? a : b) === actual.winner : null;
+    const predictionCorrect = actual?.winner && resultHappenedAfter(actual, snapshotCreatedAt, useOfficialPrematch) ? (probabilityA >= 50 ? a : b) === actual.winner : null;
     return { label, a, b, winner, probabilityA, predictionCorrect, format, confidence: pairConfidence(model, a, b, probabilityA, Boolean(actual?.winner)) };
   };
   if (qualifiers.length < 8) return { qualifiers, stages: [] };
@@ -771,6 +798,7 @@ export default function Home() {
   const completedLiveMatches = useMemo(() => liveMatches.filter((match) => match.winner), [liveMatches]);
   const scheduledLiveMatches = useMemo(() => liveMatches.filter((match) => !match.winner), [liveMatches]);
   const snapshots = useMemo(() => serverState?.snapshots ?? [], [serverState?.snapshots]);
+  const staticGroupSnapshot = useMemo(() => initialGroupSnapshot(snapshots), [snapshots]);
   const latestOfficialSnapshot = useMemo(() => latestOfficialBaseline(snapshots) as PredictionSnapshot | null, [snapshots]);
   const historySnapshots = useMemo(() => visibleSnapshotHistory(snapshots) as PredictionSnapshot[], [snapshots]);
   const selectedSnapshot = useMemo(() => selectedRunId ? snapshots.find((snapshot) => snapshot.id === selectedRunId) ?? null : null, [selectedRunId, snapshots]);
@@ -782,13 +810,22 @@ export default function Home() {
   }, [answers, completedLiveMatches, forecastMode, opinionWeight, stats]);
   const scenarioSource = selectedRoot?.probabilities ?? activeBaselineSnapshot?.probabilities ?? forecastSource;
   const scenarioSnapshotCreatedAt = selectedRoot?.created_at ?? null;
-  const likelyBracket = useMemo(() => buildLikelyBracket(scenarioSource, liveMatches, stats, scenarioSnapshotCreatedAt), [liveMatches, scenarioSnapshotCreatedAt, scenarioSource, stats]);
-  const likelyPlayoff = useMemo(() => buildLikelyPlayoff(likelyBracket, scenarioSource, liveMatches, stats, scenarioSnapshotCreatedAt), [likelyBracket, liveMatches, scenarioSnapshotCreatedAt, scenarioSource, stats]);
+  const scenarioUsesOfficialPrematch = Boolean(activeBaselineSnapshot) || Boolean(selectedRoot?.forecast_mode === "stats" && selectedRoot.trigger !== "manual_run");
+  const likelyBracket = useMemo(() => buildLikelyBracket(scenarioSource, liveMatches, stats, scenarioSnapshotCreatedAt, scenarioUsesOfficialPrematch), [liveMatches, scenarioSnapshotCreatedAt, scenarioSource, scenarioUsesOfficialPrematch, stats]);
+  const likelyPlayoff = useMemo(() => buildLikelyPlayoff(likelyBracket, scenarioSource, liveMatches, stats, scenarioSnapshotCreatedAt, scenarioUsesOfficialPrematch), [likelyBracket, liveMatches, scenarioSnapshotCreatedAt, scenarioSource, scenarioUsesOfficialPrematch, stats]);
   const playoffMatches = useMemo(() => Object.fromEntries(likelyPlayoff.stages.flatMap((stage) => stage.matches).map((match) => [match.label, match])) as Record<string, LikelyPlayoffMatch>, [likelyPlayoff]);
   const liveConstraintSignature = liveMatches.map((match) => `${match.id}:${match.stage}:${match.round}:${match.team_a}:${match.team_b}:${match.winner ?? "scheduled"}:${match.score_a ?? ""}:${match.score_b ?? ""}`).join(";");
   const displayedResult = selectedRoot?.result ?? result;
   const matchMetrics = useMemo(() => matchEvaluation(completedLiveMatches), [completedLiveMatches]);
-  const stageMetrics = useMemo(() => (["swiss", "playin", "playoff"] as const).map((stage) => ({ stage, ...matchEvaluation(completedLiveMatches.filter((match) => match.stage === stage)) })), [completedLiveMatches]);
+  const staticMatchMetrics = useMemo(() => staticGroupSnapshot ? matchEvaluation(completedLiveMatches, (match) => storedProbability(match.team_a, match.team_b, staticGroupSnapshot.probabilities)) : null, [completedLiveMatches, staticGroupSnapshot]);
+  const stageMetrics = useMemo(() => (["swiss", "playin", "playoff"] as const).map((stage) => {
+    const matches = completedLiveMatches.filter((match) => match.stage === stage);
+    return {
+      stage,
+      static: staticGroupSnapshot ? matchEvaluation(matches, (match) => storedProbability(match.team_a, match.team_b, staticGroupSnapshot.probabilities)) : null,
+      adaptive: matchEvaluation(matches),
+    };
+  }), [completedLiveMatches, staticGroupSnapshot]);
   const decisionAudit = useMemo(() => {
     const rows = completedLiveMatches.filter((match) => Number.isFinite(match.predicted_probability)).map((match) => {
       const decision = predictionDecision(stats?.pairwise[pairKey(match.team_a, match.team_b)], match.predicted_probability ?? 50, { temperature: decisionPolicy.probabilityTemperature, minMarginPp: decisionPolicy.selectivePrediction.minMarginPp });
@@ -799,9 +836,17 @@ export default function Home() {
     return { total: rows.length, accepted: accepted.length, correct: accepted.filter((row) => row.correct).length, pass: rows.length - accepted.length };
   }, [completedLiveMatches, decisionPolicy, stats]);
   const matchHistoryPoints = useMemo(() => {
-    const ordered = [...completedLiveMatches].filter((match) => Number.isFinite(match.predicted_probability)).sort((a, b) => Date.parse(a.scheduled_at || a.created_at) - Date.parse(b.scheduled_at || b.created_at));
-    return ordered.map((match, index) => ({ match, ...matchEvaluation(ordered.slice(0, index + 1)) })).slice(-24);
-  }, [completedLiveMatches]);
+    if (!staticGroupSnapshot) return [];
+    const staticProbability = (match: LiveMatch) => storedProbability(match.team_a, match.team_b, staticGroupSnapshot.probabilities);
+    const ordered = [...completedLiveMatches]
+      .filter((match) => Number.isFinite(match.predicted_probability) && Number.isFinite(staticProbability(match)))
+      .sort((a, b) => Date.parse(a.scheduled_at || a.created_at) - Date.parse(b.scheduled_at || b.created_at));
+    return ordered.map((match, index) => ({
+      match,
+      static: matchEvaluation(ordered.slice(0, index + 1), staticProbability),
+      adaptive: matchEvaluation(ordered.slice(0, index + 1)),
+    })).slice(-24);
+  }, [completedLiveMatches, staticGroupSnapshot]);
   const currentExplanation = predictionExplanation(currentPair[0], currentPair[1], answers, stats, forecastMode, opinionWeight, completedLiveMatches);
   const explainMatchup = (a: string, b: string) => predictionExplanation(a, b, answers, stats, forecastMode, opinionWeight, completedLiveMatches);
   const likelyOutcomes = useMemo(() => displayedResult ? likelyOutcomePartition(displayedResult.teams) : {}, [displayedResult]);
@@ -1179,9 +1224,9 @@ export default function Home() {
       <section className="live-console" id="live">
         <div className="live-console__head">
           <div><p className="eyebrow">ЖИВОЙ ПРОГНОЗ TI 2026</p><h2>Каждый матч — отдельная проверка</h2></div>
-          <div className="live-score"><b>{matchMetrics.count}</b><span>матчей оценено</span><b>{matchMetrics.count ? `${matchMetrics.correct}/${matchMetrics.count}` : "—"}</b><span>победителей угадано</span><b>{matchMetrics.brier === null ? "—" : matchMetrics.brier.toFixed(3)}</b><span>Brier · меньше лучше</span></div>
+          <div className="live-score"><b>{staticMatchMetrics?.count ? `${staticMatchMetrics.correct}/${staticMatchMetrics.count}` : "—"}</b><span>STATIC · исходная группа</span><b>{matchMetrics.count ? `${matchMetrics.correct}/${matchMetrics.count}` : "—"}</b><span>ADAPTIVE · перед матчем</span><b>{matchMetrics.brier === null ? "—" : matchMetrics.brier.toFixed(3)}</b><span>ADAPTIVE Brier</span></div>
         </div>
-        <p className="muted">Вероятность замораживается при публикации официальной пары. После результата отдельно оцениваются угаданный победитель, Brier score и log loss; сыгранный матч одновременно становится важным свежим фактом для следующих прогнозов.</p>
+        <p className="muted">STATIC всегда использует один снимок до первого результата групповой стадии. ADAPTIVE использует только вероятность, сохранённую перед конкретным матчем после уже известных результатов. Эти оценки не смешиваются: у адаптивного варианта больше информации.</p>
         {serverState?.liveSync && <p className="live-sync-status">
           <b>OpenDota · результаты · лига {serverState.liveSync.leagueId}</b>
           <b>Cybersport.ru · официальные пары</b>
@@ -1190,7 +1235,7 @@ export default function Home() {
           <span>{serverState.liveSync.running ? "проверяется сейчас" : serverState.liveSync.lastSync ? `${serverState.liveSync.lastSync.ok ? "последняя проверка" : "ошибка"}: ${new Date(serverState.liveSync.lastSync.updatedAt).toLocaleString("ru-RU")}` : "ещё не проверялось"}</span>
         </p>}
         {serverState?.liveSync.lastSync?.scheduleError ? <p className="sync-warning">Расписание Cybersport.ru временно не прочитано: {serverState.liveSync.lastSync.scheduleError}. Результаты OpenDota продолжают обновляться независимо.</p> : null}
-        {matchMetrics.count > 0 && <div className="stage-score-grid">{stageMetrics.map((metric) => <article key={metric.stage}><span>{metric.stage === "swiss" ? "ШВЕЙЦАРКА" : metric.stage === "playin" ? "СТЫКИ" : "ПЛЕЙ-ОФФ"}</span><b>{metric.count ? `${metric.correct}/${metric.count}` : "—"}</b><small>точность {metric.count ? `${(100 * metric.correct / metric.count).toFixed(0)}%` : "—"}</small><small>Brier {metric.brier === null ? "—" : metric.brier.toFixed(3)} · log loss {metric.logLoss === null ? "—" : metric.logLoss.toFixed(3)}</small></article>)}</div>}
+        {matchMetrics.count > 0 && <div className="stage-score-grid">{stageMetrics.map((metric) => <article key={metric.stage}><span>{metric.stage === "swiss" ? "ШВЕЙЦАРКА" : metric.stage === "playin" ? "СТЫКИ" : "ПЛЕЙ-ОФФ"}</span><b>{metric.adaptive.count ? `${metric.adaptive.correct}/${metric.adaptive.count}` : "—"}</b><small>STATIC {metric.static?.count ? `${metric.static.correct}/${metric.static.count}` : "—"} · Brier {metric.static?.brier?.toFixed(3) ?? "—"}</small><small>ADAPTIVE {metric.adaptive.count ? `${metric.adaptive.correct}/${metric.adaptive.count}` : "—"} · Brier {metric.adaptive.brier?.toFixed(3) ?? "—"}</small></article>)}</div>}
         {decisionAudit.total > 0 && <div className="decision-audit"><div><b>{decisionAudit.accepted ? `${decisionAudit.correct}/${decisionAudit.accepted}` : "—"}</b><span>точность среди матчей, где модель сказала «да»</span></div><div><b>{decisionAudit.total ? `${Math.round(100 * decisionAudit.accepted / decisionAudit.total)}%` : "—"}</b><span>coverage · доля принятых решений</span></div><div><b>{decisionAudit.pass}</b><span>матчей честно отправлено в PASS</span></div></div>}
         {serverState?.liveSync.lastSync?.unknownTeamIds?.length ? <p className="sync-warning">В OpenDota появились неизвестные team ID: {serverState.liveSync.lastSync.unknownTeamIds.join(", ")}. Эти карты пока не записаны — требуется проверить соответствие команды.</p> : null}
         {serverAvailable ? (
@@ -1229,34 +1274,31 @@ export default function Home() {
           </>}</article>;
         })}</div>}
         {completedLiveMatches.length > 0 && <div className="live-results">{completedLiveMatches.map((match) => {
-          const hasSavedPrediction = Number.isFinite(match.predicted_probability);
-          const pA = match.predicted_probability ?? 50;
-          const predicted = pA >= 50 ? match.team_a : match.team_b;
-          const correct = predicted === match.winner;
-          const outcome = match.winner === match.team_a ? 1 : 0;
-          const brier = ((pA / 100) - outcome) ** 2;
-          const winnerProbability = match.winner === match.team_a ? pA / 100 : 1 - pA / 100;
-          const logLoss = -Math.log(Math.min(.999, Math.max(.001, winnerProbability)));
+          const adaptiveScore = scoreMatch(match, match.predicted_probability);
+          const staticProbability = staticGroupSnapshot ? storedProbability(match.team_a, match.team_b, staticGroupSnapshot.probabilities) : null;
+          const staticScore = scoreMatch(match, staticProbability);
+          const pA = adaptiveScore?.probabilityA ?? 50;
           const decision = predictionDecision(stats?.pairwise[pairKey(match.team_a, match.team_b)], pA, { temperature: decisionPolicy.probabilityTemperature, minMarginPp: decisionPolicy.selectivePrediction.minMarginPp });
           const explanation = predictionExplanation(match.team_a, match.team_b, answers, stats, forecastMode, opinionWeight, completedLiveMatches.filter((item) => item.id < match.id));
-          return <article key={match.id} className="live-result-card"><div><span>{match.stage === "swiss" ? "SW" : match.stage === "playin" ? "PI" : "PO"} R{match.round}</span><strong><TeamMark team={getTeam(match.team_a)} small />{getTeam(match.team_a).name} — {getTeam(match.team_b).name}<TeamMark team={getTeam(match.team_b)} small /></strong><b>{match.score_a ?? "?"}–{match.score_b ?? "?"} · {getTeam(match.winner!).name}</b><i className={!hasSavedPrediction ? "is-unscored" : correct ? "is-correct" : "is-wrong"}>{!hasSavedPrediction ? "НЕТ PRE-MATCH" : correct ? "ПРОГНОЗ ВЕРЕН" : "ОШИБКА"}</i></div><div className={`match-decision match-decision--${decision.status}`}><b>{decision.label}</b><span>уверенность {decision.confidence.score}/100 · интервал {decision.interval.low.toFixed(0)}–{decision.interval.high.toFixed(0)}%</span></div><details><summary>{hasSavedPrediction ? `До матча: ${getTeam(match.team_a).name} ${pA.toFixed(1)}% · Brier ${brier.toFixed(3)} · log loss ${logLoss.toFixed(3)}` : "До начала матча вероятность не была сохранена — результат не участвует в оценке"}</summary>{hasSavedPrediction && <div>{explanation.items.map((item) => <span key={item.label}><b>{item.label}</b><em>{item.value >= 0 ? "+" : ""}{item.value.toFixed(1)} п.п.</em><small>{item.text}</small></span>)}</div>}</details></article>;
+          const variant = (label: "STATIC" | "ADAPTIVE", score: MatchScore | null) => <div className={`prediction-variant prediction-variant--${label.toLowerCase()}`}><b>{label}</b>{score ? <><span>{getTeam(score.predicted).short} {(score.predicted === match.team_a ? score.probabilityA : 100 - score.probabilityA).toFixed(1)}%</span><i className={score.correct ? "is-correct" : "is-wrong"}>{score.correct ? "ВЕРНО" : "ОШИБКА"}</i><small>Brier {score.brier.toFixed(3)} · log loss {score.logLoss.toFixed(3)}</small></> : <><span>нет данных</span><i className="is-unscored">НЕ ОЦЕНЁН</i><small>честной предматчевой вероятности нет</small></>}</div>;
+          return <article key={match.id} className="live-result-card"><div className="live-result-card__head"><span>{match.stage === "swiss" ? "SW" : match.stage === "playin" ? "PI" : "PO"} R{match.round}</span><strong><TeamMark team={getTeam(match.team_a)} small />{getTeam(match.team_a).name} — {getTeam(match.team_b).name}<TeamMark team={getTeam(match.team_b)} small /></strong><b>{match.score_a ?? "?"}–{match.score_b ?? "?"} · {getTeam(match.winner!).name}</b></div><div className="prediction-variants">{variant("STATIC", staticScore)}{variant("ADAPTIVE", adaptiveScore)}</div>{adaptiveScore && <div className={`match-decision match-decision--${decision.status}`}><b>{decision.label}</b><span>ADAPTIVE · уверенность {decision.confidence.score}/100 · интервал {decision.interval.low.toFixed(0)}–{decision.interval.high.toFixed(0)}%</span></div>}<details><summary>{adaptiveScore ? `Почему ADAPTIVE дал ${getTeam(match.team_a).name} ${pA.toFixed(1)}%` : "До начала матча адаптивная вероятность не была сохранена"}</summary>{adaptiveScore && <div>{explanation.items.map((item) => <span key={item.label}><b>{item.label}</b><em>{item.value >= 0 ? "+" : ""}{item.value.toFixed(1)} п.п.</em><small>{item.text}</small></span>)}</div>}</details></article>;
         })}</div>}
         <div className="prediction-history">
           <div className="prediction-history__head"><div><p className="eyebrow">ИСТОРИЯ МОДЕЛИ</p><h3>Что модель думала до результатов</h3></div><span>{historySnapshots.length} сохранённых прогнозов</span></div>
           {selectedRoot && selectedLatest ? <div className="selected-run-banner"><div><b>ПРОГНОЗ #{selectedRoot.id} · {selectedRoot.forecast_mode === "mixed" ? `${selectedRoot.opinion_weight}% личного мнения` : selectedRoot.forecast_mode === "stats" ? "официальная статистическая база" : "личный сценарий"}</b><span>На странице и в сетке показан неизменный оригинал от {new Date(selectedRoot.created_at).toLocaleString("ru-RU")}. Его прогнозы сравниваются с последующими результатами; накопительная оценка уже учитывает {selectedLatest.completed_match_count} завершённых серий.</span></div><button type="button" onClick={() => selectSnapshot(null)}>Вернуться к Official baseline</button></div> : <div className="official-baseline-banner"><b>OFFICIAL BASELINE</b><span>{activeBaselineSnapshot ? `Загружен сохранённый снимок от ${new Date(activeBaselineSnapshot.created_at).toLocaleString("ru-RU")} · без нового пересчёта` : "Ожидаем первый сохранённый серверный снимок"}</span></div>}
           {matchHistoryPoints.length > 0 && <div className="history-chart">
-            <div className="history-chart__controls"><strong>НАКОПИТЕЛЬНАЯ ТОЧНОСТЬ ПОСЛЕ КАЖДОГО МАТЧА</strong><span>Наведи на столбец: увидишь пару, Brier и log loss на тот момент</span></div>
-            <div className="history-chart__bars">{matchHistoryPoints.map((point) => { const accuracy = 100 * point.correct / point.count; return <div key={point.match.id} title={`${getTeam(point.match.team_a).name} — ${getTeam(point.match.team_b).name} · точность ${accuracy.toFixed(1)}% · Brier ${point.brier?.toFixed(3)} · log loss ${point.logLoss?.toFixed(3)}`}><b>{accuracy.toFixed(0)}%</b><i style={{ height: `${Math.max(3, accuracy)}%` }} /><small>{point.match.stage === "swiss" ? `S${point.match.round}` : point.match.stage === "playin" ? "PI" : "PO"}</small></div>; })}</div>
+            <div className="history-chart__controls"><strong>НАКОПИТЕЛЬНАЯ ТОЧНОСТЬ · STATIC ПРОТИВ ADAPTIVE</strong><span><i className="legend-static" /> STATIC заморожен до групп · <i className="legend-adaptive" /> ADAPTIVE сохранён перед матчем</span></div>
+            <div className="history-chart__bars">{matchHistoryPoints.map((point) => { const staticAccuracy = 100 * point.static.correct / point.static.count; const adaptiveAccuracy = 100 * point.adaptive.correct / point.adaptive.count; return <div key={point.match.id} title={`${getTeam(point.match.team_a).name} — ${getTeam(point.match.team_b).name} · STATIC ${staticAccuracy.toFixed(1)}%, Brier ${point.static.brier?.toFixed(3)}, log loss ${point.static.logLoss?.toFixed(3)} · ADAPTIVE ${adaptiveAccuracy.toFixed(1)}%, Brier ${point.adaptive.brier?.toFixed(3)}, log loss ${point.adaptive.logLoss?.toFixed(3)}`}><b>{staticAccuracy.toFixed(0)}/{adaptiveAccuracy.toFixed(0)}%</b><span className="history-chart__pair"><i className="history-chart__static" style={{ height: `${Math.max(3, staticAccuracy)}%` }} /><i className="history-chart__adaptive" style={{ height: `${Math.max(3, adaptiveAccuracy)}%` }} /></span><small>{point.match.stage === "swiss" ? `S${point.match.round}` : point.match.stage === "playin" ? "PI" : "PO"}</small></div>; })}</div>
           </div>}
           {historySnapshots.length ? <div className="snapshot-list">{historySnapshots.map((snapshot) => {
-            const evaluation = snapshotEvaluation(snapshot, completedLiveMatches);
+            const evaluation = dualSnapshotEvaluation(snapshot, snapshots, completedLiveMatches);
             return <details key={snapshot.id} open={selectedRunId === snapshot.id}>
-              <summary onClick={(event) => { event.preventDefault(); selectSnapshot(snapshot); }}><time>{new Date(snapshot.created_at).toLocaleString("ru-RU")}</time><b>{snapshot.snapshot_kind === "revision" ? `ревизия прогноза #${snapshot.root_snapshot_id}` : snapshot.trigger === "manual_run" ? "ручной прогон" : "Official baseline"} · {snapshot.forecast_mode === "mixed" ? `смесь ${snapshot.opinion_weight}% мнения` : snapshot.forecast_mode === "stats" ? "только статистика" : "только мнение"} · {snapshot.iterations.toLocaleString("ru-RU")} прогонов</b><span>{evaluation.count ? `${evaluation.correct}/${evaluation.count} верно` : "ждёт новых матчей"}</span></summary>
+              <summary onClick={(event) => { event.preventDefault(); selectSnapshot(snapshot); }}><time>{new Date(snapshot.created_at).toLocaleString("ru-RU")}</time><b>{snapshot.snapshot_kind === "revision" ? `ревизия прогноза #${snapshot.root_snapshot_id}` : snapshot.trigger === "manual_run" ? "ручной прогон" : "Official baseline"} · {snapshot.forecast_mode === "mixed" ? `смесь ${snapshot.opinion_weight}% мнения` : snapshot.forecast_mode === "stats" ? "только статистика" : "только мнение"} · {snapshot.iterations.toLocaleString("ru-RU")} прогонов</b><span>{evaluation.static.count ? `S ${evaluation.static.correct}/${evaluation.static.count} · A ${evaluation.adaptive.correct}/${evaluation.adaptive.count}` : "ждёт новых матчей"}</span></summary>
               <div className="snapshot-metrics">
                 <div><b>{snapshot.iterations.toLocaleString("ru-RU")}</b><span>прогонов</span></div>
                 <div><b>{snapshot.result.uniqueBrackets?.toLocaleString("ru-RU") ?? "—"}</b><span>уникальных путей</span></div>
-                <div><b>{evaluation.brier === null ? "—" : evaluation.brier.toFixed(3)}</b><span>Brier, меньше лучше</span></div>
-                <div><b>{evaluation.logLoss === null ? "—" : evaluation.logLoss.toFixed(3)}</b><span>log loss</span></div>
+                <div><b>{evaluation.static.count ? `${evaluation.static.correct}/${evaluation.static.count}` : "—"}</b><span>STATIC · Brier {evaluation.static.brier?.toFixed(3) ?? "—"} · LL {evaluation.static.logLoss?.toFixed(3) ?? "—"}</span></div>
+                <div><b>{evaluation.adaptive.count ? `${evaluation.adaptive.correct}/${evaluation.adaptive.count}` : "—"}</b><span>ADAPTIVE · Brier {evaluation.adaptive.brier?.toFixed(3) ?? "—"} · LL {evaluation.adaptive.logLoss?.toFixed(3) ?? "—"}</span></div>
               </div>
               <div className="snapshot-teams">{snapshot.result.teams.slice(0, 8).map((team) => <span key={team.id}><TeamMark team={getTeam(team.id)} small />{team.name}<b>{team.qualify.toFixed(1)}%</b></span>)}</div>
               {serverState?.isAdmin && <div className="snapshot-admin-row"><span>Удаляется только этот сохранённый прогон.</span><button type="button" onClick={() => void deleteSnapshot(snapshot)}>Удалить прогноз</button></div>}
