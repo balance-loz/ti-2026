@@ -776,6 +776,8 @@ button:disabled, input:disabled { cursor: not-allowed; opacity: .5; }
 .draft-assignment-columns span b, .draft-assignment-columns span strong, .draft-counter-evidence span b, .draft-counter-evidence span strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .draft-assignment-columns span b { min-width: 58px; }.draft-assignment-columns span i, .draft-counter-evidence span i { color: #777e75; font: normal 700 9px var(--font-geist-mono); }
 .draft-assignment-columns small, .draft-counter-evidence small { color: #626961; font: 650 8px var(--font-geist-mono); }
+.draft-player-evidence--observed > header b { color: #367d47; }.draft-player-evidence--inferred > header b { color: #9a6b27; }
+.draft-player-evidence > footer { padding: 11px 14px; border-top: 1px solid #cac7bd; background: #dedbd2; color: #675f4e; font: 650 8px/1.5 var(--font-geist-mono); }
 .draft-counter-evidence > div { max-height: 345px; overflow-y: auto; }
 .draft-counter-evidence span b, .draft-counter-evidence span strong { flex: 1; }
 .draft-counter-evidence small { padding-left: 31px; }

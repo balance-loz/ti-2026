@@ -250,13 +250,15 @@ test("OpenDota maps become a completed series only after two wins", () => {
 
 test("OpenDota live feed becomes a partial TI draft and rejects stale games", () => {
   const rows = [{ league_id: 19719, match_id: 42, series_id: 7, team_id_radiant: 9247354, team_id_dire: 9572001, game_time: -30, delay: 10, last_update_time: 1_000, radiant_lead: 2400, spectators: 1234,
-    players: [{ team: 0, team_slot: 2, hero_id: 59 }, { team: 0, team_slot: 1, hero_id: 80 }, { team: 1, team_slot: 1, hero_id: 55 }] }];
+    players: [{ team: 0, team_slot: 2, account_id: 20, hero_id: 59, name: "Second" }, { team: 0, team_slot: 1, account_id: 10, hero_id: 80, name: "First" }, { team: 1, team_slot: 1, account_id: 30, hero_id: 55 }] }];
   const leagueMaps = [
     { series_id: 7, series_type: 1, radiant_team_id: 9247354, dire_team_id: 9572001, radiant_win: true },
     { series_id: 7, series_type: 1, radiant_team_id: 9572001, dire_team_id: 9247354, radiant_win: true },
   ];
   assert.deepEqual(liveDraftsFromOpenDota(rows, { nowSeconds: 1_030, leagueMaps }), [{
     matchId: "42", seriesId: "7", radiantTeam: "falcons", direTeam: "parivision", radiantPicks: [80, 59], direPicks: [55], gameTime: -30, delay: 10,
+    radiantPlayers: [{ accountId: 10, heroId: 80, name: "First" }, { accountId: 20, heroId: 59, name: "Second" }],
+    direPlayers: [{ accountId: 30, heroId: 55, name: null }],
     radiantScore: 0, direScore: 0, radiantLead: 2400, spectators: 1234, seriesScoreRadiant: 1, seriesScoreDire: 1, seriesBestOf: 3,
     lastUpdateAt: "1970-01-01T00:16:40.000Z", phase: "draft",
   }]);
@@ -269,6 +271,11 @@ test("Draft Lab polls and binds the selected live draft", async () => {
   assert.match(page, /fetch\("\/api\/draft\/live"/);
   assert.match(page, /window\.setInterval\(load, 5_000\)/);
   assert.match(page, /selectedLiveDraft\.radiantPicks/);
+  assert.match(page, /liveDraft\.radiantPlayers/);
+  assert.match(page, /calculateDraft\(.*boundLiveDraft\)/);
+  assert.match(page, /setLastSelectedLiveDraft\(selectedLiveDraft\)/);
+  assert.match(page, /точное распределение из live-feed/);
+  assert.match(page, /гипотеза модели · не подтверждено/);
   assert.match(page, /function liveMapAssessment/);
   assert.match(page, /NO BET · ИСХОД СЛОЖИЛСЯ/);
   assert.match(page, /ЗАМОРОЖЕННЫЙ ПРОГНОЗ ПО ДРАФТУ/);

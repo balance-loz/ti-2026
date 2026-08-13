@@ -88,9 +88,11 @@ type TemporalPrediction = {
 };
 type LiveDraft = {
   matchId: string; seriesId: string; radiantTeam: string; direTeam: string; radiantPicks: number[]; direPicks: number[];
+  radiantPlayers: LivePlayer[]; direPlayers: LivePlayer[];
   gameTime: number; delay: number; radiantScore: number; direScore: number; lastUpdateAt: string | null; phase: "draft" | "game";
   radiantLead: number | null; spectators: number | null; seriesScoreRadiant: number; seriesScoreDire: number; seriesBestOf: number | null;
 };
+type LivePlayer = { accountId: number; heroId: number; name: string | null };
 type LiveDraftState = { games: LiveDraft[]; fetchedAt: string | null; error: string | null };
 
 function liveMapAssessment(game: LiveDraft) {
@@ -152,6 +154,7 @@ const pairKey = (a: string | number, b: string | number) => [a, b].sort((left, r
 const teamPairKey = (a: string, b: string) => [a, b].sort().join("|");
 const teamById = (id: string) => TEAMS.find((team) => team.id === id) ?? TEAMS[0];
 const signed = (value: number) => `${value >= 0 ? "+" : ""}${value.toFixed(1)} п.п.`;
+const positionLabel = (position?: number) => position ? `позиция ${position}` : "позиция неизвестна";
 
 function teamBaseProbability(model: TeamStats | null, a: string, b: string) {
   const key = teamPairKey(a, b);
@@ -163,16 +166,41 @@ function average(values: number[], fallback = 0.5) {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : fallback;
 }
 
-function bestPlayerAssignment(team: DraftStats["teams"][string] | undefined, heroes: Hero[], activePlayerHero?: Record<string, Sample>, playerPositions?: DraftStats["activeSnapshot"]["playerPositions"], heroRole?: Record<string, Sample>) {
+type PlayerAssignmentRow = { player: string; hero: Hero; sample?: Sample; position?: number };
+type PlayerAssignment = { rate: number; roleRate: number; games: number; found: number; rows: PlayerAssignmentRow[]; source: "observed" | "inferred" | "unavailable" };
+
+function bestPlayerAssignment(team: DraftStats["teams"][string] | undefined, heroes: Hero[], activePlayerHero?: Record<string, Sample>, playerPositions?: DraftStats["activeSnapshot"]["playerPositions"], heroRole?: Record<string, Sample>, observedPlayers?: LivePlayer[]): PlayerAssignment {
   const players = team?.players ?? [];
-  if (!heroes.length || players.length < heroes.length) return { rate: 0.5, roleRate: 0.5, games: 0, found: 0, rows: [] as { player: string; hero: Hero; sample?: Sample }[] };
-  let bestScore = -Infinity; let bestPoolScore = 0; let bestRoleScore = 0;
-  let bestRows: { player: string; hero: Hero; sample?: Sample }[] = [];
+  if (!heroes.length || players.length < heroes.length) return { rate: 0.5, roleRate: 0.5, games: 0, found: 0, rows: [], source: "unavailable" };
+  const scoreRows = (assignments: { player: PlayerHeroStats; hero: Hero }[], source: "observed" | "inferred") => {
+    let poolScore = 0; let roleScore = 0; let games = 0; let found = 0;
+    const rows = assignments.map(({ player, hero }) => {
+      const position = Number(playerPositions?.[String(player.accountId)]?.role || 0);
+      const sample = activePlayerHero ? activePlayerHero[`${player.accountId}|${hero.id}`] : player.heroes[String(hero.id)];
+      const roleSample = position ? heroRole?.[`${hero.id}|${position}`] : undefined;
+      if (sample) { poolScore += logit(sample.winRate / 100) * (activePlayerHero ? 1 : Math.min(1, sample.games / 5)); games += sample.games; found += 1; }
+      if (roleSample) roleScore += logit(roleSample.winRate / 100) * Math.min(1, roleSample.games / 8);
+      return { player: player.name, hero, sample, position };
+    });
+    return { rate: sigmoid(poolScore / Math.max(1, assignments.length)), roleRate: sigmoid(roleScore / Math.max(1, assignments.length)), games, found, rows, source };
+  };
+  if (observedPlayers?.length) {
+    const heroesById = new Map(heroes.map((hero) => [hero.id, hero]));
+    const playersById = new Map(players.map((player) => [player.accountId, player]));
+    const assignments = observedPlayers.flatMap((observed) => {
+      const player = playersById.get(observed.accountId); const hero = heroesById.get(observed.heroId);
+      return player && hero ? [{ player, hero }] : [];
+    });
+    if (assignments.length === heroes.length) return scoreRows(assignments, "observed");
+    return { rate: 0.5, roleRate: 0.5, games: 0, found: 0, rows: [], source: "unavailable" };
+  }
+  let bestScore = -Infinity;
+  let bestAssignments: { player: PlayerHeroStats; hero: Hero }[] = [];
   const used = new Set<number>();
-  const rows: { player: string; hero: Hero; sample?: Sample }[] = [];
+  const rows: { player: PlayerHeroStats; hero: Hero }[] = [];
   const visit = (index: number, poolScore: number, roleScore: number) => {
     if (index === heroes.length) {
-      if (poolScore + roleScore > bestScore) { bestScore = poolScore + roleScore; bestPoolScore = poolScore; bestRoleScore = roleScore; bestRows = [...rows]; }
+      if (poolScore + roleScore > bestScore) { bestScore = poolScore + roleScore; bestAssignments = [...rows]; }
       return;
     }
     for (let playerIndex = 0; playerIndex < players.length; playerIndex += 1) {
@@ -187,20 +215,15 @@ function bestPlayerAssignment(team: DraftStats["teams"][string] | undefined, her
       const poolEvidence = sample ? logit(sample.winRate / 100) * (activePlayerHero ? 1 : Math.min(1, sample.games / 5)) : 0;
       const roleEvidence = roleSample ? logit(roleSample.winRate / 100) * Math.min(1, roleGames / 8) : 0;
       used.add(playerIndex);
-      rows.push({ player: player.name, hero: heroes[index], sample });
+      rows.push({ player, hero: heroes[index] });
       visit(index + 1, poolScore + poolEvidence, roleScore + roleEvidence);
       rows.pop();
       used.delete(playerIndex);
     }
   };
   visit(0, 0, 0);
-  return {
-    rate: sigmoid((Number.isFinite(bestScore) ? bestPoolScore : 0) / Math.max(1, heroes.length)),
-    roleRate: sigmoid((Number.isFinite(bestScore) ? bestRoleScore : 0) / Math.max(1, heroes.length)),
-    games: bestRows.reduce((sum, row) => sum + (row.sample?.games ?? 0), 0),
-    found: bestRows.filter((row) => row.sample).length,
-    rows: bestRows,
-  };
+  if (!Number.isFinite(bestScore)) return { rate: 0.5, roleRate: 0.5, games: 0, found: 0, rows: [], source: "unavailable" };
+  return scoreRows(bestAssignments, "inferred");
 }
 
 function calculateDraft(
@@ -213,6 +236,7 @@ function calculateDraft(
   radiant: Side,
   picksA: Pick[],
   picksB: Pick[],
+  liveDraft?: LiveDraft | null,
 ) {
   const base = teamBaseProbability(teamStats, teamA, teamB);
   if (!draftStats) return { probability: base, base, teamPrior: base, draftOnly: 0.5, features: [] as Feature[], confidence: "данные загружаются" };
@@ -293,9 +317,12 @@ function calculateDraft(
   const familiarityRateB = average(familiarityB.map((row) => row.winRate / 100));
   add("teamPool", "Пул команды", logit(familiarityRateA) - logit(familiarityRateB), `подтверждённые пики: ${familiarityA.length} у ${teamById(teamA).short}, ${familiarityB.length} у ${teamById(teamB).short}`, familiarityA.reduce((sum, row) => sum + row.games, 0) + familiarityB.reduce((sum, row) => sum + row.games, 0));
 
-  const assignmentA = bestPlayerAssignment(draftStats.teams[teamA], heroesA, draftStats.activeSnapshot?.playerHero, draftStats.activeSnapshot?.playerPositions, draftStats.activeSnapshot?.heroRole);
-  const assignmentB = bestPlayerAssignment(draftStats.teams[teamB], heroesB, draftStats.activeSnapshot?.playerHero, draftStats.activeSnapshot?.playerPositions, draftStats.activeSnapshot?.heroRole);
-  add("playerPool", "Игроки на героях", logit(assignmentA.rate) - logit(assignmentB.rate), `назначения ограничены подтверждёнными позициями игроков · история найдена для ${assignmentA.found + assignmentB.found}/${heroesA.length + heroesB.length}`, assignmentA.games + assignmentB.games);
+  const observedA = !liveDraft ? undefined : teamA === liveDraft.radiantTeam ? liveDraft.radiantPlayers : teamA === liveDraft.direTeam ? liveDraft.direPlayers : undefined;
+  const observedB = !liveDraft ? undefined : teamB === liveDraft.direTeam ? liveDraft.direPlayers : teamB === liveDraft.radiantTeam ? liveDraft.radiantPlayers : undefined;
+  const assignmentA = bestPlayerAssignment(draftStats.teams[teamA], heroesA, draftStats.activeSnapshot?.playerHero, draftStats.activeSnapshot?.playerPositions, draftStats.activeSnapshot?.heroRole, observedA);
+  const assignmentB = bestPlayerAssignment(draftStats.teams[teamB], heroesB, draftStats.activeSnapshot?.playerHero, draftStats.activeSnapshot?.playerPositions, draftStats.activeSnapshot?.heroRole, observedB);
+  const assignmentSource = assignmentA.source === "observed" && assignmentB.source === "observed" ? "точные live-привязки OpenDota" : "гипотеза по позициям игроков";
+  add("playerPool", "Игроки на героях", logit(assignmentA.rate) - logit(assignmentB.rate), `${assignmentSource} · история найдена для ${assignmentA.found + assignmentB.found}/${heroesA.length + heroesB.length}`, assignmentA.games + assignmentB.games);
   add("roles", "Герои на позициях", logit(assignmentA.roleRate) - logit(assignmentB.roleRate), "обученная совместимость hero×position; старая эвристика Carry/Support/контроль полностью удалена");
 
   const totalPairSamples = features.reduce((sum, feature) => sum + (feature.sample ?? 0), 0);
@@ -336,6 +363,7 @@ export default function DraftsPage() {
   const [attribute, setAttribute] = useState<(typeof ATTRIBUTES)[number]["id"]>("all");
   const [liveDrafts, setLiveDrafts] = useState<LiveDraftState>({ games: [], fetchedAt: null, error: null });
   const [liveDraftId, setLiveDraftId] = useState<string | null>(null);
+  const [lastSelectedLiveDraft, setLastSelectedLiveDraft] = useState<LiveDraft | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -356,9 +384,11 @@ export default function DraftsPage() {
   }, []);
 
   const selectedLiveDraft = liveDrafts.games.find((game) => game.matchId === liveDraftId) ?? null;
+  const boundLiveDraft = selectedLiveDraft ?? (lastSelectedLiveDraft?.matchId === liveDraftId ? lastSelectedLiveDraft : null);
   const selectedLiveAssessment = selectedLiveDraft ? liveMapAssessment(selectedLiveDraft) : null;
   useEffect(() => {
     if (!selectedLiveDraft) return;
+    setLastSelectedLiveDraft(selectedLiveDraft);
     const slots = (heroes: number[]): Pick[] => [...heroes.slice(0, 5), ...Array(Math.max(0, 5 - heroes.length)).fill(null)];
     setTeamA(selectedLiveDraft.radiantTeam); setTeamB(selectedLiveDraft.direTeam); setRadiant("a");
     setPicksA(slots(selectedLiveDraft.radiantPicks)); setPicksB(slots(selectedLiveDraft.direPicks));
@@ -399,7 +429,7 @@ export default function DraftsPage() {
     const normalizedAttribute = attribute === "universal" ? "all" : attribute;
     return matchesSearch && (attribute === "all" || hero.primaryAttribute === normalizedAttribute);
   }).sort((a, b) => b.proPicks + b.proBans - a.proPicks - a.proBans || a.name.localeCompare(b.name)), [draftStats, search, attribute]);
-  const result = useMemo(() => calculateDraft(draftStats, teamStats, temporalModel, temporalPrediction, teamA, teamB, radiant, picksA, picksB), [draftStats, teamStats, temporalModel, temporalPrediction, teamA, teamB, radiant, picksA, picksB]);
+  const result = useMemo(() => calculateDraft(draftStats, teamStats, temporalModel, temporalPrediction, teamA, teamB, radiant, picksA, picksB, boundLiveDraft), [draftStats, teamStats, temporalModel, temporalPrediction, teamA, teamB, radiant, picksA, picksB, boundLiveDraft]);
 
   const chooseHero = (heroId: number) => {
     if (selectedLiveDraft) return;
@@ -509,8 +539,8 @@ export default function DraftsPage() {
         <div className="draft-arena-table"><div className="draft-arena-head"><span>#</span><span>Модель</span><span>Log loss</span><span>Accuracy</span></div>{temporalModel.arena.leaderboard.slice(0, 6).map((model, index) => <div key={model.name}><span>{String(index + 1).padStart(2, "0")}</span><b>{model.name.replaceAll("_", " ")}</b><strong>{model.logLoss.toFixed(6)}</strong><em>{model.accuracy === undefined ? "—" : `${(model.accuracy * 100).toFixed(1)}%`}</em></div>)}</div>
         <footer><span>Ансамбль <b>{temporalModel.backtest?.aggregate?.model?.logLoss?.toFixed(6) ?? "—"}</b></span><span>Team-only baseline <b>{temporalModel.backtest?.aggregate?.neutral?.logLoss?.toFixed(6) ?? "—"}</b></span><span>Δ log loss <b>{temporalModel.backtest?.aggregate?.logLossDelta?.toFixed(6) ?? "—"}</b></span><span>Выиграно fold <b>{temporalModel.backtest?.aggregate?.foldsWon ?? 0}/{temporalModel.backtest?.eligiblePatches ?? 0}</b></span></footer>
       </article> : null}
-      {result.assignmentA && result.assignmentB ? <div className="draft-evidence-grid">
-        <article className="draft-player-evidence"><header><span>ИГРОК × ГЕРОЙ</span><b>лучшее вероятное распределение</b></header><div className="draft-assignment-columns"><section><h3>{firstTeam.name}</h3>{result.assignmentA.rows.map((row) => <div key={`${row.player}-${row.hero.id}`}><span><img src={row.hero.icon} alt="" /><b>{row.player}</b><i>→</i><strong>{row.hero.name}</strong></span><small>{row.sample ? `${row.sample.games} карт · ${row.sample.winRate.toFixed(1)}% сглаженный кэф` : "нет карт · нейтральный кэф"}</small></div>)}</section><section><h3>{secondTeam.name}</h3>{result.assignmentB.rows.map((row) => <div key={`${row.player}-${row.hero.id}`}><span><img src={row.hero.icon} alt="" /><b>{row.player}</b><i>→</i><strong>{row.hero.name}</strong></span><small>{row.sample ? `${row.sample.games} карт · ${row.sample.winRate.toFixed(1)}% сглаженный кэф` : "нет карт · нейтральный кэф"}</small></div>)}</section></div></article>
+      {result.assignmentA.rows.length && result.assignmentB.rows.length ? <div className="draft-evidence-grid">
+        <article className={`draft-player-evidence draft-player-evidence--${result.assignmentA.source}`}><header><span>ИГРОК × ГЕРОЙ</span><b>{result.assignmentA.source === "observed" && result.assignmentB.source === "observed" ? "точное распределение из live-feed" : "гипотеза модели · не подтверждено"}</b></header><div className="draft-assignment-columns"><section><h3>{firstTeam.name}</h3>{result.assignmentA.rows.map((row) => <div key={`${row.player}-${row.hero.id}`}><span><img src={row.hero.icon} alt="" /><b>{row.player}</b><i>→</i><strong>{row.hero.name}</strong></span><small>{positionLabel(row.position)} · {row.sample ? `${row.sample.games} карт · ${row.sample.winRate.toFixed(1)}% сглаженный кэф` : "нет карт · нейтральный кэф"}</small></div>)}</section><section><h3>{secondTeam.name}</h3>{result.assignmentB.rows.map((row) => <div key={`${row.player}-${row.hero.id}`}><span><img src={row.hero.icon} alt="" /><b>{row.player}</b><i>→</i><strong>{row.hero.name}</strong></span><small>{positionLabel(row.position)} · {row.sample ? `${row.sample.games} карт · ${row.sample.winRate.toFixed(1)}% сглаженный кэф` : "нет карт · нейтральный кэф"}</small></div>)}</section></div>{result.assignmentA.source !== "observed" || result.assignmentB.source !== "observed" ? <footer>Без live account_id модель не знает фактическую рассадку. Этот блок — наиболее совместимая гипотеза по позициям, а не утверждение.</footer> : null}</article>
         <article className="draft-counter-evidence"><header><span>ГЕРОЙ ПРОТИВ ГЕРОЯ</span><b>{result.counterRows.length}/25 матчапов найдено</b></header><div>{[...result.counterRows].sort((left, right) => Math.abs(right.sample.winRate - 50) - Math.abs(left.sample.winRate - 50)).slice(0, 10).map((row) => <div key={`${row.a.id}-${row.b.id}`}><span><img src={row.a.icon} alt="" /><b>{row.a.name}</b><i>vs</i><img src={row.b.icon} alt="" /><strong>{row.b.name}</strong></span><small>{row.sample.winRate.toFixed(1)}% · {row.sample.games} карт</small></div>)}</div></article>
       </div> : null}
     </section>

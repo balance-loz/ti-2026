@@ -22,13 +22,17 @@ export function liveDraftsFromOpenDota(rows, { leagueId = 19719, nowSeconds = Da
     const radiantTeam = teams.get(Number(row.team_id_radiant));
     const direTeam = teams.get(Number(row.team_id_dire));
     if (!radiantTeam || !direTeam || radiantTeam === direTeam) return [];
-    const radiantPicks = (row.players ?? []).filter((player) => Number(player.team) === 0 && Number(player.hero_id) > 0)
-      .sort((a, b) => Number(a.team_slot) - Number(b.team_slot)).map((player) => Number(player.hero_id)).slice(0, 5);
-    const direPicks = (row.players ?? []).filter((player) => Number(player.team) === 1 && Number(player.hero_id) > 0)
-      .sort((a, b) => Number(a.team_slot) - Number(b.team_slot)).map((player) => Number(player.hero_id)).slice(0, 5);
+    const livePlayers = (side) => (row.players ?? []).filter((player) => Number(player.team) === side && Number(player.hero_id) > 0)
+      .sort((a, b) => Number(a.team_slot) - Number(b.team_slot)).slice(0, 5)
+      .map((player) => ({ accountId: Number(player.account_id || 0), heroId: Number(player.hero_id), name: player.name ? String(player.name) : null }));
+    const radiantPlayers = livePlayers(0);
+    const direPlayers = livePlayers(1);
+    const radiantPicks = radiantPlayers.map((player) => player.heroId);
+    const direPicks = direPlayers.map((player) => player.heroId);
     const score = seriesScore(leagueMaps, row.series_id, radiantTeam, direTeam, teams);
     return [{
       matchId: String(row.match_id), seriesId: String(row.series_id || ""), radiantTeam, direTeam, radiantPicks, direPicks,
+      radiantPlayers, direPlayers,
       gameTime: Number(row.game_time || 0), delay: Number(row.delay || 0), radiantScore: Number(row.radiant_score || 0), direScore: Number(row.dire_score || 0),
       radiantLead: finite(row.radiant_lead) ? Number(row.radiant_lead) : null, spectators: finite(row.spectators) ? Number(row.spectators) : null,
       seriesScoreRadiant: score.radiant, seriesScoreDire: score.dire, seriesBestOf: score.bestOf,
