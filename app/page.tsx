@@ -456,6 +456,30 @@ function matchEvaluation(matches: LiveMatch[], probabilityFor: (match: LiveMatch
   return { count: scored.length, correct, brier: scored.length ? brier / scored.length : null, logLoss: scored.length ? logLoss / scored.length : null };
 }
 
+function scenarioMatchesKnownSwissResults(scenario: Scenario, matches: LiveMatch[]) {
+  const records = Object.fromEntries(TEAMS.map((team) => [team.id, { wins: 0, losses: 0 }])) as Record<string, { wins: number; losses: number }>;
+  for (const match of matches.filter((item) => item.stage === "swiss" && item.winner)) {
+    const winner = match.winner;
+    if (!winner || !records[match.team_a] || !records[match.team_b]) continue;
+    const loser = winner === match.team_a ? match.team_b : match.team_a;
+    records[winner].wins += 1;
+    records[loser].losses += 1;
+  }
+  const direct40 = new Set(scenario.direct40);
+  const direct41 = new Set(scenario.direct41);
+  const via = new Set(scenario.via);
+  const qualified = new Set([...direct40, ...direct41, ...via]);
+  for (const team of TEAMS) {
+    const record = records[team.id];
+    if (direct40.has(team.id) && record.losses > 0) return false;
+    if (direct41.has(team.id) && (record.losses > 1 || record.wins > 4)) return false;
+    if (via.has(team.id) && (record.losses > 2 || record.wins > 3)) return false;
+    if (record.wins >= 4 && !direct40.has(team.id) && !direct41.has(team.id)) return false;
+    if (record.losses >= 4 && qualified.has(team.id)) return false;
+  }
+  return true;
+}
+
 function initialGroupSnapshot(snapshots: PredictionSnapshot[]) {
   return snapshots
     .filter((snapshot) => snapshot.forecast_mode === "stats" && snapshot.completed_match_count === 0)
@@ -799,6 +823,8 @@ export default function Home() {
   const scheduledLiveMatches = useMemo(() => liveMatches.filter((match) => !match.winner), [liveMatches]);
   const snapshots = useMemo(() => serverState?.snapshots ?? [], [serverState?.snapshots]);
   const staticGroupSnapshot = useMemo(() => initialGroupSnapshot(snapshots), [snapshots]);
+  const staticGroupProbabilities = useMemo(() => staticGroupSnapshot?.probabilities ?? statisticalAnswers(stats), [staticGroupSnapshot, stats]);
+  const hasStaticGroupProbabilities = Object.keys(staticGroupProbabilities).length > 0;
   const latestOfficialSnapshot = useMemo(() => latestOfficialBaseline(snapshots) as PredictionSnapshot | null, [snapshots]);
   const historySnapshots = useMemo(() => visibleSnapshotHistory(snapshots) as PredictionSnapshot[], [snapshots]);
   const selectedSnapshot = useMemo(() => selectedRunId ? snapshots.find((snapshot) => snapshot.id === selectedRunId) ?? null : null, [selectedRunId, snapshots]);
@@ -824,16 +850,18 @@ export default function Home() {
   const displayedResult = selectedRoot
     ? selectedLatestSnapshotIsCurrent ? selectedLatest!.result : result ?? selectedLatest?.result ?? selectedRoot.result
     : result;
+  const compatibleGroupScenarios = useMemo(() => displayedResult?.scenarios.filter((scenario) => scenarioMatchesKnownSwissResults(scenario, completedLiveMatches)) ?? [], [completedLiveMatches, displayedResult]);
+  const discardedGroupScenarios = (displayedResult?.scenarios.length ?? 0) - compatibleGroupScenarios.length;
   const matchMetrics = useMemo(() => matchEvaluation(completedLiveMatches), [completedLiveMatches]);
-  const staticMatchMetrics = useMemo(() => staticGroupSnapshot ? matchEvaluation(completedLiveMatches, (match) => storedProbability(match.team_a, match.team_b, staticGroupSnapshot.probabilities)) : null, [completedLiveMatches, staticGroupSnapshot]);
+  const staticMatchMetrics = useMemo(() => hasStaticGroupProbabilities ? matchEvaluation(completedLiveMatches, (match) => storedProbability(match.team_a, match.team_b, staticGroupProbabilities)) : null, [completedLiveMatches, hasStaticGroupProbabilities, staticGroupProbabilities]);
   const stageMetrics = useMemo(() => (["swiss", "playin", "playoff"] as const).map((stage) => {
     const matches = completedLiveMatches.filter((match) => match.stage === stage);
     return {
       stage,
-      static: staticGroupSnapshot ? matchEvaluation(matches, (match) => storedProbability(match.team_a, match.team_b, staticGroupSnapshot.probabilities)) : null,
+      static: hasStaticGroupProbabilities ? matchEvaluation(matches, (match) => storedProbability(match.team_a, match.team_b, staticGroupProbabilities)) : null,
       adaptive: matchEvaluation(matches),
     };
-  }), [completedLiveMatches, staticGroupSnapshot]);
+  }), [completedLiveMatches, hasStaticGroupProbabilities, staticGroupProbabilities]);
   const decisionAudit = useMemo(() => {
     const rows = completedLiveMatches.filter((match) => Number.isFinite(match.predicted_probability)).map((match) => {
       const decision = predictionDecision(stats?.pairwise[pairKey(match.team_a, match.team_b)], match.predicted_probability ?? 50, { temperature: decisionPolicy.probabilityTemperature, minMarginPp: decisionPolicy.selectivePrediction.minMarginPp });
@@ -1242,7 +1270,7 @@ export default function Home() {
           <div><p className="eyebrow">ЖИВОЙ ПРОГНОЗ TI 2026</p><h2>Каждый матч — отдельная проверка</h2></div>
           <div className="live-score"><b>{staticMatchMetrics?.count ? `${staticMatchMetrics.correct}/${staticMatchMetrics.count}` : "—"}</b><span>STATIC · исходная группа</span><b>{matchMetrics.count ? `${matchMetrics.correct}/${matchMetrics.count}` : "—"}</b><span>ADAPTIVE · перед матчем</span><b>{matchMetrics.brier === null ? "—" : matchMetrics.brier.toFixed(3)}</b><span>ADAPTIVE Brier</span></div>
         </div>
-        <p className="muted">STATIC всегда использует один снимок до первого результата групповой стадии. ADAPTIVE использует только вероятность, сохранённую перед конкретным матчем после уже известных результатов. Эти оценки не смешиваются: у адаптивного варианта больше информации.</p>
+        <p className="muted">STATIC всегда использует один снимок до первого результата групповой стадии{!staticGroupSnapshot && stats ? ` — сейчас это замороженная модель от ${new Date(stats.generatedAt).toLocaleDateString("ru-RU")}, потому что серверный снимок 0/0 не сохранился` : ""}. ADAPTIVE использует только вероятность, сохранённую перед конкретным матчем после уже известных результатов. Эти оценки не смешиваются: у адаптивного варианта больше информации.</p>
         {serverState?.liveSync && <p className="live-sync-status">
           <b>OpenDota · результаты · лига {serverState.liveSync.leagueId}</b>
           <b>Cybersport.ru · официальные пары</b>
@@ -1289,16 +1317,16 @@ export default function Home() {
             <small className="branch-method">{analysis.iterations?.toLocaleString("ru-RU")} прогонов на ветку · одинаковый seed · никаких изменений рейтинга или обучения</small>
           </>}</article>;
         })}</div>}
-        {completedLiveMatches.length > 0 && <div className="live-results">{completedLiveMatches.map((match) => {
+        {completedLiveMatches.length > 0 && <details className="live-results-disclosure"><summary><span>СЫГРАННЫЕ МАТЧИ · STATIC / ADAPTIVE</span><b>{completedLiveMatches.length} серий</b><small>Развернуть подробную оценку каждого прогноза</small></summary><div className="live-results">{completedLiveMatches.map((match) => {
           const adaptiveScore = scoreMatch(match, match.predicted_probability);
-          const staticProbability = staticGroupSnapshot ? storedProbability(match.team_a, match.team_b, staticGroupSnapshot.probabilities) : null;
+          const staticProbability = hasStaticGroupProbabilities ? storedProbability(match.team_a, match.team_b, staticGroupProbabilities) : null;
           const staticScore = scoreMatch(match, staticProbability);
           const pA = adaptiveScore?.probabilityA ?? 50;
           const decision = predictionDecision(stats?.pairwise[pairKey(match.team_a, match.team_b)], pA, { temperature: decisionPolicy.probabilityTemperature, minMarginPp: decisionPolicy.selectivePrediction.minMarginPp });
           const explanation = predictionExplanation(match.team_a, match.team_b, answers, stats, forecastMode, opinionWeight, completedLiveMatches.filter((item) => item.id < match.id));
           const variant = (label: "STATIC" | "ADAPTIVE", score: MatchScore | null) => <div className={`prediction-variant prediction-variant--${label.toLowerCase()}`}><b>{label}</b>{score ? <><span>{getTeam(score.predicted).short} {(score.predicted === match.team_a ? score.probabilityA : 100 - score.probabilityA).toFixed(1)}%</span><i className={score.correct ? "is-correct" : "is-wrong"}>{score.correct ? "ВЕРНО" : "ОШИБКА"}</i><small>Brier {score.brier.toFixed(3)} · log loss {score.logLoss.toFixed(3)}</small></> : <><span>нет данных</span><i className="is-unscored">НЕ ОЦЕНЁН</i><small>честной предматчевой вероятности нет</small></>}</div>;
           return <article key={match.id} className="live-result-card"><div className="live-result-card__head"><span>{match.stage === "swiss" ? "SW" : match.stage === "playin" ? "PI" : "PO"} R{match.round}</span><strong><TeamMark team={getTeam(match.team_a)} small />{getTeam(match.team_a).name} — {getTeam(match.team_b).name}<TeamMark team={getTeam(match.team_b)} small /></strong><b>{match.score_a ?? "?"}–{match.score_b ?? "?"} · {getTeam(match.winner!).name}</b></div><div className="prediction-variants">{variant("STATIC", staticScore)}{variant("ADAPTIVE", adaptiveScore)}</div>{adaptiveScore && <div className={`match-decision match-decision--${decision.status}`}><b>{decision.label}</b><span>ADAPTIVE · уверенность {decision.confidence.score}/100 · интервал {decision.interval.low.toFixed(0)}–{decision.interval.high.toFixed(0)}%</span></div>}<details><summary>{adaptiveScore ? `Почему ADAPTIVE дал ${getTeam(match.team_a).name} ${pA.toFixed(1)}%` : "До начала матча адаптивная вероятность не была сохранена"}</summary>{adaptiveScore && <div>{explanation.items.map((item) => <span key={item.label}><b>{item.label}</b><em>{item.value >= 0 ? "+" : ""}{item.value.toFixed(1)} п.п.</em><small>{item.text}</small></span>)}</div>}</details></article>;
-        })}</div>}
+        })}</div></details>}
         <div className="prediction-history">
           <div className="prediction-history__head"><div><p className="eyebrow">ИСТОРИЯ МОДЕЛИ</p><h3>Что модель думала до результатов</h3></div><span>{historySnapshots.length} сохранённых прогнозов</span></div>
           {selectedRoot && selectedLatest ? <div className="selected-run-banner"><div><b>ПРОГНОЗ #{selectedRoot.id} · {selectedRoot.forecast_mode === "mixed" ? `${selectedRoot.opinion_weight}% личного мнения` : selectedRoot.forecast_mode === "stats" ? "официальная статистическая база" : "личный сценарий"}</b><span>Исходные вероятности от {new Date(selectedRoot.created_at).toLocaleString("ru-RU")} не переписываются. {selectedLatestSnapshotIsCurrent ? `Сценарии пересчитаны с фиксацией ${selectedLatest.completed_match_count} завершённых серий.` : `Появились новые данные — сценарии обновляются с фиксацией ${completedLiveMatches.length} завершённых серий.`} STATIC оценивает оригинал, ADAPTIVE — его последовательные ревизии.</span></div><button type="button" onClick={() => selectSnapshot(null)}>Вернуться к Official baseline</button></div> : <div className="official-baseline-banner"><b>OFFICIAL BASELINE</b><span>{activeBaselineSnapshot ? latestOfficialSnapshotIsCurrent ? `Загружен актуальный снимок от ${new Date(activeBaselineSnapshot.created_at).toLocaleString("ru-RU")} · повторный прогон не нужен` : `Появились новые пары или результаты · сценарии пересчитываются с фиксацией ${completedLiveMatches.length} завершённых серий` : "Ожидаем первый сохранённый серверный снимок"}</span></div>}
@@ -1457,7 +1485,7 @@ export default function Home() {
             </button>
             {simulationStatus.kind !== "idle" && <p className={`simulation-status simulation-status--${simulationStatus.kind}`} role={simulationStatus.kind === "error" ? "alert" : "status"}>{simulationStatus.message}</p>}
             <small>{adaptiveRun ? "AUTO: от 250 000 до 1 000 000; остановка после двух стабильных проверок с изменением ≤0,10 п.п." : `Фиксированный бюджет: ${iterationCount.toLocaleString("ru-RU")} полных турниров.`} Расчёт идёт в фоновом потоке и не должен блокировать интерфейс.</small>
-            {result && <small className="stats-meta">Итоговых восьмёрок Swiss: {result.uniqueSwissOutcomes?.toLocaleString("ru-RU") ?? "—"}; вариантов подиума: {result.uniquePlayoffPodiums?.toLocaleString("ru-RU") ?? "—"}; полных итогов «восьмёрка + подиум»: {result.uniqueFinalOutcomes?.toLocaleString("ru-RU") ?? "—"}. Детальных путей всего турнира: {(result.uniqueTournamentPaths ?? result.uniqueBrackets).toLocaleString("ru-RU")} из {(result.pathSampleIterations ?? result.iterations).toLocaleString("ru-RU")} проверенных для уникальности ({(100 - (result.tournamentDuplicateRate ?? result.duplicateRate)).toFixed(3)}%). Это разные метрики: один итог может быть достигнут множеством разных жеребьёвок и результатов по раундам.</small>}
+            {displayedResult && <small className="stats-meta">Итоговых восьмёрок Swiss: {displayedResult.uniqueSwissOutcomes?.toLocaleString("ru-RU") ?? "—"}; вариантов подиума: {displayedResult.uniquePlayoffPodiums?.toLocaleString("ru-RU") ?? "—"}; полных итогов «восьмёрка + подиум»: {displayedResult.uniqueFinalOutcomes?.toLocaleString("ru-RU") ?? "—"}. Детальных путей всего турнира: {(displayedResult.uniqueTournamentPaths ?? displayedResult.uniqueBrackets).toLocaleString("ru-RU")} из {(displayedResult.pathSampleIterations ?? displayedResult.iterations).toLocaleString("ru-RU")} проверенных для уникальности ({(100 - (displayedResult.tournamentDuplicateRate ?? displayedResult.duplicateRate)).toFixed(3)}%). Это разные метрики: один итог может быть достигнут множеством разных жеребьёвок и результатов по раундам.</small>}
             {stats && <small className="stats-meta">{stats.totals.uniqueAcceptedGames} карт · одна контрольная карта на турнир · половина веса за {stats.methodology.recencyHalfLifeDays} дней</small>}
           </aside>
         </div>
@@ -1467,7 +1495,7 @@ export default function Home() {
         <div className="section-heading section-heading--light">
           <span className="step-number">02</span>
           <div><p>РЕЗУЛЬТАТ СИМУЛЯЦИИ</p><h2>Куда попадёт команда</h2></div>
-          <span className="section-note">{result ? <>{result.iterations.toLocaleString("ru-RU")} независимых полных турниров · {(result.uniqueTournamentPaths ?? result.uniqueBrackets).toLocaleString("ru-RU")} уникальных путей в выборке<br />{result.convergence?.adaptive ? (result.convergence.converged ? `сошлось: Δ ≤ ${result.convergence.tolerancePp.toFixed(2)} п.п.` : `достигнут лимит; последнее Δ ${result.convergence.maxDeltaPp?.toFixed(2) ?? "—"} п.п.`) : "фиксированный бюджет"} · погрешность до ±{(result.convergence?.maxSamplingMarginPp ?? samplingMargin(result.iterations)).toFixed(2)} п.п.</> : "Готовим первый прогноз…"}</span>
+          <span className="section-note">{displayedResult ? <>{displayedResult.iterations.toLocaleString("ru-RU")} независимых полных турниров · {(displayedResult.uniqueTournamentPaths ?? displayedResult.uniqueBrackets).toLocaleString("ru-RU")} уникальных путей в выборке<br />{displayedResult.convergence?.adaptive ? (displayedResult.convergence.converged ? `сошлось: Δ ≤ ${displayedResult.convergence.tolerancePp.toFixed(2)} п.п.` : `достигнут лимит; последнее Δ ${displayedResult.convergence.maxDeltaPp?.toFixed(2) ?? "—"} п.п.`) : "фиксированный бюджет"} · погрешность до ±{(displayedResult.convergence?.maxSamplingMarginPp ?? samplingMargin(displayedResult.iterations)).toFixed(2)} п.п.</> : "Готовим первый прогноз…"}</span>
         </div>
 
         <div className="swiss-groups" aria-label="Скрытые группы первых трёх раундов">
@@ -1541,12 +1569,12 @@ export default function Home() {
                   <td><div className="probability probability--red"><span>{team.swissOut.toFixed(1)}%</span><i><b style={{ width: `${team.swissOut}%` }} /></i></div></td>
                 </tr>
               ))}
-              {!result && <tr><td colSpan={8} className="loading-row">Собираем вероятностную таблицу…</td></tr>}
+              {!displayedResult && <tr><td colSpan={8} className="loading-row">Собираем вероятностную таблицу…</td></tr>}
             </tbody>
           </table>
         </div>
 
-        {result && (
+        {displayedResult && (
           <div className="playin-panel">
             <div className="playin-heading">
               <div>
@@ -1556,7 +1584,7 @@ export default function Home() {
               <p>Пять команд со счётом 3–2 получают соперников 2–3. В каждой карточке — шанс появления пары и вероятность победы.</p>
             </div>
             <div className="playin-grid">
-              {result.playinMatchups.map((matchup, index) => {
+              {displayedResult.playinMatchups.map((matchup, index) => {
                 const first = getTeam(matchup.a);
                 const second = getTeam(matchup.b);
                 return (
@@ -1577,17 +1605,17 @@ export default function Home() {
           </div>
         )}
 
-        {result && (
+        {displayedResult && (
           <div className="scenario-grid">
             <div className="scenario-intro">
               <p className="eyebrow">ТОП-3 ГРУППОВОГО ЭТАПА</p>
               <h3>Самые вероятные<br />итоги группы и стыков</h3>
-              <p>Сначала все симуляции объединяются по одинаковой итоговой восьмёрке без учёта дальнейшего плей‑офф. Три варианта выбираются по точному числу попаданий; процент округляется только после ранжирования.</p>
+              <p>Сначала все симуляции объединяются по одинаковой итоговой восьмёрке без учёта дальнейшего плей‑офф. Уже невозможные после фактических результатов пути отбрасываются; карточки обновляются новым условным прогоном.</p>
             </div>
-            {result.scenarios.map((scenario, index) => (
+            {compatibleGroupScenarios.map((scenario, index) => (
               <article className="scenario-card" key={`${scenario.direct40.join("-")}-${scenario.direct41.join("-")}-${scenario.via.join("-")}`}>
-                <header><span>0{index + 1}</span><b title={`${scenario.occurrences ?? 0} попаданий из ${result.iterations.toLocaleString("ru-RU")} симуляций`}>{formatRareScenarioProbability(scenario.probability)}</b></header>
-                <small className="scenario-rarity">{(scenario.occurrences ?? 0).toLocaleString("ru-RU")} ИЗ {result.iterations.toLocaleString("ru-RU")} ПРОГОНОВ{(scenario.occurrences ?? 0) <= 1 ? " · НЕУСТОЙЧИВО" : ""}</small>
+                <header><span>0{index + 1}</span><b title={`${scenario.occurrences ?? 0} попаданий из ${displayedResult.iterations.toLocaleString("ru-RU")} симуляций`}>{formatRareScenarioProbability(scenario.probability)}</b></header>
+                <small className="scenario-rarity">{(scenario.occurrences ?? 0).toLocaleString("ru-RU")} ИЗ {displayedResult.iterations.toLocaleString("ru-RU")} ПРОГОНОВ{(scenario.occurrences ?? 0) <= 1 ? " · НЕУСТОЙЧИВО" : ""}</small>
                 <p>4–0 · БЕЗ ПОРАЖЕНИЙ</p>
                 <div>{scenario.direct40.map((id) => <span className="team-chip team-chip--lime" key={id}><TeamMark team={getTeam(id)} small />{getTeam(id).name}</span>)}</div>
                 <p>4–1 · НАПРЯМУЮ</p>
@@ -1596,19 +1624,20 @@ export default function Home() {
                 <div>{scenario.via.map((id) => <span className="team-chip team-chip--amber" key={id}><TeamMark team={getTeam(id)} small />{getTeam(id).name}</span>)}</div>
               </article>
             ))}
+            {discardedGroupScenarios > 0 && compatibleGroupScenarios.length < 3 ? <article className="scenario-card scenario-card--refreshing"><b>ОБНОВЛЯЕМ СЦЕНАРИИ</b><p>{discardedGroupScenarios} старых вариантов отброшено как невозможные после известных результатов.</p><small>Показываем только совместимые пути; новый условный прогон заполнит топ‑3.</small></article> : null}
           </div>
         )}
 
-        {result?.playoffScenarios?.length > 0 && (
+        {displayedResult?.playoffScenarios?.length > 0 && (
           <div className="scenario-grid scenario-grid--playoff">
             <div className="scenario-intro">
               <p className="eyebrow">3 НАБЛЮДАЕМЫХ ПЛЕЙ-ОФФ</p>
               <h3>Репрезентативные<br />подиумы турнира</h3>
               <p>Точные совместные исходы из выборки. Они заметно менее устойчивы, чем отдельные вероятности чемпионства, финала и топ‑3.</p>
             </div>
-            {result.playoffScenarios.map((scenario, index) => (
+            {displayedResult.playoffScenarios.map((scenario, index) => (
               <article className="scenario-card playoff-scenario-card" key={`${scenario.champion}-${scenario.runnerUp}-${scenario.third}`}>
-                <header><span>0{index + 1}</span><b title={`${scenario.occurrences ?? 0} попаданий из ${result.iterations.toLocaleString("ru-RU")} симуляций`}>{formatRareScenarioProbability(scenario.probability)}</b></header>
+                <header><span>0{index + 1}</span><b title={`${scenario.occurrences ?? 0} попаданий из ${displayedResult.iterations.toLocaleString("ru-RU")} симуляций`}>{formatRareScenarioProbability(scenario.probability)}</b></header>
                 {(scenario.occurrences ?? 0) <= 1 ? <small className="scenario-rarity">ЕДИНИЧНОЕ ПОПАДАНИЕ · НЕУСТОЙЧИВО</small> : null}
                 <p>ЧЕМПИОН</p><div><span className="team-chip team-chip--lime"><TeamMark team={getTeam(scenario.champion)} small />{getTeam(scenario.champion).name}</span></div>
                 <p>ФИНАЛИСТ</p><div><span className="team-chip team-chip--green"><TeamMark team={getTeam(scenario.runnerUp)} small />{getTeam(scenario.runnerUp).name}</span></div>

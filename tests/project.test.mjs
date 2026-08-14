@@ -420,6 +420,15 @@ test("completed Swiss results make impossible perfect records disappear from sce
   assert.ok(result.scenarios.every((scenario) => !scenario.direct40.includes("yandex")));
 });
 
+test("scenario UI never renders outcomes contradicted by known Swiss records", async () => {
+  const page = await readFile("app/page.tsx", "utf8");
+  assert.match(page, /function scenarioMatchesKnownSwissResults/);
+  assert.match(page, /direct40\.has\(team\.id\) && record\.losses > 0/);
+  assert.match(page, /compatibleGroupScenarios\.map/);
+  assert.doesNotMatch(page, /result\.scenarios\.map/);
+  assert.match(page, /старых вариантов отброшено как невозможные/);
+});
+
 test("official pairing changes are part of automatic snapshot deduplication", async () => {
   const api = await readFile("server/api.mjs", "utf8");
   assert.match(api, /snapshot_kind=\? AND trigger=\?/);
@@ -525,6 +534,10 @@ test("prediction audit keeps frozen and adaptive evaluations separate", async ()
   assert.match(page, /variant\("ADAPTIVE", adaptiveScore\)/);
   assert.match(page, /static: matchEvaluation/);
   assert.match(page, /adaptive: matchEvaluation/);
+  assert.match(page, /staticGroupSnapshot\?\.probabilities \?\? statisticalAnswers\(stats\)/);
+  assert.match(page, /live-results-disclosure/);
+  assert.match(page, /СЫГРАННЫЕ МАТЧИ · STATIC \/ ADAPTIVE/);
+  assert.match(styles, /\.live-results-disclosure > summary/);
   assert.match(styles, /prediction-variant--static/);
   assert.match(styles, /history-chart__adaptive/);
 });

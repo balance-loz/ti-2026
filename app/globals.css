@@ -349,6 +349,10 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border: 5px s
 .scenario-intro .eyebrow { color: #6d7551; }
 .scenario-intro p:last-child { color: #777a72; font-size: 11px; line-height: 1.55; }
 .scenario-card { min-height: 290px; padding: 18px; border: 1px solid #d3d0c8; background: #eae7df; }
+.scenario-card--refreshing { display: flex; flex-direction: column; justify-content: center; border-style: dashed; color: #6f4b3f; }
+.scenario-card--refreshing > b { font: 800 12px var(--font-geist-mono); }
+.scenario-card--refreshing > p { margin: 14px 0 8px; line-height: 1.55; }
+.scenario-card--refreshing > small { color: #82796f; line-height: 1.5; }
 .scenario-card header { display: flex; justify-content: space-between; padding-bottom: 15px; border-bottom: 1px solid #d3d0c8; font: 700 10px var(--font-geist-mono); }
 .scenario-card header span { color: #8c8e88; }
 .scenario-card header b { color: #4b5441; }
@@ -468,7 +472,12 @@ footer a { color: #aab1bc; }
 .branch-impact > span:not(.branch-no-effect) { display: grid; grid-template-columns: 1fr auto 72px; gap: 8px; color: #adb6c1; font: 600 8px/1.4 var(--font-geist-mono); }
 .branch-impact em,.branch-impact i { font-style: normal; }.branch-impact i { text-align: right; }.branch-impact .is-positive { color: #8ed66f; }.branch-impact .is-negative { color: #ff7a86; }
 .branch-no-effect { color: #a8b19e; font: 600 8px/1.5 var(--font-geist-mono); }.branch-method { color: #727d8a; font: 600 8px/1.4 var(--font-geist-mono); }
-.live-results { margin-top: 20px; border-top: 1px solid var(--line); }
+.live-results-disclosure { margin-top: 20px; border: 1px solid var(--line); background: rgba(10,15,21,.34); }
+.live-results-disclosure > summary { display: grid; grid-template-columns: 1fr auto; gap: 4px 18px; align-items: center; padding: 13px 16px; color: #d5dce5; cursor: pointer; list-style-position: inside; font: 800 10px var(--font-geist-mono); }
+.live-results-disclosure > summary::marker { color: var(--lime); }
+.live-results-disclosure > summary b { color: var(--lime); }
+.live-results-disclosure > summary small { grid-column: 1 / -1; padding-left: 16px; color: #7f8a98; font: 600 9px var(--font-geist-mono); }
+.live-results { padding: 0 16px 4px; border-top: 1px solid var(--line); }
 .live-results > div { display: grid; grid-template-columns: 35px 1fr 130px 110px; gap: 12px; align-items: center; padding: 11px 0; border-bottom: 1px solid var(--line); font-size: 10px; }
 .live-results span { color: #76808d; font-family: var(--font-geist-mono); }
 .live-results i { font: 800 10px var(--font-geist-mono); font-style: normal; text-align: right; }
