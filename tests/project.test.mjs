@@ -18,6 +18,7 @@ import { buildSnapshotCalculationTrace } from "../server/forecast-diagnostics.mj
 import { assessLiveMap, estimateLiveMap } from "../server/live-map-prediction.mjs";
 import { combinedSeriesForecast, exactSeriesScores, orientedProbability } from "../server/combined-forecast.mjs";
 import { predictionTimeliness, projectPlayoffBracket } from "../server/projected-bracket.mjs";
+import { selectProductionVariant } from "../server/model-gate.mjs";
 
 test("combined series forecast exposes exact map scores without leaking live state into future maps", () => {
   const even = exactSeriesScores({ bestOf: 3, baseMapProbabilityA: .5 });
@@ -52,9 +53,17 @@ test("projected playoff bracket propagates actual winners and keeps frozen predi
   assert.ok(bracket.nodes.some((node) => node.column > 1 && [node.a, node.b].includes("h")));
 });
 
+test("production gate keeps adaptive forecasts in shadow when proper scores get worse", () => {
+  const staticScore = { count: 24, correct: 18, brier: 0.21748, logLoss: 0.62717 };
+  const worseAdaptive = { count: 24, correct: 18, brier: 0.24349, logLoss: 0.68657 };
+  const betterAdaptive = { count: 24, correct: 19, brier: 0.201, logLoss: 0.59 };
+  assert.deepEqual(selectProductionVariant(staticScore, worseAdaptive), { selected: "static", reason: "adaptive_failed_production_gate" });
+  assert.deepEqual(selectProductionVariant(staticScore, betterAdaptive), { selected: "adaptive", reason: "adaptive_improves_accuracy_and_proper_scores" });
+});
+
 test("combined page and API persist map truth and explain the no-double-count policy", async () => {
-  const [api, page, checkpoint] = await Promise.all([
-    readFile("server/api.mjs", "utf8"), readFile("app/combined/page.tsx", "utf8"), readFile("scripts/checkpoint-production.mjs", "utf8"),
+  const [api, page, checkpoint, modelGate] = await Promise.all([
+    readFile("server/api.mjs", "utf8"), readFile("app/combined/page.tsx", "utf8"), readFile("scripts/checkpoint-production.mjs", "utf8"), readFile("server/model-gate.mjs", "utf8"),
   ]);
   assert.match(api, /CREATE TABLE IF NOT EXISTS tournament_maps/);
   assert.match(api, /CREATE TABLE IF NOT EXISTS bet_locks/);
@@ -70,9 +79,15 @@ test("combined page and API persist map truth and explain the no-double-count po
   assert.match(page, /MAIN \/ СТАВКА/);
   assert.match(page, /buildMatchStandings/);
   assert.match(page, /function seriesPresentation/);
-  assert.match(page, /const source = betLock \? "bet" : hasHistorical \? "historical" : "latest"/);
-  assert.match(page, /row\.decision\.probabilityA/);
-  assert.match(page, /ИСТОРИЧЕСКИЙ PRE-MATCH/);
+  assert.match(page, /const source = betLock \? "bet" : hasHistorical \? "historical" : "main"/);
+  assert.match(page, /row\.decision\.historicalProbabilityA/);
+  assert.match(page, /ИСТОРИЧЕСКИЙ SNAPSHOT/);
+  assert.match(page, /snapshotId/);
+  assert.match(api, /baselineProbabilities/);
+  assert.match(api, /url\.searchParams\.get\("run"\)/);
+  assert.match(api, /snapshotDecisionEvaluation/);
+  assert.match(modelGate, /adaptive_failed_production_gate/);
+  assert.match(page, /MAIN = \{comparison\.selected\.toUpperCase\(\)\}/);
   assert.match(page, /const teamProbability = standing\.teamId === row\.match\.team_a/);
   assert.match(page, /expandedMatches/);
   assert.match(page, /fusion-round-match/);

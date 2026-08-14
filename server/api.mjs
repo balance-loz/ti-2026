@@ -14,6 +14,7 @@ import { buildSnapshotCalculationTrace, probabilityFor as diagnosticProbabilityF
 import { combinedSeriesForecast, orientedProbability } from "./combined-forecast.mjs";
 import { estimateLiveMap } from "./live-map-prediction.mjs";
 import { mostLikelyExactScore, predictionTimeliness, projectPlayoffBracket } from "./projected-bracket.mjs";
+import { selectProductionVariant } from "./model-gate.mjs";
 
 const PORT = Number(process.env.API_PORT || 3001);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "data");
@@ -414,6 +415,32 @@ function aggregateDiagnosticScores(records, variant) {
     correct: scores.filter((score) => score.correct).length,
     brier: scores.length ? scores.reduce((sum, score) => sum + score.brier, 0) / scores.length : null,
     logLoss: scores.length ? scores.reduce((sum, score) => sum + score.logLoss, 0) / scores.length : null,
+  };
+}
+
+function snapshotDecisionEvaluation(requestedId) {
+  const requested = parsedSnapshotRow(db.prepare("SELECT * FROM prediction_snapshots WHERE id=?").get(requestedId));
+  if (!requested) return null;
+  const rootId = Number(requested.root_snapshot_id ?? requested.id);
+  const rows = db.prepare("SELECT * FROM prediction_snapshots WHERE root_snapshot_id=? OR id=? ORDER BY created_at,id").all(rootId, rootId).map(parsedSnapshotRow);
+  const root = rows.find((row) => Number(row.id) === rootId) ?? requested;
+  const matches = db.prepare("SELECT * FROM matches WHERE winner IS NOT NULL ORDER BY round,id").all()
+    .filter((match) => Date.parse(match.updated_at || match.created_at) > Date.parse(root.created_at));
+  const evaluated = matches.map((match) => {
+    const cutoff = Date.parse(match.scheduled_at || match.created_at);
+    const adaptiveSnapshot = rows.filter((snapshot) => Date.parse(snapshot.created_at) <= cutoff).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id)[0] ?? null;
+    const staticProbability = diagnosticProbabilityFor(match.team_a, match.team_b, root.probabilities);
+    const adaptiveProbability = root.forecast_mode === "stats" && match.predicted_probability !== null && Number.isFinite(Number(match.predicted_probability))
+      ? Number(match.predicted_probability)
+      : adaptiveSnapshot ? diagnosticProbabilityFor(match.team_a, match.team_b, adaptiveSnapshot.probabilities) : null;
+    return { static: scoreDiagnosticMatch(match, staticProbability), adaptive: scoreDiagnosticMatch(match, adaptiveProbability) };
+  });
+  const staticScore = aggregateDiagnosticScores(evaluated, "static");
+  const adaptiveScore = aggregateDiagnosticScores(evaluated, "adaptive");
+  const gate = selectProductionVariant(staticScore, adaptiveScore);
+  return {
+    rootId, static: staticScore, adaptive: adaptiveScore,
+    ...gate,
   };
 }
 
@@ -820,23 +847,41 @@ async function refreshLiveDrafts({ force = false } = {}) {
   return liveDraftPromise;
 }
 
-function latestMainSnapshot(opinionWeight) {
+function latestMainSnapshot(opinionWeight, requestedSnapshotId = null) {
   const weight = Math.round(Math.min(100, Math.max(0, Number(opinionWeight) || 0)));
   const mode = weight > 0 ? "mixed" : "stats";
-  const row = db.prepare(`SELECT id,trigger,forecast_mode,opinion_weight,completed_match_count,probabilities_json,result_json,created_at
+  const fields = "id,trigger,forecast_mode,opinion_weight,completed_match_count,probabilities_json,result_json,snapshot_kind,root_snapshot_id,created_at";
+  const requested = Number.isInteger(Number(requestedSnapshotId)) && Number(requestedSnapshotId) > 0
+    ? db.prepare(`SELECT ${fields} FROM prediction_snapshots WHERE id=?`).get(Number(requestedSnapshotId))
+    : null;
+  const profileLatest = db.prepare(`SELECT ${fields}
     FROM prediction_snapshots WHERE forecast_mode=? AND opinion_weight=?
     ORDER BY completed_match_count DESC,id DESC LIMIT 1`).get(mode, weight)
-    ?? (weight > 0 ? db.prepare(`SELECT id,trigger,forecast_mode,opinion_weight,completed_match_count,probabilities_json,result_json,created_at
+    ?? (weight > 0 ? db.prepare(`SELECT ${fields}
       FROM prediction_snapshots WHERE forecast_mode='stats' ORDER BY completed_match_count DESC,id DESC LIMIT 1`).get() : null);
-  if (!row) return null;
-  return { id: row.id, trigger: row.trigger, mode: row.forecast_mode, opinionWeight: row.opinion_weight, completedMatchCount: row.completed_match_count, createdAt: row.created_at, probabilities: JSON.parse(row.probabilities_json), result: JSON.parse(row.result_json) };
+  const selected = requested ?? profileLatest;
+  if (!selected) return null;
+  const rootId = Number(selected.root_snapshot_id ?? selected.id);
+  const root = db.prepare(`SELECT ${fields} FROM prediction_snapshots WHERE id=?`).get(rootId) ?? selected;
+  const latest = requested
+    ? db.prepare(`SELECT ${fields} FROM prediction_snapshots WHERE root_snapshot_id=? OR id=? ORDER BY completed_match_count DESC,id DESC LIMIT 1`).get(rootId, rootId) ?? selected
+    : profileLatest ?? selected;
+  return {
+    id: latest.id, trigger: latest.trigger, mode: root.forecast_mode, opinionWeight: root.opinion_weight,
+    completedMatchCount: latest.completed_match_count, createdAt: latest.created_at,
+    probabilities: JSON.parse(latest.probabilities_json), result: JSON.parse(latest.result_json),
+    baselineId: root.id, baselineCreatedAt: root.created_at, baselineMode: root.forecast_mode,
+    baselineProbabilities: JSON.parse(root.probabilities_json), requested: Boolean(requested),
+  };
 }
 
-async function combinedForecastState(opinionWeight = 10) {
+async function combinedForecastState(opinionWeight = 10, requestedSnapshotId = null) {
   const weight = Math.round(Math.min(100, Math.max(0, Number(opinionWeight) || 0)));
   const mode = weight > 0 ? "mixed" : "stats";
   const { matches, probabilities } = currentForecast({ ...OFFICIAL_FORECAST_CONFIG, forecastMode: mode, opinionWeight: weight });
-  const mainSnapshot = latestMainSnapshot(weight);
+  const mainSnapshot = latestMainSnapshot(weight, requestedSnapshotId);
+  const modelComparison = mainSnapshot ? snapshotDecisionEvaluation(mainSnapshot.baselineId) : null;
+  const productionProbabilities = modelComparison?.selected === "static" ? mainSnapshot?.baselineProbabilities ?? probabilities : mainSnapshot?.probabilities ?? probabilities;
   const live = await refreshLiveDrafts();
   const maps = parsedTournamentMaps();
   const series = matches.map((match) => {
@@ -847,6 +892,10 @@ async function combinedForecastState(opinionWeight = 10) {
     const storedProbability = match.predicted_probability !== null && match.predicted_probability !== undefined && Number.isFinite(Number(match.predicted_probability)) ? Number(match.predicted_probability) / 100 : null;
     const latestSeriesProbabilityA = probabilityFromBlend ?? storedProbability ?? 0.5;
     const lockedSeriesProbabilityA = storedProbability;
+    const snapshotBaselineProbabilityA = mainSnapshot?.baselineMode === "stats" ? null : orientedProbability(match.team_a, match.team_b, mainSnapshot?.baselineProbabilities ?? {});
+    const historicalProbabilityA = snapshotBaselineProbabilityA ?? lockedSeriesProbabilityA;
+    const historicalForecast = historicalProbabilityA === null ? null : combinedSeriesForecast({ teamA: match.team_a, teamB: match.team_b, seriesProbabilityA: historicalProbabilityA, bestOf: 3 });
+    const historicalExact = historicalForecast ? mostLikelyExactScore(historicalForecast.exactScores) : null;
     const lockTimeliness = lockedSeriesProbabilityA === null ? null : predictionTimeliness(match.created_at, match.scheduled_at, DECISION_MIN_LEAD_MINUTES);
     const draftProbabilityRadiant = game?.draftPrediction?.probabilityRadiant ?? null;
     let liveEstimate = null; let currentMapProbabilityA = null;
@@ -858,6 +907,8 @@ async function combinedForecastState(opinionWeight = 10) {
     const winsA = game ? (game.radiantTeam === match.team_a ? game.seriesScoreRadiant : game.seriesScoreDire) : 0;
     const winsB = game ? (game.radiantTeam === match.team_b ? game.seriesScoreRadiant : game.seriesScoreDire) : 0;
     const bestOf = game?.seriesBestOf ?? (match.stage === "playoff" && Number(match.round) >= 99 ? 5 : 3);
+    const productionProbabilityA = modelComparison?.selected === "static" && snapshotBaselineProbabilityA !== null ? snapshotBaselineProbabilityA : latestSeriesProbabilityA;
+    const productionForecast = combinedSeriesForecast({ teamA: match.team_a, teamB: match.team_b, seriesProbabilityA: productionProbabilityA, bestOf });
     const forecast = combinedSeriesForecast({ teamA: match.team_a, teamB: match.team_b, seriesProbabilityA: latestSeriesProbabilityA, bestOf, winsA, winsB, currentMapProbabilityA });
     const decisionForecast = combinedSeriesForecast({ teamA: match.team_a, teamB: match.team_b, seriesProbabilityA: lockedSeriesProbabilityA ?? latestSeriesProbabilityA, bestOf });
     const predictedExact = mostLikelyExactScore(decisionForecast.exactScores);
@@ -865,6 +916,7 @@ async function combinedForecastState(opinionWeight = 10) {
     return {
       match,
       seriesId,
+      main: { probabilityA: productionProbabilityA, exactScores: productionForecast.exactScores, variant: modelComparison?.selected ?? "adaptive" },
       forecast,
       decision: {
         probabilityA: lockedSeriesProbabilityA,
@@ -876,6 +928,13 @@ async function combinedForecastState(opinionWeight = 10) {
         predictedExactScoreProbability: predictedExact?.probability ?? null,
         predictionCorrect: match.winner ? predictedWinner === match.winner : null,
         exactScoreCorrect: match.winner && predictedExact ? predictedExact.score === `${match.score_a}:${match.score_b}` : null,
+        historicalProbabilityA,
+        historicalWinner: historicalProbabilityA === null ? null : historicalProbabilityA >= 0.5 ? match.team_a : match.team_b,
+        historicalExactScore: historicalExact?.score ?? null,
+        historicalExactScoreProbability: historicalExact?.probability ?? null,
+        historicalSource: snapshotBaselineProbabilityA !== null ? "snapshot" : lockedSeriesProbabilityA !== null ? "prematch" : null,
+        historicalSnapshotId: snapshotBaselineProbabilityA !== null ? mainSnapshot?.baselineId ?? null : null,
+        historicalCapturedAt: snapshotBaselineProbabilityA !== null ? mainSnapshot?.baselineCreatedAt ?? null : lockedSeriesProbabilityA !== null ? match.created_at : null,
       },
       latest: { probabilityA: latestSeriesProbabilityA, generatedAt: now() },
       live: game ? { ...game, history: undefined } : null,
@@ -890,7 +949,7 @@ async function combinedForecastState(opinionWeight = 10) {
     };
   });
   const betLocks = parsedBetLocks();
-  const bracket = projectPlayoffBracket({ simulationResult: mainSnapshot?.result, probabilities: mainSnapshot?.probabilities ?? probabilities, matches, betLocks });
+  const bracket = projectPlayoffBracket({ simulationResult: mainSnapshot?.result, probabilities: productionProbabilities, matches, betLocks });
   return {
     generatedAt: now(),
     policy: {
@@ -903,7 +962,8 @@ async function combinedForecastState(opinionWeight = 10) {
     },
     decisionPolicy: { minimumLeadMinutes: DECISION_MIN_LEAD_MINUTES, lateForecastsExcludedFromDecisionScore: true },
     opinionWeight: weight,
-    mainSnapshot: mainSnapshot ? { id: mainSnapshot.id, trigger: mainSnapshot.trigger, mode: mainSnapshot.mode, opinionWeight: mainSnapshot.opinionWeight, completedMatchCount: mainSnapshot.completedMatchCount, createdAt: mainSnapshot.createdAt } : null,
+    mainSnapshot: mainSnapshot ? { id: mainSnapshot.id, baselineId: mainSnapshot.baselineId, baselineCreatedAt: mainSnapshot.baselineCreatedAt, requested: mainSnapshot.requested, trigger: mainSnapshot.trigger, mode: mainSnapshot.mode, opinionWeight: mainSnapshot.opinionWeight, completedMatchCount: mainSnapshot.completedMatchCount, createdAt: mainSnapshot.createdAt } : null,
+    modelComparison,
     series,
     maps,
     betLocks,
@@ -932,7 +992,7 @@ const server = createServer(async (req, res) => {
       catch { return json(res, 503, { error: "live_map_model_unavailable" }); }
     }
     if (req.method === "GET" && url.pathname === "/api/draft/live") return json(res, 200, await refreshLiveDrafts());
-    if (req.method === "GET" && url.pathname === "/api/combined") return json(res, 200, { ...(await combinedForecastState(url.searchParams.get("opinionWeight") ?? 10)), isAdmin: isAdmin(req) });
+    if (req.method === "GET" && url.pathname === "/api/combined") return json(res, 200, { ...(await combinedForecastState(url.searchParams.get("opinionWeight") ?? 10, url.searchParams.get("run"))), isAdmin: isAdmin(req) });
     const liveDraftPredictionMatch = req.method === "POST" ? url.pathname.match(/^\/api\/draft\/live\/([^/]+)\/prediction$/) : null;
     if (liveDraftPredictionMatch) {
       if (!sameOrigin(req)) return json(res, 403, { error: "origin" });
