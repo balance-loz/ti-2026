@@ -911,3 +911,4 @@ button:disabled, input:disabled { cursor: not-allowed; opacity: .5; }
 .fusion-history-table td.is-lost .fusion-round-match.is-open{box-shadow:inset 0 0 0 2px #ff747c}
 .fusion-outcome.is-qualified{border-color:#61ed79;color:#c4ffcc;background:#1d4d2b}
 .fusion-outcome.is-eliminated{border-color:#ff626c;color:#ffd3d6;background:#522126}
+.fusion-lock--historical{border-color:#d6b75e80;color:#ffe293;background:#d6b75e12}

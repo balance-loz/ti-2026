@@ -70,6 +70,10 @@ test("combined page and API persist map truth and explain the no-double-count po
   assert.match(page, /MAIN \/ СТАВКА/);
   assert.match(page, /buildMatchStandings/);
   assert.match(page, /function seriesPresentation/);
+  assert.match(page, /const source = betLock \? "bet" : hasHistorical \? "historical" : "latest"/);
+  assert.match(page, /row\.decision\.probabilityA/);
+  assert.match(page, /ИСТОРИЧЕСКИЙ PRE-MATCH/);
+  assert.match(page, /const teamProbability = standing\.teamId === row\.match\.team_a/);
   assert.match(page, /expandedMatches/);
   assert.match(page, /fusion-round-match/);
   assert.match(page, /UPPER_PLACEMENT/);
