@@ -17,6 +17,7 @@ import { seriesEvidenceWeight, updateProbabilitiesWithLiveSeries } from "../serv
 import { buildSnapshotCalculationTrace } from "../server/forecast-diagnostics.mjs";
 import { assessLiveMap, estimateLiveMap } from "../server/live-map-prediction.mjs";
 import { combinedSeriesForecast, exactSeriesScores, orientedProbability } from "../server/combined-forecast.mjs";
+import { predictionTimeliness, projectPlayoffBracket } from "../server/projected-bracket.mjs";
 
 test("combined series forecast exposes exact map scores without leaking live state into future maps", () => {
   const even = exactSeriesScores({ bestOf: 3, baseMapProbabilityA: .5 });
@@ -31,19 +32,45 @@ test("combined series forecast exposes exact map scores without leaking live sta
   assert.equal(orientedProbability("spirit", "liquid", { "liquid|spirit": 62 }), .38);
 });
 
+test("decision ledger separates actionable predictions from late revisions", () => {
+  assert.deepEqual(predictionTimeliness("2026-08-14T09:00:00Z", "2026-08-14T10:00:00Z", 15), { status: "actionable", leadMinutes: 60, eligible: true });
+  assert.deepEqual(predictionTimeliness("2026-08-14T09:55:00Z", "2026-08-14T10:00:00Z", 15), { status: "late", leadMinutes: 5, eligible: false });
+  assert.equal(predictionTimeliness("2026-08-14T10:01:00Z", "2026-08-14T10:00:00Z", 0).status, "after_start");
+});
+
+test("projected playoff bracket propagates actual winners and keeps frozen prediction grading", () => {
+  const ids = ["a", "b", "c", "d", "e", "f", "g", "h"];
+  const probabilities = Object.fromEntries(ids.flatMap((a, index) => ids.slice(index + 1).map((b) => [`${a}|${b}`, a === "a" ? 80 : 60])));
+  const simulationResult = { scenarios: [{ direct40: ["a"], direct41: ["b", "c"], via: ["d", "e", "f", "g", "h"] }] };
+  const matches = [{ id: 1, stage: "playoff", round: 1, team_a: "a", team_b: "h", winner: "h", score_a: 1, score_b: 2, predicted_probability: 80 }];
+  const bracket = projectPlayoffBracket({ simulationResult, probabilities, matches });
+  const opening = bracket.nodes.find((node) => node.label === "UB QF 1");
+  assert.equal(opening.predictedWinner, "a");
+  assert.equal(opening.actualWinner, "h");
+  assert.equal(opening.winner, "h");
+  assert.equal(opening.predictionCorrect, false);
+  assert.ok(bracket.nodes.some((node) => node.column > 1 && [node.a, node.b].includes("h")));
+});
+
 test("combined page and API persist map truth and explain the no-double-count policy", async () => {
   const [api, page, checkpoint] = await Promise.all([
     readFile("server/api.mjs", "utf8"), readFile("app/combined/page.tsx", "utf8"), readFile("scripts/checkpoint-production.mjs", "utf8"),
   ]);
   assert.match(api, /CREATE TABLE IF NOT EXISTS tournament_maps/);
+  assert.match(api, /CREATE TABLE IF NOT EXISTS bet_locks/);
+  assert.match(api, /UNIQUE\(scope,subject_id\)/);
+  assert.match(api, /bet_already_locked/);
   assert.match(api, /\/api\/combined/);
+  assert.match(api, /\/api\/admin\/bet-locks/);
   assert.match(api, /hydrateTournamentMapDetails/);
-  assert.match(page, /Online Bradley–Terry/);
-  assert.match(page, /Положение по матчам/);
-  assert.match(page, /Счёт по матчам/);
+  assert.match(api, /decisionHistory/);
+  assert.match(page, /Я поставил по рекомендации/);
+  assert.match(page, /СТАВКА ЗАФИКСИРОВАНА/);
+  assert.match(page, /Таблица по матчам/);
+  assert.match(page, /MAIN \/ СТАВКА/);
   assert.match(page, /buildMatchStandings/);
-  assert.match(page, /Точный счёт карт/);
-  assert.match(page, /draft-прогноз не был сохранён/);
+  assert.match(page, /Точный счёт/);
+  assert.match(page, /Нет draft-прогноза/);
   assert.match(checkpoint, /Checkpoint refused/);
   assert.match(checkpoint, /backup\(source/);
 });

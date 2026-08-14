@@ -13,6 +13,7 @@ import { liveDraftsFromOpenDota } from "./live-drafts.mjs";
 import { buildSnapshotCalculationTrace, probabilityFor as diagnosticProbabilityFor, scoreDiagnosticMatch } from "./forecast-diagnostics.mjs";
 import { combinedSeriesForecast, orientedProbability } from "./combined-forecast.mjs";
 import { estimateLiveMap } from "./live-map-prediction.mjs";
+import { mostLikelyExactScore, predictionTimeliness, projectPlayoffBracket } from "./projected-bracket.mjs";
 
 const PORT = Number(process.env.API_PORT || 3001);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "data");
@@ -26,6 +27,7 @@ const LIVE_SYNC_ENABLED = process.env.LIVE_SYNC_ENABLED !== "false";
 const LIVE_SYNC_INTERVAL_MINUTES = Math.max(2, Number(process.env.LIVE_SYNC_INTERVAL_MINUTES || 10));
 const LIVE_DRAFT_INTERVAL_SECONDS = Math.max(5, Number(process.env.LIVE_DRAFT_INTERVAL_SECONDS || 10));
 const MAP_DETAIL_SYNC_LIMIT = Math.max(0, Number(process.env.MAP_DETAIL_SYNC_LIMIT || 12));
+const DECISION_MIN_LEAD_MINUTES = Math.max(0, Number(process.env.DECISION_MIN_LEAD_MINUTES || 15));
 const OPENDOTA_API_URL = process.env.OPENDOTA_API_URL || "https://api.opendota.com/api";
 const SCHEDULE_SYNC_ENABLED = process.env.SCHEDULE_SYNC_ENABLED !== "false";
 const SCHEDULE_SOURCE_URL = process.env.SCHEDULE_SOURCE_URL || "https://www.cybersport.ru/tournaments/dota-2/the-international-2026";
@@ -144,6 +146,23 @@ db.exec(`
     players_json TEXT,
     updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS bet_locks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope TEXT NOT NULL CHECK(scope IN ('series','map')),
+    subject_id TEXT NOT NULL,
+    team_a TEXT NOT NULL,
+    team_b TEXT NOT NULL,
+    probability_a REAL NOT NULL CHECK(probability_a >= 0.01 AND probability_a <= 0.99),
+    recommended_winner TEXT NOT NULL,
+    exact_score TEXT,
+    source TEXT NOT NULL,
+    opinion_weight INTEGER NOT NULL,
+    snapshot_id INTEGER,
+    model_id TEXT,
+    evidence_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(scope,subject_id)
+  );
 `);
 const snapshotColumns = new Set(db.prepare("PRAGMA table_info(prediction_snapshots)").all().map((row) => row.name));
 for (const [name, definition] of Object.entries({ inputs_json: "TEXT", diagnostics_json: "TEXT", snapshot_kind: "TEXT NOT NULL DEFAULT 'original'", root_snapshot_id: "INTEGER", parent_snapshot_id: "INTEGER", profile_key: "TEXT" })) {
@@ -151,6 +170,7 @@ for (const [name, definition] of Object.entries({ inputs_json: "TEXT", diagnosti
 }
 db.exec("CREATE INDEX IF NOT EXISTS idx_prediction_snapshots_root ON prediction_snapshots(root_snapshot_id, completed_match_count DESC); CREATE INDEX IF NOT EXISTS idx_prediction_snapshots_profile ON prediction_snapshots(profile_key, completed_match_count DESC); CREATE INDEX IF NOT EXISTS idx_live_draft_snapshots_match ON live_draft_snapshots(match_id, observed_at DESC)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_tournament_maps_series ON tournament_maps(series_id,start_time,match_id)");
+db.exec("CREATE INDEX IF NOT EXISTS idx_bet_locks_created ON bet_locks(created_at DESC)");
 db.exec("PRAGMA optimize");
 
 let refreshProcess = null;
@@ -677,13 +697,39 @@ async function hydrateTournamentMapDetails(maps) {
 function parsedTournamentMaps() {
   return db.prepare(`SELECT map.*,prediction.probability_radiant,prediction.model_id,prediction.captured_at
     FROM tournament_maps map LEFT JOIN live_draft_predictions prediction ON prediction.match_id=map.match_id
-    ORDER BY map.start_time,map.match_id`).all().map((row) => ({
-      matchId: row.match_id, seriesId: row.series_id, radiantTeam: row.radiant_team, direTeam: row.dire_team,
-      winner: row.winner, startTime: row.start_time, duration: row.duration, patch: row.patch, firstPickTeam: row.first_pick_team,
-      picks: row.picks_json ? JSON.parse(row.picks_json) : null, bans: row.bans_json ? JSON.parse(row.bans_json) : null,
-      draft: row.draft_json ? JSON.parse(row.draft_json) : null, players: row.players_json ? JSON.parse(row.players_json) : null,
-      draftPrediction: row.probability_radiant === null ? null : { probabilityRadiant: Number(row.probability_radiant), modelId: row.model_id, capturedAt: row.captured_at },
-    }));
+    ORDER BY map.start_time,map.match_id`).all().map((row) => {
+      const probabilityRadiant = row.probability_radiant === null ? null : Number(row.probability_radiant);
+      const predictedWinner = probabilityRadiant === null ? null : probabilityRadiant >= 0.5 ? row.radiant_team : row.dire_team;
+      const timeliness = probabilityRadiant === null ? null : predictionTimeliness(row.captured_at, row.start_time ? new Date(Number(row.start_time) * 1000).toISOString() : null, 0);
+      return {
+        matchId: row.match_id, seriesId: row.series_id, radiantTeam: row.radiant_team, direTeam: row.dire_team,
+        winner: row.winner, startTime: row.start_time, duration: row.duration, patch: row.patch, firstPickTeam: row.first_pick_team,
+        picks: row.picks_json ? JSON.parse(row.picks_json) : null, bans: row.bans_json ? JSON.parse(row.bans_json) : null,
+        draft: row.draft_json ? JSON.parse(row.draft_json) : null, players: row.players_json ? JSON.parse(row.players_json) : null,
+        draftPrediction: probabilityRadiant === null ? null : {
+          probabilityRadiant, modelId: row.model_id, capturedAt: row.captured_at, predictedWinner, timeliness,
+          predictionCorrect: row.winner ? predictedWinner === row.winner : null,
+        },
+      };
+    });
+}
+
+function parsedBetLocks() {
+  const seriesResults = new Map(db.prepare("SELECT id,winner,score_a,score_b FROM matches WHERE winner IS NOT NULL").all().map((row) => [String(row.id), row]));
+  const mapResults = new Map(db.prepare("SELECT match_id,winner FROM tournament_maps WHERE winner IS NOT NULL").all().map((row) => [String(row.match_id), row]));
+  return db.prepare("SELECT * FROM bet_locks ORDER BY created_at,id").all().map((row) => {
+    const result = row.scope === "series" ? seriesResults.get(String(row.subject_id)) : mapResults.get(String(row.subject_id));
+    const winner = result?.winner ?? null;
+    const actualScore = row.scope === "series" && result ? `${result.score_a}:${result.score_b}` : null;
+    return {
+      id: row.id, scope: row.scope, subjectId: row.subject_id, teamA: row.team_a, teamB: row.team_b,
+      probabilityA: Number(row.probability_a), recommendedWinner: row.recommended_winner, exactScore: row.exact_score,
+      source: row.source, opinionWeight: row.opinion_weight, snapshotId: row.snapshot_id, modelId: row.model_id,
+      evidence: JSON.parse(row.evidence_json), createdAt: row.created_at, winner, actualScore,
+      predictionCorrect: winner ? winner === row.recommended_winner : null,
+      exactScoreCorrect: actualScore && row.exact_score ? actualScore === row.exact_score : null,
+    };
+  });
 }
 
 async function syncLiveMatches(trigger = "timer") {
@@ -774,10 +820,23 @@ async function refreshLiveDrafts({ force = false } = {}) {
   return liveDraftPromise;
 }
 
+function latestMainSnapshot(opinionWeight) {
+  const weight = Math.round(Math.min(100, Math.max(0, Number(opinionWeight) || 0)));
+  const mode = weight > 0 ? "mixed" : "stats";
+  const row = db.prepare(`SELECT id,trigger,forecast_mode,opinion_weight,completed_match_count,probabilities_json,result_json,created_at
+    FROM prediction_snapshots WHERE forecast_mode=? AND opinion_weight=?
+    ORDER BY completed_match_count DESC,id DESC LIMIT 1`).get(mode, weight)
+    ?? (weight > 0 ? db.prepare(`SELECT id,trigger,forecast_mode,opinion_weight,completed_match_count,probabilities_json,result_json,created_at
+      FROM prediction_snapshots WHERE forecast_mode='stats' ORDER BY completed_match_count DESC,id DESC LIMIT 1`).get() : null);
+  if (!row) return null;
+  return { id: row.id, trigger: row.trigger, mode: row.forecast_mode, opinionWeight: row.opinion_weight, completedMatchCount: row.completed_match_count, createdAt: row.created_at, probabilities: JSON.parse(row.probabilities_json), result: JSON.parse(row.result_json) };
+}
+
 async function combinedForecastState(opinionWeight = 10) {
   const weight = Math.round(Math.min(100, Math.max(0, Number(opinionWeight) || 0)));
   const mode = weight > 0 ? "mixed" : "stats";
   const { matches, probabilities } = currentForecast({ ...OFFICIAL_FORECAST_CONFIG, forecastMode: mode, opinionWeight: weight });
+  const mainSnapshot = latestMainSnapshot(weight);
   const live = await refreshLiveDrafts();
   const maps = parsedTournamentMaps();
   const series = matches.map((match) => {
@@ -785,9 +844,10 @@ async function combinedForecastState(opinionWeight = 10) {
     const game = live.games.find((item) => seriesId && String(item.seriesId) === seriesId)
       ?? live.games.find((item) => [item.radiantTeam, item.direTeam].includes(match.team_a) && [item.radiantTeam, item.direTeam].includes(match.team_b));
     const probabilityFromBlend = orientedProbability(match.team_a, match.team_b, probabilities);
-    const frozenSeriesProbabilityA = match.winner && match.predicted_probability !== null && Number.isFinite(Number(match.predicted_probability))
-      ? Number(match.predicted_probability) / 100
-      : probabilityFromBlend ?? (Number(match.predicted_probability) / 100 || 0.5);
+    const storedProbability = match.predicted_probability !== null && match.predicted_probability !== undefined && Number.isFinite(Number(match.predicted_probability)) ? Number(match.predicted_probability) / 100 : null;
+    const latestSeriesProbabilityA = probabilityFromBlend ?? storedProbability ?? 0.5;
+    const lockedSeriesProbabilityA = storedProbability;
+    const lockTimeliness = lockedSeriesProbabilityA === null ? null : predictionTimeliness(match.created_at, match.scheduled_at, DECISION_MIN_LEAD_MINUTES);
     const draftProbabilityRadiant = game?.draftPrediction?.probabilityRadiant ?? null;
     let liveEstimate = null; let currentMapProbabilityA = null;
     if (game && draftProbabilityRadiant !== null && Number.isFinite(Number(draftProbabilityRadiant))) {
@@ -797,11 +857,27 @@ async function combinedForecastState(opinionWeight = 10) {
     }
     const winsA = game ? (game.radiantTeam === match.team_a ? game.seriesScoreRadiant : game.seriesScoreDire) : 0;
     const winsB = game ? (game.radiantTeam === match.team_b ? game.seriesScoreRadiant : game.seriesScoreDire) : 0;
-    const forecast = combinedSeriesForecast({ teamA: match.team_a, teamB: match.team_b, seriesProbabilityA: frozenSeriesProbabilityA, bestOf: game?.seriesBestOf ?? 3, winsA, winsB, currentMapProbabilityA });
+    const bestOf = game?.seriesBestOf ?? (match.stage === "playoff" && Number(match.round) >= 99 ? 5 : 3);
+    const forecast = combinedSeriesForecast({ teamA: match.team_a, teamB: match.team_b, seriesProbabilityA: latestSeriesProbabilityA, bestOf, winsA, winsB, currentMapProbabilityA });
+    const decisionForecast = combinedSeriesForecast({ teamA: match.team_a, teamB: match.team_b, seriesProbabilityA: lockedSeriesProbabilityA ?? latestSeriesProbabilityA, bestOf });
+    const predictedExact = mostLikelyExactScore(decisionForecast.exactScores);
+    const predictedWinner = (lockedSeriesProbabilityA ?? latestSeriesProbabilityA) >= 0.5 ? match.team_a : match.team_b;
     return {
       match,
       seriesId,
       forecast,
+      decision: {
+        probabilityA: lockedSeriesProbabilityA,
+        fallbackProbabilityA: lockedSeriesProbabilityA ?? latestSeriesProbabilityA,
+        capturedAt: lockedSeriesProbabilityA === null ? null : match.created_at,
+        timeliness: lockTimeliness,
+        predictedWinner,
+        predictedExactScore: predictedExact?.score ?? null,
+        predictedExactScoreProbability: predictedExact?.probability ?? null,
+        predictionCorrect: match.winner ? predictedWinner === match.winner : null,
+        exactScoreCorrect: match.winner && predictedExact ? predictedExact.score === `${match.score_a}:${match.score_b}` : null,
+      },
+      latest: { probabilityA: latestSeriesProbabilityA, generatedAt: now() },
       live: game ? { ...game, history: undefined } : null,
       liveEstimate,
       sources: {
@@ -813,6 +889,8 @@ async function combinedForecastState(opinionWeight = 10) {
       },
     };
   });
+  const betLocks = parsedBetLocks();
+  const bracket = projectPlayoffBracket({ simulationResult: mainSnapshot?.result, probabilities: mainSnapshot?.probabilities ?? probabilities, matches, betLocks });
   return {
     generatedAt: now(),
     policy: {
@@ -821,10 +899,15 @@ async function combinedForecastState(opinionWeight = 10) {
       draft: "frozen_after_complete_draft",
       liveMap: "observation_after_10_minutes",
       futureMaps: "frozen_pre_series_map_prior",
+      decisionHistory: "explicit_admin_bet_lock_is_immutable_latest_remains_live",
     },
+    decisionPolicy: { minimumLeadMinutes: DECISION_MIN_LEAD_MINUTES, lateForecastsExcludedFromDecisionScore: true },
     opinionWeight: weight,
+    mainSnapshot: mainSnapshot ? { id: mainSnapshot.id, trigger: mainSnapshot.trigger, mode: mainSnapshot.mode, opinionWeight: mainSnapshot.opinionWeight, completedMatchCount: mainSnapshot.completedMatchCount, createdAt: mainSnapshot.createdAt } : null,
     series,
     maps,
+    betLocks,
+    bracket,
     live: { fetchedAt: live.fetchedAt, error: live.error },
   };
 }
@@ -849,7 +932,7 @@ const server = createServer(async (req, res) => {
       catch { return json(res, 503, { error: "live_map_model_unavailable" }); }
     }
     if (req.method === "GET" && url.pathname === "/api/draft/live") return json(res, 200, await refreshLiveDrafts());
-    if (req.method === "GET" && url.pathname === "/api/combined") return json(res, 200, await combinedForecastState(url.searchParams.get("opinionWeight") ?? 10));
+    if (req.method === "GET" && url.pathname === "/api/combined") return json(res, 200, { ...(await combinedForecastState(url.searchParams.get("opinionWeight") ?? 10)), isAdmin: isAdmin(req) });
     const liveDraftPredictionMatch = req.method === "POST" ? url.pathname.match(/^\/api\/draft\/live\/([^/]+)\/prediction$/) : null;
     if (liveDraftPredictionMatch) {
       if (!sameOrigin(req)) return json(res, 403, { error: "origin" });
@@ -933,6 +1016,36 @@ const server = createServer(async (req, res) => {
         try { entries.forEach(([key, value]) => save.run(key, value, now())); db.exec("COMMIT"); } catch (error) { db.exec("ROLLBACK"); throw error; }
         audit("answers_saved", { count: entries.length });
         return json(res, 200, { ok: true, count: entries.length });
+      }
+      if (req.method === "POST" && url.pathname === "/api/admin/bet-locks") {
+        const data = await body(req);
+        const scope = data.scope === "series" || data.scope === "map" ? data.scope : null;
+        const subjectId = String(data.subjectId || "");
+        if (!scope || !subjectId) return json(res, 400, { error: "invalid_bet_lock" });
+        if (db.prepare("SELECT id FROM bet_locks WHERE scope=? AND subject_id=?").get(scope, subjectId)) return json(res, 409, { error: "bet_already_locked" });
+        const subject = scope === "series"
+          ? db.prepare("SELECT id,team_a,team_b,winner FROM matches WHERE id=?").get(Number(subjectId))
+          : db.prepare("SELECT map.match_id AS id,map.radiant_team AS team_a,map.dire_team AS team_b,map.winner,prediction.probability_radiant,prediction.model_id,prediction.picks_json FROM tournament_maps map LEFT JOIN live_draft_predictions prediction ON prediction.match_id=map.match_id WHERE map.match_id=?").get(subjectId);
+        if (!subject) return json(res, 404, { error: "bet_subject_not_found" });
+        if (subject.winner) return json(res, 409, { error: "result_already_known" });
+        const probabilityA = Number(data.probabilityA);
+        if (!Number.isFinite(probabilityA) || probabilityA < 0.01 || probabilityA > 0.99) return json(res, 400, { error: "invalid_probability" });
+        const recommendedWinner = String(data.recommendedWinner || "");
+        if (![subject.team_a, subject.team_b].includes(recommendedWinner)) return json(res, 400, { error: "invalid_recommended_winner" });
+        if (scope === "map" && (!Number.isFinite(Number(subject.probability_radiant)) || Math.abs(probabilityA - Number(subject.probability_radiant)) > 0.000001)) return json(res, 409, { error: "draft_prediction_changed" });
+        const exactScore = scope === "series" && /^\d:\d$/.test(String(data.exactScore || "")) ? String(data.exactScore) : null;
+        const stamp = now();
+        const evidence = {
+          display: data.evidence && typeof data.evidence === "object" ? data.evidence : null,
+          picks: scope === "map" && subject.picks_json ? JSON.parse(subject.picks_json) : null,
+          serverCapturedAt: stamp,
+        };
+        const result = db.prepare(`INSERT INTO bet_locks(scope,subject_id,team_a,team_b,probability_a,recommended_winner,exact_score,source,opinion_weight,snapshot_id,model_id,evidence_json,created_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(scope, subjectId, subject.team_a, subject.team_b, probabilityA, recommendedWinner, exactScore,
+          scope === "series" ? "series_latest" : "map_draft", Math.round(Math.min(100, Math.max(0, Number(data.opinionWeight) || 0))),
+          Number.isInteger(Number(data.snapshotId)) ? Number(data.snapshotId) : null, scope === "map" ? subject.model_id : null, JSON.stringify(evidence), stamp);
+        audit("bet_locked", { id: Number(result.lastInsertRowid), scope, subjectId, recommendedWinner, probabilityA, exactScore });
+        return json(res, 201, { ok: true, id: Number(result.lastInsertRowid), createdAt: stamp });
       }
       if (req.method === "POST" && url.pathname === "/api/admin/matches") {
         const data = await body(req);

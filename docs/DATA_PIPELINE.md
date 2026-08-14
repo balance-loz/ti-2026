@@ -98,6 +98,12 @@ The combined forecast applies evidence in this order:
 
 Exact BO3/BO5 score probabilities are computed from the current score with dynamic programming. This prevents a 2:0 from being treated as two independent series and prevents current-map draft/live evidence from leaking into future maps.
 
+### Explicit bet ledger
+
+Displayed forecasts are allowed to change until the administrator explicitly confirms `Я поставил по рекомендации`. That action inserts one immutable `bet_locks` row for either a series or a map. The row freezes the recommended winner, oriented probability, exact series score when applicable, opinion weight, snapshot/model identifiers, evidence payload and timestamp. A unique `(scope, subject_id)` constraint prevents later overwrites; the API also rejects a lock after the result is known.
+
+Evaluation uses only these explicit locks. Unlocked recommendations remain live and are not counted as bets. When a result arrives, the lock is joined to the series or map result and receives winner/exact-score correctness without mutating its original evidence.
+
 ## Next metrics unlocked by own `.dem` parsing
 
 - lane matchups and lane net worth by player;
