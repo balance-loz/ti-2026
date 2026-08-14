@@ -62,8 +62,8 @@ test("production gate keeps adaptive forecasts in shadow when proper scores get 
 });
 
 test("combined page and API persist map truth and explain the no-double-count policy", async () => {
-  const [api, page, tournamentPage, checkpoint, modelGate] = await Promise.all([
-    readFile("server/api.mjs", "utf8"), readFile("app/combined/page.tsx", "utf8"), readFile("app/page.tsx", "utf8"), readFile("scripts/checkpoint-production.mjs", "utf8"), readFile("server/model-gate.mjs", "utf8"),
+  const [api, page, tournamentPage, styles, checkpoint, modelGate] = await Promise.all([
+    readFile("server/api.mjs", "utf8"), readFile("app/combined/page.tsx", "utf8"), readFile("app/page.tsx", "utf8"), readFile("app/globals.css", "utf8"), readFile("scripts/checkpoint-production.mjs", "utf8"), readFile("server/model-gate.mjs", "utf8"),
   ]);
   assert.match(api, /CREATE TABLE IF NOT EXISTS tournament_maps/);
   assert.match(api, /CREATE TABLE IF NOT EXISTS bet_locks/);
@@ -86,6 +86,15 @@ test("combined page and API persist map truth and explain the no-double-count po
   assert.match(api, /baselineProbabilities/);
   assert.match(api, /url\.searchParams\.get\("run"\)/);
   assert.match(api, /snapshotDecisionEvaluation/);
+  assert.match(api, /projectedMatchupState/);
+  assert.match(api, /combined_matchup_distribution/);
+  assert.match(api, /simulation,/);
+  assert.match(page, /function TournamentProjection/);
+  assert.match(page, /MONTE CARLO · SWISS → СТЫКИ → PLAYOFF/);
+  assert.match(page, /simulation\.iterations\.toLocaleString/);
+  assert.match(page, /БУДУЩИЕ ПАРЫ SWISS/);
+  assert.match(page, /Вероятные пары и альтернативы/);
+  assert.match(page, /Строится новая миллионная ревизия/);
   assert.match(modelGate, /adaptive_failed_production_gate/);
   assert.match(page, /MAIN = \{comparison\.selected\.toUpperCase\(\)\}/);
   assert.match(page, /const teamProbability = standing\.teamId === row\.match\.team_a/);
@@ -95,6 +104,10 @@ test("combined page and API persist map truth and explain the no-double-count po
   assert.match(page, /fusion-prediction-verdict/);
   assert.match(page, /const place = standingIndex \+ 1/);
   assert.match(page, /fusion-result-square/);
+  assert.match(page, /fusion-matrix-progress/);
+  assert.match(page, /из \{rows\.length\} матчей/);
+  assert.match(styles, /@media\(min-width:1100px\)/);
+  assert.match(styles, /fusion-history-table\{min-width:2050px\}/);
   assert.match(page, /function RouletteRisk/);
   assert.match(page, /const isLowConfidence = .* < \.58/);
   assert.match(tournamentPage, /round\.probability\.toFixed\(0\).*%/);
@@ -550,7 +563,7 @@ test("server forecast can create an automatic snapshot payload", async () => {
   const result = runForecast(probabilities, 100, 123, { stats, matches: [] });
   assert.equal(result.teams.length, 16);
   assert.equal(result.iterations, 100);
-  assert.equal(result.formatVersion, "hidden-groups-r1-r3-playoff-v5-adaptive");
+  assert.equal(result.formatVersion, "hidden-groups-r1-r3-playoff-v6-matchup-distributions");
   assert.equal(result.convergence.stopReason, "fixed_budget");
   assert.equal(result.convergence.checkpoints.at(-1).iterations, 100);
   assert.deepEqual(result.calibration, stats.tournamentCalibration.selected);
@@ -568,6 +581,9 @@ test("server forecast can create an automatic snapshot payload", async () => {
   assert.equal(result.playoffScenarios.length, 3);
   assert.ok(result.playoffScenarios.every((scenario) => scenario.occurrences >= 1));
   assert.ok(result.playoffScenarios.every((scenario) => new Set([scenario.champion, scenario.runnerUp, scenario.third]).size === 3));
+  assert.ok(result.swissMatchups.length > 0);
+  assert.ok(result.swissMatchups.some((matchup) => matchup.round === 4 && matchup.probability > 0));
+  assert.ok(result.swissMatchups.every((matchup) => matchup.a !== matchup.b && matchup.aWinProbability >= 0 && matchup.aWinProbability <= 100));
   assert.ok(result.uniqueTournamentPaths <= result.iterations);
   assert.ok(result.uniqueSwissPaths <= result.iterations);
   assert.ok(result.uniqueSwissOutcomes <= result.iterations);

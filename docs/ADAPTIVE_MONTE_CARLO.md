@@ -20,7 +20,7 @@ Exact bracket paths are not a convergence target: their state space is too large
 Environment controls:
 
 ```env
-AUTO_SNAPSHOT_ITERATIONS=250000
+AUTO_SNAPSHOT_ITERATIONS=1000000
 AUTO_SNAPSHOT_MAX_ITERATIONS=1000000
 AUTO_SNAPSHOT_BATCH_SIZE=250000
 AUTO_SNAPSHOT_TOLERANCE_PP=0.10

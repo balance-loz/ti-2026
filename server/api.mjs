@@ -33,7 +33,7 @@ const OPENDOTA_API_URL = process.env.OPENDOTA_API_URL || "https://api.opendota.c
 const SCHEDULE_SYNC_ENABLED = process.env.SCHEDULE_SYNC_ENABLED !== "false";
 const SCHEDULE_SOURCE_URL = process.env.SCHEDULE_SOURCE_URL || "https://www.cybersport.ru/tournaments/dota-2/the-international-2026";
 const SCHEDULE_TIMEZONE_OFFSET = process.env.SCHEDULE_TIMEZONE_OFFSET || "+03:00";
-const AUTO_SNAPSHOT_ITERATIONS = Math.max(10_000, Number(process.env.AUTO_SNAPSHOT_ITERATIONS || 250_000));
+const AUTO_SNAPSHOT_ITERATIONS = Math.max(10_000, Number(process.env.AUTO_SNAPSHOT_ITERATIONS || 1_000_000));
 const AUTO_SNAPSHOT_MAX_ITERATIONS = Math.max(AUTO_SNAPSHOT_ITERATIONS, Number(process.env.AUTO_SNAPSHOT_MAX_ITERATIONS || AUTO_SNAPSHOT_ITERATIONS * 4));
 const AUTO_SNAPSHOT_BATCH_SIZE = Math.max(10_000, Number(process.env.AUTO_SNAPSHOT_BATCH_SIZE || AUTO_SNAPSHOT_ITERATIONS));
 const AUTO_SNAPSHOT_TOLERANCE_PP = Math.max(.01, Number(process.env.AUTO_SNAPSHOT_TOLERANCE_PP || .1));
@@ -875,6 +875,34 @@ function latestMainSnapshot(opinionWeight, requestedSnapshotId = null) {
   };
 }
 
+function projectedMatchupState(simulationResult, matches) {
+  const canonicalPair = (a, b) => [a, b].sort().join("|");
+  const known = new Set(matches.map((match) => `${match.stage}:${Number(match.round)}:${canonicalPair(match.team_a, match.team_b)}`));
+  const card = (stage, item, index) => {
+    const probabilityA = Math.min(.99, Math.max(.01, Number(item.aWinProbability) / 100));
+    const forecast = combinedSeriesForecast({ teamA: item.a, teamB: item.b, seriesProbabilityA: probabilityA, bestOf: 3 });
+    const exact = mostLikelyExactScore(forecast.exactScores);
+    return {
+      id: `${stage}:${Number(item.round || 0)}:${canonicalPair(item.a, item.b)}:${index}`,
+      stage, round: stage === "swiss" ? Number(item.round) : 1,
+      teamA: item.a, teamB: item.b,
+      pairProbability: Number(item.probability), probabilityA,
+      predictedWinner: probabilityA >= .5 ? item.a : item.b,
+      exactScore: exact?.score ?? null, exactScoreProbability: exact?.probability ?? null,
+      occurrences: Number(item.occurrences || 0),
+    };
+  };
+  const swissByRound = new Map();
+  for (const item of simulationResult?.swissMatchups || []) {
+    if (known.has(`swiss:${Number(item.round)}:${canonicalPair(item.a, item.b)}`)) continue;
+    const round = Number(item.round);
+    swissByRound.set(round, [...(swissByRound.get(round) || []), item]);
+  }
+  const swiss = [...swissByRound.entries()].sort(([a], [b]) => a - b).flatMap(([, items]) => items.sort((a, b) => Number(b.probability) - Number(a.probability)).slice(0, 12)).map((item, index) => card("swiss", item, index));
+  const playins = (simulationResult?.playinMatchups || []).filter((item) => !known.has(`playin:1:${canonicalPair(item.a, item.b)}`)).slice(0, 10).map((item, index) => card("playin", item, index));
+  return { swiss, playins };
+}
+
 async function combinedForecastState(opinionWeight = 10, requestedSnapshotId = null) {
   const weight = Math.round(Math.min(100, Math.max(0, Number(opinionWeight) || 0)));
   const mode = weight > 0 ? "mixed" : "stats";
@@ -949,7 +977,10 @@ async function combinedForecastState(opinionWeight = 10, requestedSnapshotId = n
     };
   });
   const betLocks = parsedBetLocks();
-  const bracket = projectPlayoffBracket({ simulationResult: mainSnapshot?.result, probabilities: productionProbabilities, matches, betLocks });
+  const simulation = mainSnapshot?.result ?? null;
+  const projections = projectedMatchupState(simulation, matches);
+  if (!Array.isArray(simulation?.swissMatchups)) queueAutomaticSnapshot("combined_matchup_distribution", 100);
+  const bracket = projectPlayoffBracket({ simulationResult: simulation, probabilities: productionProbabilities, matches, betLocks });
   return {
     generatedAt: now(),
     policy: {
@@ -964,6 +995,8 @@ async function combinedForecastState(opinionWeight = 10, requestedSnapshotId = n
     opinionWeight: weight,
     mainSnapshot: mainSnapshot ? { id: mainSnapshot.id, baselineId: mainSnapshot.baselineId, baselineCreatedAt: mainSnapshot.baselineCreatedAt, requested: mainSnapshot.requested, trigger: mainSnapshot.trigger, mode: mainSnapshot.mode, opinionWeight: mainSnapshot.opinionWeight, completedMatchCount: mainSnapshot.completedMatchCount, createdAt: mainSnapshot.createdAt } : null,
     modelComparison,
+    simulation,
+    projections,
     series,
     maps,
     betLocks,
