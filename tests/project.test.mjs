@@ -13,6 +13,9 @@ import { externalFeatureDecision, pearsonCorrelation } from "../server/external-
 import { normalizeDatdotaPayload } from "../scripts/sync-datdota-source.mjs";
 import { predictionDecision, sharpenProbability } from "../server/prediction-decision.mjs";
 import { latestOfficialBaseline, latestSnapshotForHistoryRow, visibleSnapshotHistory } from "../server/snapshot-history.mjs";
+import { seriesEvidenceWeight, updateProbabilitiesWithLiveSeries } from "../server/live-team-update.mjs";
+import { buildSnapshotCalculationTrace } from "../server/forecast-diagnostics.mjs";
+import { assessLiveMap, estimateLiveMap } from "../server/live-map-prediction.mjs";
 
 test("draft decides a matchup between equally strong teams", () => {
   const betterDraft = combineDraftSignals(0.5, [0.25]);
@@ -85,6 +88,62 @@ test("map probabilities convert separately to BO3 and BO5", () => {
   assert.ok(Math.abs(convertSeriesProbability(bestOfProbability(.6, 3), 3, 5) - bestOfProbability(.6, 5)) < 1e-10);
   assert.equal(bestOfProbability(.5, 3), .5);
   assert.equal(bestOfProbability(.5, 5), .5);
+});
+
+test("online TI layer values 2-0 above 2-1 and propagates opponent strength", () => {
+  const base = { "a|b": 50, "a|c": 50, "a|d": 50, "b|c": 50, "b|d": 50, "c|d": 50 };
+  const close = { id: 1, stage: "swiss", round: 1, team_a: "a", team_b: "b", winner: "a", score_a: 2, score_b: 1 };
+  const sweep = { ...close, score_b: 0 };
+  assert.equal(seriesEvidenceWeight(close), .72);
+  assert.equal(seriesEvidenceWeight(sweep), 1);
+  const closeUpdate = updateProbabilitiesWithLiveSeries(base, [close], { liveGlobal: .3 });
+  const sweepUpdate = updateProbabilitiesWithLiveSeries(base, [sweep], { liveGlobal: .3 });
+  assert.ok(sweepUpdate["a|d"] > closeUpdate["a|d"]);
+  const network = updateProbabilitiesWithLiveSeries(base, [sweep, { id: 2, stage: "swiss", round: 2, team_a: "b", team_b: "c", winner: "b", score_a: 2, score_b: 0 }], { liveGlobal: .3 });
+  assert.ok(network["a|c"] > 50);
+  assert.ok(network["a|c"] > sweepUpdate["a|c"]);
+  assert.ok(network["c|d"] < 50);
+});
+
+test("current TI results have one shared update path and appear in team history", async () => {
+  const page = await readFile("app/page.tsx", "utf8");
+  const engine = await readFile("server/forecast-engine.mjs", "utf8");
+  const stats = JSON.parse(await readFile("public/team-stats.json", "utf8"));
+  assert.equal(stats.methodology.liveLeagueExcludedFromBaseline, 19719);
+  assert.match(page, /updateProbabilitiesWithLiveSeries\(source, matches/);
+  assert.match(engine, /updateProbabilitiesWithLiveSeries\(base, matches/);
+  assert.match(page, /TI 2026 · ONLINE-СЛОЙ/);
+  assert.match(page, /в baseline не дублируются/);
+  assert.doesNotMatch(engine, /strength\[match\.team_a\].*surprise/);
+});
+
+test("saved forecast diagnostics freeze coefficients, pair decomposition and live-series influence", () => {
+  const stats = {
+    generatedAt: "2026-08-10T00:00:00.000Z",
+    periodStart: "2025-08-10T00:00:00.000Z",
+    totals: { uniqueAcceptedGames: 500 },
+    methodology: { recencyHalfLifeDays: 45, seriesInformation: { multiMapBase: .72, decisiveBonus: .28 } },
+    tournamentCalibration: { selected: { liveGlobal: .3 } },
+    pairwise: { "aurora|gamerlegion": { probabilityA: 61, directEffectiveGames: 2, modelEffectiveGames: 18, source: "head_to_head_and_indirect", confidence: "medium", uncertainty: .2, featureContributions: { commonOpponentsPp: 7, headToHeadPp: 3, rosterPp: 1 } } },
+  };
+  const matches = [{ id: 7, stage: "swiss", round: 1, team_a: "aurora", team_b: "gamerlegion", winner: "aurora", score_a: 2, score_b: 0, created_at: "2026-08-13T00:00:00.000Z", updated_at: "2026-08-13T01:00:00.000Z" }];
+  const probabilities = buildForecastSource({ answers: {}, stats, matches, mode: "stats", opinionWeight: 0 });
+  const trace = buildSnapshotCalculationTrace({ snapshotId: 12, createdAt: "2026-08-13T01:01:00.000Z", trigger: "manual_run", config: { forecastMode: "stats", opinionWeight: 0, iterations: 1000 }, answers: {}, probabilities, result: { iterations: 1000, seed: 42 }, stats, matches });
+  assert.equal(trace.exactAtSave, true);
+  assert.equal(trace.model.methodology.seriesInformation.decisiveBonus, .28);
+  assert.equal(trace.pairs[0].probabilities.statisticalA, 61);
+  assert.equal(trace.pairs[0].statisticalFeatures.headToHeadPp, 3);
+  assert.equal(trace.pairs[0].liveSeriesMarginal[0].evidenceWeight, 1);
+  assert.ok(Math.abs(trace.pairs[0].probabilities.traceResidualPp) < 1e-8);
+});
+
+test("snapshot history offers a detailed diagnostic export endpoint", async () => {
+  const [page, api] = await Promise.all([readFile("app/page.tsx", "utf8"), readFile("server/api.mjs", "utf8")]);
+  assert.match(page, /\/api\/snapshots\/\$\{snapshot\.id\}\/export/);
+  assert.match(page, /snapshot-download-button/);
+  assert.match(api, /ti2026\.forecast-diagnostic-export/);
+  assert.match(api, /diagnostics_json/);
+  assert.match(api, /buildSnapshotCalculationTrace/);
 });
 
 test("temporal artifact is compact and gated by future-patch evaluation", async () => {
@@ -265,6 +324,18 @@ test("OpenDota live feed becomes a partial TI draft and rejects stale games", ()
   assert.deepEqual(liveDraftsFromOpenDota(rows, { nowSeconds: 1_301 }), []);
 });
 
+test("live map model is side-symmetric, waits for 10:00 and raises the leading side", async () => {
+  const model = JSON.parse(await readFile("public/live-map-model.json", "utf8"));
+  const baseGame = { phase: "game", gameTime: 15 * 60, radiantLead: 5_000, radiantScore: 14, direScore: 8, radiantTeam: "falcons", direTeam: "parivision", lastUpdateAt: new Date().toISOString() };
+  const radiant = estimateLiveMap(model, { draftProbabilityRadiant: 0.55, game: baseGame });
+  const flipped = estimateLiveMap(model, { draftProbabilityRadiant: 0.45, game: { ...baseGame, radiantLead: -5_000, radiantScore: 8, direScore: 14, radiantTeam: "parivision", direTeam: "falcons" } });
+  assert.ok(radiant.liveProbabilityRadiant > 0.55);
+  assert.ok(Math.abs(radiant.liveProbabilityRadiant + flipped.liveProbabilityRadiant - 1) < 1e-12);
+  assert.equal(estimateLiveMap(model, { draftProbabilityRadiant: 0.55, game: { ...baseGame, gameTime: 599 } }).liveProbabilityRadiant, null);
+  assert.equal(assessLiveMap({ ...baseGame, gameTime: 20 * 60, radiantLead: 16_000 }).guard, "state_already_decided");
+  assert.ok(model.test.model.logLoss < model.test.frozenPrior.logLoss);
+});
+
 test("Draft Lab polls and binds the selected live draft", async () => {
   const page = await readFile("app/drafts/page.tsx", "utf8");
   const api = await readFile("server/api.mjs", "utf8");
@@ -277,12 +348,16 @@ test("Draft Lab polls and binds the selected live draft", async () => {
   assert.match(page, /точное распределение из live-feed/);
   assert.match(page, /гипотеза модели · не подтверждено/);
   assert.match(page, /result\.assignmentA\?\.rows\.length/);
-  assert.match(page, /function liveMapAssessment/);
+  assert.match(page, /assessLiveMap/);
   assert.match(page, /NO BET · ИСХОД СЛОЖИЛСЯ/);
   assert.match(page, /ЗАМОРОЖЕННЫЙ ПРОГНОЗ ПО ДРАФТУ/);
   assert.match(api, /OPENDOTA_API_URL}\/live/);
   assert.match(api, /OPENDOTA_API_URL}\/leagues\/\$\{TI_LEAGUE_ID\}\/matches/);
   assert.match(api, /liveDraftsFromOpenDota/);
+  assert.match(api, /live_draft_snapshots/);
+  assert.match(api, /live_draft_predictions/);
+  assert.match(page, /estimateLiveMap/);
+  assert.match(page, /live-probability-timeline/);
 });
 
 test("OpenDota BO5 is not completed at 2-0", () => {
@@ -582,9 +657,11 @@ test("production image exposes next-generation artifacts without activating shad
   const dockerfile = await readFile("Dockerfile", "utf8");
   const compose = await readFile("docker-compose.yml", "utf8");
   const api = await readFile("server/api.mjs", "utf8");
-  for (const file of ["all-pro-team-model.json", "draft-nextgen-model.json", "nextgen-series-calibration.json"]) assert.match(dockerfile, new RegExp(file.replaceAll(".", "\\.")));
+  for (const file of ["all-pro-team-model.json", "draft-nextgen-model.json", "nextgen-series-calibration.json", "live-map-model.json"]) assert.match(dockerfile, new RegExp(file.replaceAll(".", "\\.")));
   assert.match(compose, /ALL_PRO_TEAM_MODEL: \/app\/model\/all-pro-team-model\.json/);
+  assert.match(compose, /LIVE_MAP_MODEL: \/app\/model\/live-map-model\.json/);
   assert.match(api, /\/api\/models\/nextgen/);
+  assert.match(api, /\/api\/draft\/live\/model/);
   assert.match(api, /activeForecastUnchanged: true/);
 });
 

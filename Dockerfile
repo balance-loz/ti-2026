@@ -18,6 +18,7 @@ COPY --from=build /app/public/draft-temporal-model.json ./model/draft-temporal-m
 COPY --from=build /app/public/all-pro-team-model.json ./model/all-pro-team-model.json
 COPY --from=build /app/public/draft-nextgen-model.json ./model/draft-nextgen-model.json
 COPY --from=build /app/public/nextgen-series-calibration.json ./model/nextgen-series-calibration.json
+COPY --from=build /app/public/live-map-model.json ./model/live-map-model.json
 COPY --from=build /app/scripts ./scripts
 COPY --from=build /app/server ./server
 COPY --from=build /app/.vinext ./.vinext

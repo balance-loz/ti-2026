@@ -6,6 +6,7 @@ import { runForecast } from "../server/forecast-engine.mjs";
 import { assessPredictionConfidence } from "../server/prediction-confidence.mjs";
 import { predictionDecision } from "../server/prediction-decision.mjs";
 import { latestOfficialBaseline, latestSnapshotForHistoryRow, visibleSnapshotHistory } from "../server/snapshot-history.mjs";
+import { seriesEvidenceWeight, updateProbabilitiesWithLiveSeries } from "../server/live-team-update.mjs";
 
 type Team = {
   id: string;
@@ -377,27 +378,7 @@ function mixedAnswers(answers: AnswerMap, model: StatisticalModel | null, opinio
 
 function applyLiveEvidence(source: AnswerMap, matches: LiveMatch[], model: StatisticalModel | null = null) {
   const calibration = calibrationFor(model);
-  const strength = Object.fromEntries(TEAMS.map((team) => [team.id, 0])) as Record<string, number>;
-  const direct = new Map<string, number>();
-  for (const match of matches.filter((item) => item.winner)) {
-    const p = storedProbability(match.team_a, match.team_b, source) ?? 50;
-    const outcome = match.winner === match.team_a ? 1 : 0;
-    const surprise = outcome - p / 100;
-    // One TI series is deliberately worth roughly several ordinary historical
-    // series: it measures the current lineup, patch and tournament conditions.
-    strength[match.team_a] += surprise * calibration.liveGlobal;
-    strength[match.team_b] -= surprise * calibration.liveGlobal;
-    const key = pairKey(match.team_a, match.team_b);
-    const oriented = key.startsWith(`${match.team_a}|`) ? surprise : -surprise;
-    direct.set(key, (direct.get(key) ?? 0) + oriented * calibration.liveRematch);
-  }
-  return Object.fromEntries(ALL_PAIRS.map(([a, b]) => {
-    const key = pairKey(a, b);
-    const base = (storedProbability(a, b, source) ?? 50) / 100;
-    const orientedResidual = key.startsWith(`${a}|`) ? (direct.get(key) ?? 0) : -(direct.get(key) ?? 0);
-    const adjusted = 1 / (1 + Math.exp(-(logit(base) + strength[a] - strength[b] + orientedResidual)));
-    return [key, key.startsWith(`${a}|`) ? adjusted * 100 : (1 - adjusted) * 100];
-  }));
+  return updateProbabilitiesWithLiveSeries(source, matches, { liveGlobal: calibration.liveGlobal, seriesInformation: model?.methodology.seriesInformation }) as AnswerMap;
 }
 
 function predictionExplanation(
@@ -423,7 +404,7 @@ function predictionExplanation(
   if (mode === "personal" && personal !== undefined) items.push({ label: "Твоё мнение", value: personal - 50, text: "применено напрямую; неоценённые пары достраиваются из среднего рейтинга твоих ответов" });
   if (mode === "mixed" && personal !== undefined && stat !== undefined) items.push({ label: "Твоё мнение", value: (personal - stat) * opinionWeight / 100, text: `${opinionWeight}% смеси: сдвиг ${((personal - stat) * opinionWeight / 100).toFixed(1)} п.п.` });
   const calibration = calibrationFor(model);
-  if (liveMatches.length) items.push({ label: "Матчи текущего TI", value: afterLive - beforeLive, text: `${liveMatches.length} серий · исторически откалиброванные веса ${calibration.liveGlobal}/${calibration.liveRematch}` });
+  if (liveMatches.length) items.push({ label: "Матчи текущего TI", value: afterLive - beforeLive, text: `${liveMatches.length} серий · единый online Bradley–Terry слой · 2:0 вес ${((model?.methodology.seriesInformation?.multiMapBase ?? .72) + (model?.methodology.seriesInformation?.decisiveBonus ?? .28)).toFixed(2)}, 2:1 вес ${(model?.methodology.seriesInformation?.multiMapBase ?? .72).toFixed(2)}` });
   return { beforeLive, afterLive, items, coefficients: { recencyHalfLifeDays: model?.methodology.recencyHalfLifeDays ?? 45, directPrior: model?.methodology.directMatchPriorSeries ?? 6, rosterWeights: model?.methodology.rosterWeights ?? { 5: 1, 4: 0.25, 3: 0.07 }, personalWeight: mode === "mixed" ? opinionWeight / 100 : mode === "personal" ? 1 : 0, liveGlobal: calibration.liveGlobal, liveRematch: calibration.liveRematch, uncertainty: pair?.uncertainty ?? calibration.seriesNoiseLogitSd, formShock: calibration.formLogitSd, inferenceScale: PERSONAL_INFERENCE_SCALE } };
 }
 
@@ -798,6 +779,7 @@ export default function Home() {
   const [adminUsername, setAdminUsername] = useState("admin");
   const [adminPassword, setAdminPassword] = useState("");
   const [adminMessage, setAdminMessage] = useState("");
+  const [exportingSnapshotId, setExportingSnapshotId] = useState<number | null>(null);
   const [matchRound, setMatchRound] = useState(1);
   const [matchTeamA, setMatchTeamA] = useState(ROUND_ONE[0][0]);
   const [matchTeamB, setMatchTeamB] = useState(ROUND_ONE[0][1]);
@@ -820,6 +802,7 @@ export default function Home() {
   const canEdit = !serverAvailable || Boolean(serverState?.isAdmin);
   const liveMatches = useMemo(() => serverState?.matches ?? [], [serverState?.matches]);
   const completedLiveMatches = useMemo(() => liveMatches.filter((match) => match.winner), [liveMatches]);
+  const selectedTeamLiveMatches = useMemo(() => selectedTeamId ? completedLiveMatches.filter((match) => match.team_a === selectedTeamId || match.team_b === selectedTeamId).sort((a, b) => a.round - b.round || a.id - b.id) : [], [completedLiveMatches, selectedTeamId]);
   const scheduledLiveMatches = useMemo(() => liveMatches.filter((match) => !match.winner), [liveMatches]);
   const snapshots = useMemo(() => serverState?.snapshots ?? [], [serverState?.snapshots]);
   const staticGroupSnapshot = useMemo(() => initialGroupSnapshot(snapshots), [snapshots]);
@@ -1072,7 +1055,7 @@ export default function Home() {
         ? statisticalAnswers(stats)
         : forecastMode === "mixed"
           ? mixedAnswers(answers, stats, opinionWeight)
-          : answers;
+          : completePersonalAnswers(answers);
       const source = applyLiveEvidence(baseSource, completedLiveMatches, stats);
       const seed = Math.floor(Math.random() * 0xffffffff);
       try {
@@ -1154,6 +1137,25 @@ export default function Home() {
     }
     setAdminMessage(`Прогноз от ${created} удалён. Остальные данные не изменены.`);
     await loadServerState();
+  };
+
+  const exportSnapshotDiagnostics = async (snapshot: PredictionSnapshot) => {
+    setExportingSnapshotId(snapshot.id);
+    try {
+      const response = await fetch(`/api/snapshots/${snapshot.id}/export`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `ti2026-forecast-${snapshot.root_snapshot_id ?? snapshot.id}-diagnostics.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      window.alert("Не удалось выгрузить диагностику этого прогона. Попробуйте после обновления страницы.");
+    } finally {
+      setExportingSnapshotId(null);
+    }
   };
 
   const prepareRoundOne = async () => {
@@ -1345,7 +1347,13 @@ export default function Home() {
                 <div><b>{evaluation.adaptive.count ? `${evaluation.adaptive.correct}/${evaluation.adaptive.count}` : "—"}</b><span>ADAPTIVE · Brier {evaluation.adaptive.brier?.toFixed(3) ?? "—"} · LL {evaluation.adaptive.logLoss?.toFixed(3) ?? "—"}</span></div>
               </div>
               <div className="snapshot-teams">{snapshot.result.teams.slice(0, 8).map((team) => <span key={team.id}><TeamMark team={getTeam(team.id)} small />{team.name}<b>{team.qualify.toFixed(1)}%</b></span>)}</div>
-              {serverState?.isAdmin && <div className="snapshot-admin-row"><span>Удаляется только этот сохранённый прогон.</span><button type="button" onClick={() => void deleteSnapshot(snapshot)}>Удалить прогноз</button></div>}
+              <div className="snapshot-actions-row">
+                <span>JSON: все пары, признаки, коэффициенты, результаты и STATIC/ADAPTIVE-оценка.</span>
+                <div>
+                  <button className="snapshot-download-button" type="button" disabled={exportingSnapshotId === snapshot.id} onClick={() => void exportSnapshotDiagnostics(snapshot)}>{exportingSnapshotId === snapshot.id ? "Собираем…" : "Скачать диагностику"}</button>
+                  {serverState?.isAdmin && <button className="snapshot-delete-button" type="button" onClick={() => void deleteSnapshot(snapshot)}>Удалить прогноз</button>}
+                </div>
+              </div>
             </details>;
           })}</div> : <p className="history-empty">История появится после первого серверного прогона из режима администратора. Она не переписывается после получения результатов.</p>}
         </div>
@@ -1692,6 +1700,19 @@ export default function Home() {
               <span className="roster-badge roster-badge--different">Другой состав</span>
               <span className="roster-badge roster-badge--unknown">Не проверялся</span>
             </div>
+            {selectedTeamLiveMatches.length > 0 && <section className="ti-live-team-history">
+              <header><div><span>TI 2026 · ONLINE-СЛОЙ</span><h3>Матчи текущего турнира</h3></div><b>{selectedTeamLiveMatches.length} серий · в baseline не дублируются</b></header>
+              <p>Эти серии показаны в истории и ровно один раз участвуют в online Bradley–Terry обновлении. Сила соперников оценивается совместно по всей сетке результатов.</p>
+              <div>{selectedTeamLiveMatches.map((match) => {
+                const isTeamA = match.team_a === selectedTeamId;
+                const opponentId = isTeamA ? match.team_b : match.team_a;
+                const teamScore = isTeamA ? match.score_a : match.score_b;
+                const opponentScore = isTeamA ? match.score_b : match.score_a;
+                const won = match.winner === selectedTeamId;
+                const evidenceWeight = seriesEvidenceWeight(match, stats?.methodology.seriesInformation);
+                return <article key={match.id} className="ti-live-series-row"><time>{match.scheduled_at ? new Date(match.scheduled_at).toLocaleDateString("ru-RU", { day: "2-digit", month: "short" }) : `R${match.round}`}</time><span><TeamMark team={getTeam(opponentId)} small /><strong>{getTeam(opponentId).name}</strong><small>{match.stage === "swiss" ? `SW R${match.round}` : match.stage === "playin" ? "СТЫК" : "ПЛЕЙ-ОФФ"} · online-вес {evidenceWeight.toFixed(2)}</small></span><b className={won ? "series-win" : "series-loss"}>{teamScore ?? (won ? "W" : "L")}–{opponentScore ?? (won ? "L" : "W")}</b></article>;
+              })}</div>
+            </section>}
             <div className="tournament-history">
               {selectedTeamStats.tournaments.map((tournament, index) => (
                 <details key={tournament.leagueId} open={index === 0}>

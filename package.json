@@ -33,6 +33,8 @@
     "model:backtest": "node scripts/backtest-model.mjs",
     "model:sharpness": "node scripts/run-sharpness-arena.mjs",
     "model:train:all-pro": "python scripts/train-all-pro-team-model.py",
+    "model:train:live": "python scripts/train-live-map-model.py",
+    "model:train:live:windows": "py scripts/train-live-map-model.py",
     "model:train:nextgen": "python scripts/train-all-pro-team-model.py && python scripts/build-rich-draft-dataset.py && python scripts/train-draft-nextgen.py && python scripts/calibrate-nextgen-series.py",
     "model:train:nextgen:windows": "py scripts/train-all-pro-team-model.py && py scripts/build-rich-draft-dataset.py && py scripts/train-draft-nextgen.py && py scripts/calibrate-nextgen-series.py",
     "test": "npm run build && node --test tests/project.test.mjs",

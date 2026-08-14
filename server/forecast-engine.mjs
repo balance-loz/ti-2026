@@ -1,5 +1,7 @@
 import { convertSeriesProbability } from "./team-model.mjs";
 
+import { updateProbabilitiesWithLiveSeries } from "./live-team-update.mjs";
+
 export const TEAMS = [
   ["1w", "1w"], ["aurora", "Aurora"], ["betboom", "BETBOOM"], ["falcons", "Falcons"],
   ["gamerlegion", "GamerLegion"], ["l1ga", "L1ga"], ["lgd", "LGD"], ["liquid", "Liquid"],
@@ -65,29 +67,17 @@ function completePersonalAnswers(answers) {
   return result;
 }
 
-export function buildForecastSource({ answers, stats, matches, mode = "mixed", opinionWeight = 50 }) {
+export function buildForecastBase({ answers, stats, mode = "mixed", opinionWeight = 50 }) {
   const personal = completePersonalAnswers(answers || {});
   const statistical = Object.fromEntries(Object.entries(stats?.pairwise || {}).map(([key, value]) => [key, value.probabilityA]));
   const weight = opinionWeight / 100;
-  const base = mode === "stats" ? statistical : mode === "personal" ? personal : Object.fromEntries(Object.keys(personal).map((key) => [key, personal[key] * weight + (statistical[key] ?? personal[key]) * (1 - weight)]));
+  return mode === "stats" ? statistical : mode === "personal" ? personal : Object.fromEntries(Object.keys(personal).map((key) => [key, personal[key] * weight + (statistical[key] ?? personal[key]) * (1 - weight)]));
+}
+
+export function buildForecastSource({ answers, stats, matches, mode = "mixed", opinionWeight = 50 }) {
+  const base = buildForecastBase({ answers, stats, mode, opinionWeight });
   const calibration = { ...DEFAULT_CALIBRATION, ...(stats?.tournamentCalibration?.selected ?? {}) };
-  const strength = Object.fromEntries(TEAMS.map((team) => [team.id, 0]));
-  const direct = new Map();
-  for (const match of (matches || []).filter((item) => item.winner)) {
-    const p = storedProbability(match.team_a, match.team_b, base) ?? 50;
-    const outcome = match.winner === match.team_a ? 1 : 0;
-    const surprise = outcome - p / 100;
-    strength[match.team_a] += surprise * calibration.liveGlobal; strength[match.team_b] -= surprise * calibration.liveGlobal;
-    const key = pairKey(match.team_a, match.team_b);
-    const oriented = key.startsWith(`${match.team_a}|`) ? surprise : -surprise;
-    direct.set(key, (direct.get(key) || 0) + oriented * calibration.liveRematch);
-  }
-  const result = {};
-  for (const [key, value] of Object.entries(base)) {
-    const [a, b] = key.split("|");
-    result[key] = 100 / (1 + Math.exp(-(Math.log(Math.max(.03, value / 100) / Math.max(.03, 1 - value / 100)) + strength[a] - strength[b] + (direct.get(key) || 0))));
-  }
-  return result;
+  return updateProbabilitiesWithLiveSeries(base, matches, { liveGlobal: calibration.liveGlobal, seriesInformation: stats?.methodology?.seriesInformation });
 }
 
 function seededRandom(seed) {

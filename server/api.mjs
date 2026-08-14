@@ -10,6 +10,7 @@ import { scheduledSeriesFromCybersportHtml } from "./schedule-source.mjs";
 import { buildForecastSource, ROUND_ONE } from "./forecast-engine.mjs";
 import { predictTemporalDraft } from "./draft-inference.mjs";
 import { liveDraftsFromOpenDota } from "./live-drafts.mjs";
+import { buildSnapshotCalculationTrace, probabilityFor as diagnosticProbabilityFor, scoreDiagnosticMatch } from "./forecast-diagnostics.mjs";
 
 const PORT = Number(process.env.API_PORT || 3001);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "data");
@@ -34,6 +35,7 @@ const OFFICIAL_FORECAST_CONFIG = Object.freeze({ forecastMode: "stats", opinionW
 const TI_PLAYIN_START = Date.parse(process.env.TI_PLAYIN_START || "2026-08-17T00:00:00+08:00") / 1000;
 const TI_PLAYOFF_START = Date.parse(process.env.TI_PLAYOFF_START || "2026-08-20T00:00:00+08:00") / 1000;
 const DRAFT_TEMPORAL_MODEL = path.resolve(process.env.DRAFT_TEMPORAL_MODEL || "public/draft-temporal-model.json");
+const LIVE_MAP_MODEL = path.resolve(process.env.LIVE_MAP_MODEL || "public/live-map-model.json");
 const NEXTGEN_MODEL_FILES = {
   team: path.resolve(process.env.ALL_PRO_TEAM_MODEL || "public/all-pro-team-model.json"),
   draft: path.resolve(process.env.DRAFT_NEXTGEN_MODEL || "public/draft-nextgen-model.json"),
@@ -102,12 +104,33 @@ db.exec(`
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS live_draft_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id TEXT NOT NULL,
+    series_id TEXT,
+    phase TEXT NOT NULL,
+    state_hash TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    UNIQUE(match_id, state_hash)
+  );
+  CREATE TABLE IF NOT EXISTS live_draft_predictions (
+    match_id TEXT PRIMARY KEY,
+    series_id TEXT,
+    radiant_team TEXT NOT NULL,
+    dire_team TEXT NOT NULL,
+    picks_hash TEXT NOT NULL,
+    picks_json TEXT NOT NULL,
+    probability_radiant REAL NOT NULL CHECK(probability_radiant >= 0.01 AND probability_radiant <= 0.99),
+    model_id TEXT,
+    captured_at TEXT NOT NULL
+  );
 `);
 const snapshotColumns = new Set(db.prepare("PRAGMA table_info(prediction_snapshots)").all().map((row) => row.name));
-for (const [name, definition] of Object.entries({ inputs_json: "TEXT", snapshot_kind: "TEXT NOT NULL DEFAULT 'original'", root_snapshot_id: "INTEGER", parent_snapshot_id: "INTEGER", profile_key: "TEXT" })) {
+for (const [name, definition] of Object.entries({ inputs_json: "TEXT", diagnostics_json: "TEXT", snapshot_kind: "TEXT NOT NULL DEFAULT 'original'", root_snapshot_id: "INTEGER", parent_snapshot_id: "INTEGER", profile_key: "TEXT" })) {
   if (!snapshotColumns.has(name)) db.exec(`ALTER TABLE prediction_snapshots ADD COLUMN ${name} ${definition}`);
 }
-db.exec("CREATE INDEX IF NOT EXISTS idx_prediction_snapshots_root ON prediction_snapshots(root_snapshot_id, completed_match_count DESC); CREATE INDEX IF NOT EXISTS idx_prediction_snapshots_profile ON prediction_snapshots(profile_key, completed_match_count DESC)");
+db.exec("CREATE INDEX IF NOT EXISTS idx_prediction_snapshots_root ON prediction_snapshots(root_snapshot_id, completed_match_count DESC); CREATE INDEX IF NOT EXISTS idx_prediction_snapshots_profile ON prediction_snapshots(profile_key, completed_match_count DESC); CREATE INDEX IF NOT EXISTS idx_live_draft_snapshots_match ON live_draft_snapshots(match_id, observed_at DESC)");
 db.exec("PRAGMA optimize");
 
 let refreshProcess = null;
@@ -120,12 +143,66 @@ let autoSnapshotTimer = null;
 let pendingAutomaticSnapshotTrigger = null;
 const loginAttempts = new Map();
 let temporalModelCache = { mtimeMs: -1, value: null };
+let liveMapModelCache = { mtimeMs: -1, value: null };
 const json = (res, status, value) => {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   res.end(JSON.stringify(value));
 };
 const now = () => new Date().toISOString();
 const tokenHash = (token) => createHash("sha256").update(token).digest("hex");
+const livePicksHash = (game) => createHash("sha256").update(JSON.stringify([game.radiantPicks ?? [], game.direPicks ?? []])).digest("hex").slice(0, 20);
+
+function liveSnapshotPayload(game) {
+  return {
+    matchId: String(game.matchId),
+    phase: game.phase,
+    gameTime: Number(game.gameTime || 0),
+    radiantPicks: game.radiantPicks ?? [],
+    direPicks: game.direPicks ?? [],
+    radiantScore: Number(game.radiantScore || 0),
+    direScore: Number(game.direScore || 0),
+    radiantLead: Number.isFinite(Number(game.radiantLead)) ? Number(game.radiantLead) : null,
+    lastUpdateAt: game.lastUpdateAt ?? null,
+  };
+}
+
+function persistLiveDraftSnapshot(game, observedAt) {
+  const payload = liveSnapshotPayload(game);
+  const signature = JSON.stringify({
+    phase: payload.phase,
+    timeBucket: Math.floor(payload.gameTime / 30),
+    radiantPicks: payload.radiantPicks,
+    direPicks: payload.direPicks,
+    radiantScore: payload.radiantScore,
+    direScore: payload.direScore,
+    goldBucket: payload.radiantLead === null ? null : Math.round(payload.radiantLead / 250),
+  });
+  const stateHash = createHash("sha256").update(signature).digest("hex").slice(0, 24);
+  db.prepare("INSERT OR IGNORE INTO live_draft_snapshots(match_id,series_id,phase,state_hash,payload_json,observed_at) VALUES (?,?,?,?,?,?)")
+    .run(String(game.matchId), String(game.seriesId || ""), String(game.phase), stateHash, JSON.stringify(payload), observedAt);
+}
+
+function storedLiveDraftPrediction(matchId) {
+  const row = db.prepare("SELECT * FROM live_draft_predictions WHERE match_id = ?").get(String(matchId));
+  return row ? {
+    probabilityRadiant: Number(row.probability_radiant),
+    modelId: row.model_id || null,
+    picksHash: row.picks_hash,
+    capturedAt: row.captured_at,
+  } : null;
+}
+
+function liveDraftHistory(matchId, limit = 120) {
+  return db.prepare("SELECT payload_json,observed_at FROM live_draft_snapshots WHERE match_id = ? ORDER BY observed_at DESC LIMIT ?")
+    .all(String(matchId), Number(limit)).reverse().map((row) => ({ ...JSON.parse(row.payload_json), observedAt: row.observed_at }));
+}
+
+function decorateLiveDraft(game) {
+  const storedPrediction = storedLiveDraftPrediction(game.matchId);
+  const draftPrediction = storedPrediction?.picksHash === livePicksHash(game) ? storedPrediction : null;
+  return { ...game, draftPrediction, history: liveDraftHistory(game.matchId) };
+}
+
 const safeEqual = (a, b) => {
   const aa = Buffer.from(a); const bb = Buffer.from(b);
   return aa.length === bb.length && timingSafeEqual(aa, bb);
@@ -171,6 +248,16 @@ function currentTemporalModel() {
     temporalModelCache = { mtimeMs, value };
   }
   return temporalModelCache.value;
+}
+
+function currentLiveMapModel() {
+  const mtimeMs = statSync(LIVE_MAP_MODEL).mtimeMs;
+  if (liveMapModelCache.mtimeMs !== mtimeMs) {
+    const value = JSON.parse(readFileSync(LIVE_MAP_MODEL, "utf8"));
+    if (value.schemaVersion !== 1 || !value.modelId || !Array.isArray(value.coefficients)) throw new Error("invalid_live_map_model");
+    liveMapModelCache = { mtimeMs, value };
+  }
+  return liveMapModelCache.value;
 }
 
 function temporalModelMetadata(model) {
@@ -251,7 +338,104 @@ function insertSnapshot({ trigger, config, probabilities, result, stats, matches
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(trigger, config.forecastMode, Number(config.opinionWeight), result.iterations, result.seed, completedMatchCount, stats.generatedAt || null, JSON.stringify(probabilities), JSON.stringify(result), JSON.stringify(inputs), kind, rootId, parentId, key, stamp);
   const id = Number(inserted.lastInsertRowid);
   if (kind === "original" && !rootId) db.prepare("UPDATE prediction_snapshots SET root_snapshot_id=? WHERE id=?").run(id, id);
+  const resolvedRootId = rootId ?? id;
+  const trace = buildSnapshotCalculationTrace({ snapshotId: id, createdAt: stamp, trigger, kind, rootId: resolvedRootId, parentId, config, answers: inputs?.answers ?? {}, probabilities, result, stats, matches, exactAtSave: true });
+  db.prepare("UPDATE prediction_snapshots SET diagnostics_json=? WHERE id=?").run(JSON.stringify(trace), id);
   return id;
+}
+
+function parsedSnapshotRow(row) {
+  if (!row) return null;
+  let inputs = null; let diagnostics = null;
+  try { inputs = row.inputs_json ? JSON.parse(row.inputs_json) : null; } catch { inputs = null; }
+  try { diagnostics = row.diagnostics_json ? JSON.parse(row.diagnostics_json) : null; } catch { diagnostics = null; }
+  return { ...row, probabilities: JSON.parse(row.probabilities_json), result: JSON.parse(row.result_json), inputs, diagnostics };
+}
+
+function reconstructMatchesAtSnapshot(snapshot, matches) {
+  const cutoff = Date.parse(snapshot.created_at);
+  return matches.filter((match) => Date.parse(match.created_at) <= cutoff).map((match) => {
+    if (!match.winner || Date.parse(match.updated_at) <= cutoff) return match;
+    return { ...match, winner: null, score_a: null, score_b: null };
+  });
+}
+
+function aggregateDiagnosticScores(records, variant) {
+  const scores = records.map((record) => record[variant]).filter(Boolean);
+  return {
+    count: scores.length,
+    correct: scores.filter((score) => score.correct).length,
+    brier: scores.length ? scores.reduce((sum, score) => sum + score.brier, 0) / scores.length : null,
+    logLoss: scores.length ? scores.reduce((sum, score) => sum + score.logLoss, 0) / scores.length : null,
+  };
+}
+
+function snapshotExportBundle(requestedId) {
+  const requested = parsedSnapshotRow(db.prepare("SELECT * FROM prediction_snapshots WHERE id=?").get(requestedId));
+  if (!requested) return null;
+  const rootId = Number(requested.root_snapshot_id ?? requested.id);
+  const rows = db.prepare("SELECT * FROM prediction_snapshots WHERE root_snapshot_id=? OR id=? ORDER BY created_at,id").all(rootId, rootId).map(parsedSnapshotRow);
+  const root = rows.find((row) => Number(row.id) === rootId) ?? requested;
+  const allMatches = db.prepare("SELECT * FROM matches ORDER BY round,id").all();
+  const stats = JSON.parse(readFileSync(path.resolve("public/team-stats.json"), "utf8"));
+  const forecasts = rows.map((snapshot) => {
+    const trace = snapshot.diagnostics ?? buildSnapshotCalculationTrace({
+      snapshotId: snapshot.id,
+      createdAt: snapshot.created_at,
+      trigger: snapshot.trigger,
+      kind: snapshot.snapshot_kind,
+      rootId: snapshot.root_snapshot_id,
+      parentId: snapshot.parent_snapshot_id,
+      config: { forecastMode: snapshot.forecast_mode, opinionWeight: snapshot.opinion_weight, iterations: snapshot.iterations },
+      answers: snapshot.inputs?.answers ?? {},
+      probabilities: snapshot.probabilities,
+      result: snapshot.result,
+      stats,
+      matches: reconstructMatchesAtSnapshot(snapshot, allMatches),
+      exactAtSave: false,
+    });
+    return {
+      metadata: { id: snapshot.id, rootId, parentId: snapshot.parent_snapshot_id, kind: snapshot.snapshot_kind, trigger: snapshot.trigger, createdAt: snapshot.created_at, completedMatchCount: snapshot.completed_match_count, modelGeneratedAt: snapshot.model_generated_at },
+      calculationTrace: trace,
+      savedProbabilities: snapshot.probabilities,
+      simulationResult: snapshot.result,
+    };
+  });
+  const futureMatches = allMatches.filter((match) => match.winner && Date.parse(match.updated_at || match.created_at) > Date.parse(root.created_at));
+  const evaluatedMatches = futureMatches.map((match) => {
+    const cutoff = Date.parse(match.scheduled_at || match.created_at);
+    const adaptiveSnapshot = rows.filter((snapshot) => Date.parse(snapshot.created_at) <= cutoff).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id)[0] ?? null;
+    const staticProbability = diagnosticProbabilityFor(match.team_a, match.team_b, root.probabilities);
+    const adaptiveProbability = root.forecast_mode === "stats" && match.predicted_probability !== null && Number.isFinite(Number(match.predicted_probability))
+      ? Number(match.predicted_probability)
+      : adaptiveSnapshot ? diagnosticProbabilityFor(match.team_a, match.team_b, adaptiveSnapshot.probabilities) : null;
+    return {
+      match: { id: match.id, stage: match.stage, round: match.round, teamA: match.team_a, teamB: match.team_b, winner: match.winner, scoreA: match.score_a, scoreB: match.score_b, scheduledAt: match.scheduled_at, completedAt: match.updated_at },
+      static: scoreDiagnosticMatch(match, staticProbability),
+      adaptive: scoreDiagnosticMatch(match, adaptiveProbability),
+      adaptiveSnapshotId: adaptiveSnapshot?.id ?? null,
+    };
+  });
+  return {
+    schema: "ti2026.forecast-diagnostic-export",
+    schemaVersion: 1,
+    exportedAt: now(),
+    requestedSnapshotId: requestedId,
+    rootSnapshotId: rootId,
+    readme: [
+      "calculationTrace.pairs содержит разложение каждой матчевой вероятности и замороженные коэффициенты.",
+      "traceResidualPp около нуля подтверждает воспроизводимость сохранённой вероятности.",
+      "liveSeriesMarginal — условное leave-one-out влияние серии; строки коррелируют и не должны суммироваться.",
+      "evaluation сравнивает первоначальный STATIC с последней доступной до матча ADAPTIVE-ревизией.",
+      "exactAtSave=false означает, что старый trace реконструирован; savedProbabilities и simulationResult при этом остаются оригинальными.",
+    ],
+    forecasts,
+    evaluation: {
+      static: aggregateDiagnosticScores(evaluatedMatches, "static"),
+      adaptive: aggregateDiagnosticScores(evaluatedMatches, "adaptive"),
+      matches: evaluatedMatches,
+    },
+  };
 }
 
 function runForecastWorker(payload) {
@@ -487,7 +671,9 @@ async function refreshLiveDrafts({ force = false } = {}) {
       const rows = await response.json();
       const leagueMaps = await mapsPromise;
       const fetchedAt = now();
-      liveDraftCache = { games: liveDraftsFromOpenDota(rows, { leagueId: TI_LEAGUE_ID, nowSeconds: Date.parse(fetchedAt) / 1000, leagueMaps }), fetchedAt, error: null };
+      const games = liveDraftsFromOpenDota(rows, { leagueId: TI_LEAGUE_ID, nowSeconds: Date.parse(fetchedAt) / 1000, leagueMaps });
+      for (const game of games) persistLiveDraftSnapshot(game, fetchedAt);
+      liveDraftCache = { games: games.map(decorateLiveDraft), fetchedAt, error: null };
     } catch (error) {
       liveDraftCache = { ...liveDraftCache, error: error instanceof Error ? error.message : String(error) };
     } finally { liveDraftPromise = null; }
@@ -502,14 +688,49 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/health") {
       let nextgen = false;
       try { nextgen = Boolean(nextgenModelMetadata().team.modelId); } catch { nextgen = false; }
-      return json(res, 200, { ok: true, models: { temporal: Boolean(currentTemporalModel().modelId), nextgen } });
+      let liveMap = false;
+      try { liveMap = Boolean(currentLiveMapModel().modelId); } catch { liveMap = false; }
+      return json(res, 200, { ok: true, models: { temporal: Boolean(currentTemporalModel().modelId), nextgen, liveMap } });
     }
     if (req.method === "GET" && url.pathname === "/api/models/nextgen") return json(res, 200, nextgenModelMetadata());
     if (req.method === "GET" && url.pathname === "/api/draft/model") {
       try { return json(res, 200, temporalModelMetadata(currentTemporalModel())); }
       catch { return json(res, 503, { error: "temporal_model_unavailable" }); }
     }
+    if (req.method === "GET" && url.pathname === "/api/draft/live/model") {
+      try { return json(res, 200, currentLiveMapModel()); }
+      catch { return json(res, 503, { error: "live_map_model_unavailable" }); }
+    }
     if (req.method === "GET" && url.pathname === "/api/draft/live") return json(res, 200, await refreshLiveDrafts());
+    const liveDraftPredictionMatch = req.method === "POST" ? url.pathname.match(/^\/api\/draft\/live\/([^/]+)\/prediction$/) : null;
+    if (liveDraftPredictionMatch) {
+      if (!sameOrigin(req)) return json(res, 403, { error: "origin" });
+      const matchId = decodeURIComponent(liveDraftPredictionMatch[1]);
+      const state = await refreshLiveDrafts();
+      const game = state.games.find((item) => String(item.matchId) === String(matchId));
+      if (!game) return json(res, 404, { error: "live_match_not_found" });
+      if ((game.radiantPicks?.length ?? 0) !== 5 || (game.direPicks?.length ?? 0) !== 5) return json(res, 409, { error: "draft_not_complete" });
+      const data = await body(req);
+      const probabilityRadiant = Number(data.probabilityRadiant);
+      if (!Number.isFinite(probabilityRadiant) || probabilityRadiant < 0.01 || probabilityRadiant > 0.99) return json(res, 400, { error: "invalid_probability" });
+      const picksHash = livePicksHash(game);
+      const existing = storedLiveDraftPrediction(matchId);
+      if (existing && existing.picksHash !== picksHash && game.phase !== "draft") return json(res, 409, { error: "frozen_draft_mismatch" });
+      if (!existing || existing.picksHash !== picksHash) {
+        db.prepare("INSERT OR REPLACE INTO live_draft_predictions(match_id,series_id,radiant_team,dire_team,picks_hash,picks_json,probability_radiant,model_id,captured_at) VALUES (?,?,?,?,?,?,?,?,?)")
+          .run(String(matchId), String(game.seriesId || ""), game.radiantTeam, game.direTeam, picksHash, JSON.stringify({ radiant: game.radiantPicks, dire: game.direPicks }), probabilityRadiant, String(data.modelId || "").slice(0, 120) || null, now());
+      }
+      const prediction = storedLiveDraftPrediction(matchId);
+      liveDraftCache = { ...liveDraftCache, games: liveDraftCache.games.map((item) => String(item.matchId) === String(matchId) ? { ...item, draftPrediction: prediction } : item) };
+      return json(res, existing ? 200 : 201, prediction);
+    }
+    const snapshotExportMatch = req.method === "GET" ? url.pathname.match(/^\/api\/snapshots\/(\d+)\/export$/) : null;
+    if (snapshotExportMatch) {
+      const bundle = snapshotExportBundle(Number(snapshotExportMatch[1]));
+      if (!bundle) return json(res, 404, { error: "snapshot_not_found" });
+      res.setHeader("content-disposition", `attachment; filename="ti2026-forecast-${bundle.rootSnapshotId}-diagnostics.json"`);
+      return json(res, 200, bundle);
+    }
     if (req.method === "POST" && url.pathname === "/api/draft/predict") {
       if (!sameOrigin(req)) return json(res, 403, { error: "origin" });
       try {
@@ -598,8 +819,9 @@ const server = createServer(async (req, res) => {
         const config = { forecastMode: data.forecastMode || "mixed", opinionWeight: Number(data.opinionWeight || 0), iterations: data.iterations };
         const profileAnswers = data.answers && typeof data.answers === "object" ? data.answers : {};
         const matches = db.prepare("SELECT * FROM matches ORDER BY round,id").all();
+        const stats = JSON.parse(readFileSync(path.resolve("public/team-stats.json"), "utf8"));
         const key = profileKey(config.forecastMode, config.opinionWeight, profileAnswers);
-        const id = insertSnapshot({ trigger: data.trigger || "manual_run", config, probabilities: data.probabilities, result: data.result, stats: { generatedAt: data.modelGeneratedAt || null }, matches, inputs: { answers: profileAnswers, cutoffCompletedMatches: Number(data.completedMatchCount || 0), liveConstraintSignature: liveConstraintSignature(matches) }, kind: "original", key });
+        const id = insertSnapshot({ trigger: data.trigger || "manual_run", config, probabilities: data.probabilities, result: data.result, stats, matches, inputs: { answers: profileAnswers, cutoffCompletedMatches: Number(data.completedMatchCount || 0), liveConstraintSignature: liveConstraintSignature(matches) }, kind: "original", key });
         audit("snapshot_saved", { id, trigger: data.trigger || "manual_run", profileKey: key });
         return json(res, 201, { ok: true, id });
       }

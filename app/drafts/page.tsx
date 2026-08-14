@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { combineDraftSignals, combineLearnedDraftSignals } from "../../server/draft-combiner.mjs";
 import { predictTemporalDraft } from "../../server/draft-inference.mjs";
+import { assessLiveMap, estimateLiveMap } from "../../server/live-map-prediction.mjs";
 
 type Team = { id: string; name: string; short: string; color: string; logo: string };
 type Hero = {
@@ -91,29 +92,13 @@ type LiveDraft = {
   radiantPlayers: LivePlayer[]; direPlayers: LivePlayer[];
   gameTime: number; delay: number; radiantScore: number; direScore: number; lastUpdateAt: string | null; phase: "draft" | "game";
   radiantLead: number | null; spectators: number | null; seriesScoreRadiant: number; seriesScoreDire: number; seriesBestOf: number | null;
+  draftPrediction: { probabilityRadiant: number; modelId: string | null; picksHash: string; capturedAt: string } | null;
+  history: LiveDraftSnapshot[];
 };
 type LivePlayer = { accountId: number; heroId: number; name: string | null };
+type LiveDraftSnapshot = Pick<LiveDraft, "matchId" | "phase" | "gameTime" | "radiantPicks" | "direPicks" | "radiantScore" | "direScore" | "radiantLead" | "lastUpdateAt"> & { observedAt: string };
 type LiveDraftState = { games: LiveDraft[]; fetchedAt: string | null; error: string | null };
-
-function liveMapAssessment(game: LiveDraft) {
-  const goldLead = Number(game.radiantLead ?? 0);
-  const killLead = Number(game.radiantScore) - Number(game.direScore);
-  const aligned = !goldLead || !killLead || Math.sign(goldLead) === Math.sign(killLead);
-  const settled = game.phase === "game" && game.gameTime >= 10 * 60 && (
-    Math.abs(goldLead) >= 15_000
-    || (game.gameTime >= 20 * 60 && Math.abs(goldLead) >= 9_000 && Math.abs(killLead) >= 8 && aligned)
-    || (game.gameTime >= 35 * 60 && Math.abs(goldLead) >= 6_000 && aligned)
-  );
-  const leaderSide = Math.abs(goldLead) >= 1_000 ? (goldLead > 0 ? "radiant" : "dire") : Math.abs(killLead) >= 3 ? (killLead > 0 ? "radiant" : "dire") : null;
-  const leader = leaderSide === "radiant" ? game.radiantTeam : leaderSide === "dire" ? game.direTeam : null;
-  return {
-    goldLead,
-    killLead,
-    leader,
-    settled,
-    status: game.phase === "draft" ? "draft" : settled ? "settled" : "in_progress",
-  } as const;
-}
+type LiveMapModel = { modelId: string; status: "experimental"; coefficients: number[]; minuteRange: number[]; training: { maps: number; snapshots: number; test: number }; test: { model: { logLoss: number; accuracy: number }; frozenPrior: { logLoss: number; accuracy: number } } };
 
 function compactGold(value: number) {
   const absolute = Math.abs(value);
@@ -364,12 +349,18 @@ export default function DraftsPage() {
   const [liveDrafts, setLiveDrafts] = useState<LiveDraftState>({ games: [], fetchedAt: null, error: null });
   const [liveDraftId, setLiveDraftId] = useState<string | null>(null);
   const [lastSelectedLiveDraft, setLastSelectedLiveDraft] = useState<LiveDraft | null>(null);
+  const [liveMapModel, setLiveMapModel] = useState<LiveMapModel | null>(null);
 
   useEffect(() => {
     Promise.all([
       fetch("/draft-stats.json").then((response) => response.ok ? response.json() : Promise.reject()),
       fetch("/team-stats.json").then((response) => response.ok ? response.json() : Promise.reject()),
     ]).then(([draft, teams]) => { setDraftStats(draft); setTeamStats(teams); }).catch(() => setLoadError(true));
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/draft/live/model").then((response) => response.ok ? response.json() : Promise.reject())
+      .then((model: LiveMapModel) => setLiveMapModel(model)).catch(() => setLiveMapModel(null));
   }, []);
 
   useEffect(() => {
@@ -385,7 +376,6 @@ export default function DraftsPage() {
 
   const selectedLiveDraft = liveDrafts.games.find((game) => game.matchId === liveDraftId) ?? null;
   const boundLiveDraft = selectedLiveDraft ?? (lastSelectedLiveDraft?.matchId === liveDraftId ? lastSelectedLiveDraft : null);
-  const selectedLiveAssessment = selectedLiveDraft ? liveMapAssessment(selectedLiveDraft) : null;
   useEffect(() => {
     if (!selectedLiveDraft) return;
     setLastSelectedLiveDraft(selectedLiveDraft);
@@ -430,6 +420,28 @@ export default function DraftsPage() {
     return matchesSearch && (attribute === "all" || hero.primaryAttribute === normalizedAttribute);
   }).sort((a, b) => b.proPicks + b.proBans - a.proPicks - a.proBans || a.name.localeCompare(b.name)), [draftStats, search, attribute]);
   const result = useMemo(() => calculateDraft(draftStats, teamStats, temporalModel, temporalPrediction, teamA, teamB, radiant, picksA, picksB, boundLiveDraft), [draftStats, teamStats, temporalModel, temporalPrediction, teamA, teamB, radiant, picksA, picksB, boundLiveDraft]);
+  const frozenDraftProbability = selectedLiveDraft?.draftPrediction?.probabilityRadiant ?? result.probability;
+  const liveEstimate = selectedLiveDraft ? estimateLiveMap(liveMapModel, { draftProbabilityRadiant: frozenDraftProbability, game: selectedLiveDraft }) : null;
+  const selectedLiveAssessment = liveEstimate?.assessment ?? (selectedLiveDraft ? assessLiveMap(selectedLiveDraft) : null);
+  const liveTimeline = selectedLiveDraft && liveMapModel ? selectedLiveDraft.history.flatMap((snapshot) => {
+    const estimate = estimateLiveMap(liveMapModel, { draftProbabilityRadiant: frozenDraftProbability, game: { ...snapshot, radiantTeam: selectedLiveDraft.radiantTeam, direTeam: selectedLiveDraft.direTeam } });
+    return estimate.liveProbabilityRadiant === null ? [] : [{ ...snapshot, probabilityRadiant: estimate.liveProbabilityRadiant }];
+  }) : [];
+
+  useEffect(() => {
+    if (!selectedLiveDraft || selectedLiveDraft.draftPrediction || selectedLiveDraft.radiantPicks.length !== 5 || selectedLiveDraft.direPicks.length !== 5) return;
+    if (!draftStats || !teamStats || (temporalModel && !temporalPrediction)) return;
+    const controller = new AbortController();
+    fetch(`/api/draft/live/${encodeURIComponent(selectedLiveDraft.matchId)}/prediction`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ probabilityRadiant: result.probability, modelId: temporalPrediction?.modelId ?? temporalModel?.modelId ?? "active-draft-combiner" }),
+      signal: controller.signal,
+    }).then((response) => response.ok ? response.json() : Promise.reject())
+      .then((prediction) => setLiveDrafts((state) => ({ ...state, games: state.games.map((game) => game.matchId === selectedLiveDraft.matchId ? { ...game, draftPrediction: prediction } : game) })))
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [selectedLiveDraft, draftStats, teamStats, temporalModel, temporalPrediction, result.probability]);
 
   const chooseHero = (heroId: number) => {
     if (selectedLiveDraft) return;
@@ -457,6 +469,7 @@ export default function DraftsPage() {
   const reset = () => { setPicksA(emptyDraft()); setPicksB(emptyDraft()); setActive({ side: "a", index: 0 }); };
   const firstTeam = teamById(teamA);
   const secondTeam = teamById(teamB);
+  const displayedDraftProbability = selectedLiveDraft ? frozenDraftProbability : result.probability;
   const selectedLeaderTeam = selectedLiveAssessment?.leader ? teamById(selectedLiveAssessment.leader) : null;
   const selectedGameClock = selectedLiveDraft ? `${Math.max(0, Math.floor(selectedLiveDraft.gameTime / 60))}:${String(Math.max(0, selectedLiveDraft.gameTime % 60)).padStart(2, "0")}` : null;
 
@@ -479,14 +492,14 @@ export default function DraftsPage() {
       <header><div><p className="eyebrow"><i /> LIVE · THE INTERNATIONAL</p><h2>Драфты прямо сейчас</h2></div><span>{liveDrafts.error ? "Источник временно недоступен" : liveDrafts.games.length ? `Обновление каждые 5 сек · задержка источника ${Math.max(...liveDrafts.games.map((game) => game.delay), 0)} сек` : "Активных карт с известными командами пока нет"}</span></header>
       {liveDrafts.games.length ? <div>{liveDrafts.games.map((game) => {
         const radiantTeam = teamById(game.radiantTeam); const direTeam = teamById(game.direTeam); const selected = game.matchId === liveDraftId;
-        const minutes = Math.max(0, Math.floor(game.gameTime / 60)); const seconds = Math.max(0, game.gameTime % 60); const assessment = liveMapAssessment(game);
+        const minutes = Math.max(0, Math.floor(game.gameTime / 60)); const seconds = Math.max(0, game.gameTime % 60); const assessment = assessLiveMap(game);
         const leader = assessment.leader ? teamById(assessment.leader) : null;
-        const goldLeader = assessment.goldLead >= 0 ? radiantTeam : direTeam;
+        const goldLeader = Number(assessment.goldLead ?? 0) >= 0 ? radiantTeam : direTeam;
         return <button type="button" className={`${selected ? "is-selected" : ""} live-game--${assessment.status}`} key={game.matchId} onClick={() => setLiveDraftId(selected ? null : game.matchId)}>
           <span><TeamLogo team={radiantTeam} /><b>{radiantTeam.name}</b></span>
           <strong>{game.phase === "draft" ? "ДРАФТ" : `${minutes}:${String(seconds).padStart(2, "0")}`}<small>{game.radiantPicks.length + game.direPicks.length}/10 пиков</small></strong>
           <span><b>{direTeam.name}</b><TeamLogo team={direTeam} /></span>
-          <div className="live-game-stats"><b>СЕРИЯ {game.seriesScoreRadiant}:{game.seriesScoreDire}{game.seriesBestOf ? ` · BO${game.seriesBestOf}` : ""}</b>{game.phase === "game" ? <><span>УБИЙСТВА {game.radiantScore}:{game.direScore}</span><span>ЗОЛОТО {goldLeader.short} {compactGold(Math.abs(assessment.goldLead))}</span><strong>{leader ? `${leader.name} ведёт сейчас` : "карта пока равная"}</strong></> : <span>ожидаем начало карты</span>}</div>
+          <div className="live-game-stats"><b>СЕРИЯ {game.seriesScoreRadiant}:{game.seriesScoreDire}{game.seriesBestOf ? ` · BO${game.seriesBestOf}` : ""}</b>{game.phase === "game" ? <><span>УБИЙСТВА {game.radiantScore}:{game.direScore}</span><span>ЗОЛОТО {game.radiantLead === null ? "—" : `${goldLeader.short} ${compactGold(Math.abs(Number(assessment.goldLead ?? 0)))}`}</span><strong>{leader ? `${leader.name} ведёт сейчас` : "карта пока равная"}</strong></> : <span>ожидаем начало карты</span>}</div>
           <em>{selected ? "ПОДКЛЮЧЕНО" : assessment.settled ? "ИСХОД СЛОЖИЛСЯ" : game.phase === "game" ? "LIVE · NO BET" : "СМОТРЕТЬ"}</em>
         </button>;
       })}</div> : null}
@@ -508,11 +521,13 @@ export default function DraftsPage() {
         </article>
         <article className={`draft-result-card ${selectedLiveAssessment ? `draft-result-card--${selectedLiveAssessment.status}` : ""}`}>
           <p>{selectedLiveDraft ? selectedLiveDraft.phase === "draft" ? "LIVE · ПРОГНОЗ ПО ДРАФТУ" : "ЗАМОРОЖЕННЫЙ ПРОГНОЗ ПО ДРАФТУ" : "ПРОГНОЗ НА КАРТУ"}</p>
-          {selectedLiveDraft && selectedLiveAssessment ? <div className="live-state-summary"><header><b>СОСТОЯНИЕ КАРТЫ</b><em className={`live-state-summary--${selectedLiveAssessment.status}`}>{selectedLiveDraft.phase === "draft" ? "ДРАФТ" : selectedLiveAssessment.settled ? "NO BET · ИСХОД СЛОЖИЛСЯ" : "LIVE · NO BET"}</em></header><strong>{selectedLiveDraft.phase === "draft" ? "Карта ещё не началась" : selectedLeaderTeam ? `${selectedLeaderTeam.name} ведёт сейчас` : "Карта пока близкая"}</strong><div><span><b>{selectedLiveDraft.phase === "draft" ? "—" : selectedGameClock}</b>время</span><span><b>{selectedLiveDraft.radiantScore}:{selectedLiveDraft.direScore}</b>убийства R:D</span><span><b>{selectedLiveDraft.radiantLead === null ? "—" : compactGold(selectedLiveDraft.radiantLead)}</b>золото Radiant</span><span><b>{selectedLiveDraft.seriesScoreRadiant}:{selectedLiveDraft.seriesScoreDire}</b>счёт серии R:D</span></div>{selectedLiveDraft.spectators !== null ? <small>{selectedLiveDraft.spectators.toLocaleString("ru-RU")} зрителей в OpenDota live · задержка {selectedLiveDraft.delay} сек.</small> : <small>Задержка источника {selectedLiveDraft.delay} сек.</small>}</div> : null}
-          <div className="draft-probability"><b style={{ color: firstTeam.color }}>{(result.probability * 100).toFixed(1)}%</b><span>—</span><b style={{ color: secondTeam.color }}>{((1 - result.probability) * 100).toFixed(1)}%</b></div>
-          <div className="draft-probability-bar"><i style={{ width: `${result.probability * 100}%`, background: firstTeam.color }} /><i style={{ background: secondTeam.color }} /></div>
-          <strong>{selectedLiveDraft?.phase === "game" ? `До старта модель выбирала ${result.probability >= 0.5 ? firstTeam.name : secondTeam.name}` : `${result.probability >= 0.5 ? firstTeam.name : secondTeam.name} — фаворит карты`}</strong>
-          <small>{selectedLiveDraft?.phase === "game" ? "После начала карты это не сигнал для ставки: live-состояние показано отдельно и не подмешано в драфтовую модель. " : ""}Уверенность: {result.confidence}. Базовый прогноз без пиков — {(result.base * 100).toFixed(1)}% на {firstTeam.short}.</small>
+          {selectedLiveDraft && selectedLiveAssessment ? <div className="live-state-summary"><header><b>СОСТОЯНИЕ КАРТЫ</b><em className={`live-state-summary--${selectedLiveAssessment.status}`}>{selectedLiveDraft.phase === "draft" ? "ДРАФТ" : selectedLiveAssessment.stale ? "LIVE-FEED УСТАРЕЛ" : selectedLiveAssessment.settled ? "NO BET · ИСХОД СЛОЖИЛСЯ" : "LIVE · НАБЛЮДЕНИЕ"}</em></header><strong>{selectedLiveDraft.phase === "draft" ? "Карта ещё не началась" : selectedLeaderTeam ? `${selectedLeaderTeam.name} ведёт сейчас` : "Карта пока близкая"}</strong><div><span><b>{selectedLiveDraft.phase === "draft" ? "—" : selectedGameClock}</b>время</span><span><b>{selectedLiveDraft.radiantScore}:{selectedLiveDraft.direScore}</b>убийства R:D</span><span><b>{selectedLiveDraft.radiantLead === null ? "—" : compactGold(selectedLiveDraft.radiantLead)}</b>золото Radiant</span><span><b>{selectedLiveDraft.seriesScoreRadiant}:{selectedLiveDraft.seriesScoreDire}</b>счёт серии R:D</span></div>{selectedLiveDraft.spectators !== null ? <small>{selectedLiveDraft.spectators.toLocaleString("ru-RU")} зрителей в OpenDota live · задержка {selectedLiveDraft.delay} сек.</small> : <small>Задержка источника {selectedLiveDraft.delay} сек.</small>}</div> : null}
+          {selectedLiveDraft ? <div className="live-probability-stack"><span><small>ЗАМОРОЖЕНО ПОСЛЕ ДРАФТА</small><b>{(displayedDraftProbability * 100).toFixed(1)}% {firstTeam.short}</b><em>{selectedLiveDraft.draftPrediction ? new Date(selectedLiveDraft.draftPrediction.capturedAt).toLocaleTimeString("ru-RU") : "фиксируем…"}</em></span><i>→</i><span><small>СОСТОЯНИЕ КАРТЫ</small><b>{liveEstimate?.liveProbabilityRadiant === null || liveEstimate?.liveProbabilityRadiant === undefined ? "ждём 10:00" : `${(liveEstimate.liveProbabilityRadiant * 100).toFixed(1)}% ${firstTeam.short}`}</b><em>{liveEstimate?.availability === "extrapolated_after_20" ? "экстраполяция после 20:00" : liveEstimate?.liveProbabilityRadiant === null || liveEstimate?.liveProbabilityRadiant === undefined ? "до 10:00 не оцениваем" : `${liveEstimate.stateImpactPp! >= 0 ? "+" : ""}${liveEstimate.stateImpactPp!.toFixed(1)} п.п. от состояния`}</em></span></div> : null}
+          <div className="draft-probability"><b style={{ color: firstTeam.color }}>{(displayedDraftProbability * 100).toFixed(1)}%</b><span>—</span><b style={{ color: secondTeam.color }}>{((1 - displayedDraftProbability) * 100).toFixed(1)}%</b></div>
+          <div className="draft-probability-bar"><i style={{ width: `${displayedDraftProbability * 100}%`, background: firstTeam.color }} /><i style={{ background: secondTeam.color }} /></div>
+          <strong>{selectedLiveDraft?.phase === "game" ? `По завершённому драфту модель выбирала ${displayedDraftProbability >= 0.5 ? firstTeam.name : secondTeam.name}` : `${displayedDraftProbability >= 0.5 ? firstTeam.name : secondTeam.name} — фаворит карты`}</strong>
+          <small>{selectedLiveDraft?.phase === "game" ? "Верхняя вероятность заморожена и больше не меняется; live-оценка справа использует только последующий перевес по золоту. Это наблюдение, не сигнал для ставки. " : ""}Уверенность: {result.confidence}. Базовый прогноз без пиков — {(result.base * 100).toFixed(1)}% на {firstTeam.short}.</small>
+          {selectedLiveDraft && liveTimeline.length ? <div className="live-probability-timeline"><header><b>ИСТОРИЯ LIVE-ОЦЕНКИ</b><span>{liveTimeline.length} сохранённых срезов</span></header><div>{liveTimeline.slice(-12).map((point) => <span key={`${point.observedAt}-${point.gameTime}`} title={`${Math.floor(point.gameTime / 60)}:${String(point.gameTime % 60).padStart(2, "0")} · ${(point.probabilityRadiant * 100).toFixed(1)}% ${firstTeam.name}`}><i style={{ height: `${Math.max(8, Math.min(92, point.probabilityRadiant * 100))}%` }} /><small>{Math.floor(point.gameTime / 60)}′</small></span>)}</div></div> : null}
           <button type="button" onClick={() => selectedLiveDraft ? setLiveDraftId(null) : reset()}>{selectedLiveDraft ? "Отключить LIVE" : "Сбросить пики"}</button>
         </article>
         <article className={`draft-lineup draft-lineup--dire ${active.side === "b" ? "is-active" : ""}`}>
