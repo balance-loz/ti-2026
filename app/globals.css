@@ -899,3 +899,15 @@ button:disabled, input:disabled { cursor: not-allowed; opacity: .5; }
 .fusion-policy{display:grid;grid-template-columns:repeat(4,1fr);margin:72px clamp(20px,4vw,64px);gap:1px;background:#ffffff16}.fusion-policy article{background:#101412;padding:30px}.fusion-policy article>b{color:#8dff73;font-size:11px}.fusion-policy h3{font-size:18px;margin:20px 0 10px}.fusion-policy p{font-size:12px;line-height:1.6;color:#7c857e}.fusion-page>footer{padding:38px clamp(20px,4vw,64px);display:flex;align-items:center;justify-content:space-between;border-top:1px solid #ffffff18}.fusion-page>footer p{color:#687169;font-size:11px}.fusion-page>footer a{color:#8dff73;text-decoration:none;font-size:12px}
 @media(max-width:900px){.fusion-topbar nav{display:none}.fusion-hero{grid-template-columns:1fr;padding-top:46px}.fusion-metrics{grid-template-columns:repeat(2,1fr)}.fusion-policy{grid-template-columns:repeat(2,1fr)}.fusion-decision-rule{grid-template-columns:1fr}.fusion-decision-rule article{border-right:0;border-bottom:1px solid #ffffff14}}
 @media(max-width:560px){.fusion-topbar{height:62px}.fusion-topbar .live-pill{font-size:9px}.fusion-hero h1{font-size:52px}.fusion-hero aside>div{gap:10px;flex-wrap:wrap}.fusion-metrics{grid-template-columns:1fr}.fusion-metrics article{border-right:0;border-bottom:1px solid #ffffff14}.fusion-panel{margin:28px 12px}.fusion-policy{grid-template-columns:1fr;margin:42px 12px}.fusion-page>footer{align-items:flex-start;gap:18px;flex-direction:column}}
+
+/* Strong result contrast in the Swiss history matrix. */
+.fusion-history-table td.is-won{background:linear-gradient(135deg,#1d4d2b 0%,#153520 100%);box-shadow:inset 4px 0 0 #61ed79,inset 0 0 0 1px #61ed7940}
+.fusion-history-table td.is-lost{background:linear-gradient(135deg,#522126 0%,#35171a 100%);box-shadow:inset 4px 0 0 #ff626c,inset 0 0 0 1px #ff626c42}
+.fusion-history-table td.is-live{background:#8dff7320;box-shadow:inset 4px 0 0 #8dff73}
+.fusion-history-table td.is-won .fusion-round-match>small{color:#9bffa9}
+.fusion-history-table td.is-lost .fusion-round-match>small{color:#ff9aa0}
+.fusion-round-match:hover,.fusion-round-match.is-open{background:#ffffff0b;box-shadow:inset 0 0 0 2px #dce6de70}
+.fusion-history-table td.is-won .fusion-round-match.is-open{box-shadow:inset 0 0 0 2px #8dff73}
+.fusion-history-table td.is-lost .fusion-round-match.is-open{box-shadow:inset 0 0 0 2px #ff747c}
+.fusion-outcome.is-qualified{border-color:#61ed79;color:#c4ffcc;background:#1d4d2b}
+.fusion-outcome.is-eliminated{border-color:#ff626c;color:#ffd3d6;background:#522126}
