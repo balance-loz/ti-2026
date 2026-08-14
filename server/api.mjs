@@ -11,6 +11,8 @@ import { buildForecastSource, ROUND_ONE } from "./forecast-engine.mjs";
 import { predictTemporalDraft } from "./draft-inference.mjs";
 import { liveDraftsFromOpenDota } from "./live-drafts.mjs";
 import { buildSnapshotCalculationTrace, probabilityFor as diagnosticProbabilityFor, scoreDiagnosticMatch } from "./forecast-diagnostics.mjs";
+import { combinedSeriesForecast, orientedProbability } from "./combined-forecast.mjs";
+import { estimateLiveMap } from "./live-map-prediction.mjs";
 
 const PORT = Number(process.env.API_PORT || 3001);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "data");
@@ -23,6 +25,7 @@ const TI_LEAGUE_ID = Number(process.env.TI_LEAGUE_ID || 19719);
 const LIVE_SYNC_ENABLED = process.env.LIVE_SYNC_ENABLED !== "false";
 const LIVE_SYNC_INTERVAL_MINUTES = Math.max(2, Number(process.env.LIVE_SYNC_INTERVAL_MINUTES || 10));
 const LIVE_DRAFT_INTERVAL_SECONDS = Math.max(5, Number(process.env.LIVE_DRAFT_INTERVAL_SECONDS || 10));
+const MAP_DETAIL_SYNC_LIMIT = Math.max(0, Number(process.env.MAP_DETAIL_SYNC_LIMIT || 12));
 const OPENDOTA_API_URL = process.env.OPENDOTA_API_URL || "https://api.opendota.com/api";
 const SCHEDULE_SYNC_ENABLED = process.env.SCHEDULE_SYNC_ENABLED !== "false";
 const SCHEDULE_SOURCE_URL = process.env.SCHEDULE_SOURCE_URL || "https://www.cybersport.ru/tournaments/dota-2/the-international-2026";
@@ -125,12 +128,29 @@ db.exec(`
     model_id TEXT,
     captured_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS tournament_maps (
+    match_id TEXT PRIMARY KEY,
+    series_id TEXT,
+    radiant_team TEXT NOT NULL,
+    dire_team TEXT NOT NULL,
+    winner TEXT,
+    start_time INTEGER,
+    duration INTEGER,
+    patch INTEGER,
+    first_pick_team TEXT,
+    picks_json TEXT,
+    bans_json TEXT,
+    draft_json TEXT,
+    players_json TEXT,
+    updated_at TEXT NOT NULL
+  );
 `);
 const snapshotColumns = new Set(db.prepare("PRAGMA table_info(prediction_snapshots)").all().map((row) => row.name));
 for (const [name, definition] of Object.entries({ inputs_json: "TEXT", diagnostics_json: "TEXT", snapshot_kind: "TEXT NOT NULL DEFAULT 'original'", root_snapshot_id: "INTEGER", parent_snapshot_id: "INTEGER", profile_key: "TEXT" })) {
   if (!snapshotColumns.has(name)) db.exec(`ALTER TABLE prediction_snapshots ADD COLUMN ${name} ${definition}`);
 }
 db.exec("CREATE INDEX IF NOT EXISTS idx_prediction_snapshots_root ON prediction_snapshots(root_snapshot_id, completed_match_count DESC); CREATE INDEX IF NOT EXISTS idx_prediction_snapshots_profile ON prediction_snapshots(profile_key, completed_match_count DESC); CREATE INDEX IF NOT EXISTS idx_live_draft_snapshots_match ON live_draft_snapshots(match_id, observed_at DESC)");
+db.exec("CREATE INDEX IF NOT EXISTS idx_tournament_maps_series ON tournament_maps(series_id,start_time,match_id)");
 db.exec("PRAGMA optimize");
 
 let refreshProcess = null;
@@ -180,6 +200,13 @@ function persistLiveDraftSnapshot(game, observedAt) {
   const stateHash = createHash("sha256").update(signature).digest("hex").slice(0, 24);
   db.prepare("INSERT OR IGNORE INTO live_draft_snapshots(match_id,series_id,phase,state_hash,payload_json,observed_at) VALUES (?,?,?,?,?,?)")
     .run(String(game.matchId), String(game.seriesId || ""), String(game.phase), stateHash, JSON.stringify(payload), observedAt);
+  db.prepare(`INSERT INTO tournament_maps(match_id,series_id,radiant_team,dire_team,picks_json,players_json,updated_at)
+    VALUES (?,?,?,?,?,?,?) ON CONFLICT(match_id) DO UPDATE SET
+    series_id=excluded.series_id,radiant_team=excluded.radiant_team,dire_team=excluded.dire_team,
+    picks_json=excluded.picks_json,players_json=excluded.players_json,updated_at=excluded.updated_at`)
+    .run(String(game.matchId), String(game.seriesId || ""), game.radiantTeam, game.direTeam,
+      JSON.stringify({ radiant: game.radiantPicks ?? [], dire: game.direPicks ?? [] }),
+      JSON.stringify({ radiant: game.radiantPlayers ?? [], dire: game.direPlayers ?? [] }), observedAt);
 }
 
 function storedLiveDraftPrediction(matchId) {
@@ -596,6 +623,69 @@ function persistLiveSeries(series) {
   return "inserted";
 }
 
+function persistTournamentMap(map, detail = null) {
+  const source = detail ?? map;
+  const radiantTeam = OPENDOTA_TEAMS.get(Number(source.radiant_team_id ?? map.radiant_team_id));
+  const direTeam = OPENDOTA_TEAMS.get(Number(source.dire_team_id ?? map.dire_team_id));
+  if (!radiantTeam || !direTeam || radiantTeam === direTeam || !map.match_id) return false;
+  const events = Array.isArray(source.picks_bans) ? [...source.picks_bans].sort((a, b) => Number(a.order) - Number(b.order)) : null;
+  const picks = events ? {
+    radiant: events.filter((event) => event.is_pick && Number(event.team) === 0).map((event) => Number(event.hero_id)),
+    dire: events.filter((event) => event.is_pick && Number(event.team) === 1).map((event) => Number(event.hero_id)),
+  } : null;
+  const bans = events ? {
+    radiant: events.filter((event) => !event.is_pick && Number(event.team) === 0).map((event) => Number(event.hero_id)),
+    dire: events.filter((event) => !event.is_pick && Number(event.team) === 1).map((event) => Number(event.hero_id)),
+  } : null;
+  const firstPick = events?.find((event) => event.is_pick);
+  const winner = typeof source.radiant_win === "boolean" ? (source.radiant_win ? radiantTeam : direTeam) : null;
+  const players = Array.isArray(source.players) ? source.players.slice(0, 10).map((player) => ({
+    accountId: Number(player.account_id || 0), heroId: Number(player.hero_id || 0), slot: Number(player.player_slot),
+    name: player.name ? String(player.name) : null,
+  })) : null;
+  db.prepare(`INSERT INTO tournament_maps(match_id,series_id,radiant_team,dire_team,winner,start_time,duration,patch,first_pick_team,picks_json,bans_json,draft_json,players_json,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(match_id) DO UPDATE SET
+    series_id=excluded.series_id,radiant_team=excluded.radiant_team,dire_team=excluded.dire_team,winner=COALESCE(excluded.winner,tournament_maps.winner),
+    start_time=COALESCE(excluded.start_time,tournament_maps.start_time),duration=COALESCE(excluded.duration,tournament_maps.duration),
+    patch=COALESCE(excluded.patch,tournament_maps.patch),first_pick_team=COALESCE(excluded.first_pick_team,tournament_maps.first_pick_team),
+    picks_json=COALESCE(excluded.picks_json,tournament_maps.picks_json),bans_json=COALESCE(excluded.bans_json,tournament_maps.bans_json),
+    draft_json=COALESCE(excluded.draft_json,tournament_maps.draft_json),players_json=COALESCE(excluded.players_json,tournament_maps.players_json),updated_at=excluded.updated_at`)
+    .run(String(map.match_id), String(source.series_id ?? map.series_id ?? ""), radiantTeam, direTeam, winner,
+      Number(source.start_time || map.start_time || 0) || null, Number(source.duration || map.duration || 0) || null,
+      Number(source.patch || 0) || null, firstPick ? (Number(firstPick.team) === 0 ? "radiant" : "dire") : null,
+      picks ? JSON.stringify(picks) : null, bans ? JSON.stringify(bans) : null, events ? JSON.stringify(events) : null,
+      players ? JSON.stringify(players) : null, now());
+  return true;
+}
+
+async function hydrateTournamentMapDetails(maps) {
+  if (!MAP_DETAIL_SYNC_LIMIT) return { requested: 0, saved: 0, failed: 0, remaining: 0 };
+  const missing = (maps || []).filter((map) => !db.prepare("SELECT draft_json FROM tournament_maps WHERE match_id=? AND draft_json IS NOT NULL").get(String(map.match_id)));
+  const queue = missing.slice(0, MAP_DETAIL_SYNC_LIMIT);
+  let saved = 0; let failed = 0;
+  for (const map of queue) {
+    try {
+      const response = await fetch(`${OPENDOTA_API_URL}/matches/${map.match_id}`, { headers: { "user-agent": "ti-2026-predictor/1.0 (github.com/balance-loz/ti-2026)" }, signal: AbortSignal.timeout(20_000) });
+      if (!response.ok) throw new Error(`OpenDota match ${map.match_id} HTTP ${response.status}`);
+      if (persistTournamentMap(map, await response.json())) saved += 1;
+    } catch { failed += 1; }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return { requested: queue.length, saved, failed, remaining: Math.max(0, missing.length - saved) };
+}
+
+function parsedTournamentMaps() {
+  return db.prepare(`SELECT map.*,prediction.probability_radiant,prediction.model_id,prediction.captured_at
+    FROM tournament_maps map LEFT JOIN live_draft_predictions prediction ON prediction.match_id=map.match_id
+    ORDER BY map.start_time,map.match_id`).all().map((row) => ({
+      matchId: row.match_id, seriesId: row.series_id, radiantTeam: row.radiant_team, direTeam: row.dire_team,
+      winner: row.winner, startTime: row.start_time, duration: row.duration, patch: row.patch, firstPickTeam: row.first_pick_team,
+      picks: row.picks_json ? JSON.parse(row.picks_json) : null, bans: row.bans_json ? JSON.parse(row.bans_json) : null,
+      draft: row.draft_json ? JSON.parse(row.draft_json) : null, players: row.players_json ? JSON.parse(row.players_json) : null,
+      draftPrediction: row.probability_radiant === null ? null : { probabilityRadiant: Number(row.probability_radiant), modelId: row.model_id, capturedAt: row.captured_at },
+    }));
+}
+
 async function syncLiveMatches(trigger = "timer") {
   if (liveSyncPromise) return liveSyncPromise;
   liveSyncPromise = (async () => {
@@ -617,7 +707,7 @@ async function syncLiveMatches(trigger = "timer") {
       if (resultError && (!SCHEDULE_SYNC_ENABLED || scheduleError)) throw new Error(`OpenDota: ${resultError}; schedule: ${scheduleError || "disabled"}`);
       const series = completedSeriesFromMaps(maps);
       const unknownTeamIds = [...new Set(maps.flatMap((map) => [Number(map.radiant_team_id), Number(map.dire_team_id)]).filter((id) => id && !OPENDOTA_TEAMS.has(id)))];
-      const summary = { ok: !resultError && !scheduleError, partial: Boolean(resultError || scheduleError), trigger, startedAt, maps: maps.length, completedSeries: series.length, unknownTeamIds, resultError, scheduleError, scheduleSource: SCHEDULE_SYNC_ENABLED ? "Cybersport.ru" : "disabled", scheduledFound: schedule.length, scheduledInserted: 0, scheduledUpdated: 0, scheduledRemoved: 0, scheduledUnchanged: 0, forecastQueued: false, inserted: 0, updated: 0, unchanged: 0 };
+      const summary = { ok: !resultError && !scheduleError, partial: Boolean(resultError || scheduleError), trigger, startedAt, maps: maps.length, completedSeries: series.length, unknownTeamIds, resultError, scheduleError, scheduleSource: SCHEDULE_SYNC_ENABLED ? "Cybersport.ru" : "disabled", scheduledFound: schedule.length, scheduledInserted: 0, scheduledUpdated: 0, scheduledRemoved: 0, scheduledUnchanged: 0, mapDetails: null, forecastQueued: false, inserted: 0, updated: 0, unchanged: 0 };
       db.exec("BEGIN");
       try {
         const probabilities = schedule.length ? currentForecast().probabilities : {};
@@ -625,9 +715,11 @@ async function syncLiveMatches(trigger = "timer") {
           summary.scheduledRemoved += removeConflictingScheduledSeries(item);
           summary[persistScheduledSeries(item, probabilities)] += 1;
         }
+        for (const map of maps) persistTournamentMap(map);
         for (const item of series) summary[persistLiveSeries(item)] += 1;
         db.exec("COMMIT");
       } catch (error) { db.exec("ROLLBACK"); throw error; }
+      summary.mapDetails = await hydrateTournamentMapDetails(maps);
       const scheduleChanged = summary.scheduledInserted || summary.scheduledUpdated || summary.scheduledRemoved;
       if (summary.inserted || summary.updated) { audit("live_sync_results", summary); queueAutomaticSnapshot("auto_live_result"); summary.forecastQueued = true; }
       if (scheduleChanged) {
@@ -682,6 +774,61 @@ async function refreshLiveDrafts({ force = false } = {}) {
   return liveDraftPromise;
 }
 
+async function combinedForecastState(opinionWeight = 10) {
+  const weight = Math.round(Math.min(100, Math.max(0, Number(opinionWeight) || 0)));
+  const mode = weight > 0 ? "mixed" : "stats";
+  const { matches, probabilities } = currentForecast({ ...OFFICIAL_FORECAST_CONFIG, forecastMode: mode, opinionWeight: weight });
+  const live = await refreshLiveDrafts();
+  const maps = parsedTournamentMaps();
+  const series = matches.map((match) => {
+    const seriesId = String(match.source_match_id || "").startsWith("opendota:") ? String(match.source_match_id).split(":").at(-1) : null;
+    const game = live.games.find((item) => seriesId && String(item.seriesId) === seriesId)
+      ?? live.games.find((item) => [item.radiantTeam, item.direTeam].includes(match.team_a) && [item.radiantTeam, item.direTeam].includes(match.team_b));
+    const probabilityFromBlend = orientedProbability(match.team_a, match.team_b, probabilities);
+    const frozenSeriesProbabilityA = match.winner && match.predicted_probability !== null && Number.isFinite(Number(match.predicted_probability))
+      ? Number(match.predicted_probability) / 100
+      : probabilityFromBlend ?? (Number(match.predicted_probability) / 100 || 0.5);
+    const draftProbabilityRadiant = game?.draftPrediction?.probabilityRadiant ?? null;
+    let liveEstimate = null; let currentMapProbabilityA = null;
+    if (game && draftProbabilityRadiant !== null && Number.isFinite(Number(draftProbabilityRadiant))) {
+      try { liveEstimate = estimateLiveMap(currentLiveMapModel(), { draftProbabilityRadiant, game }); } catch { liveEstimate = null; }
+      const radiantProbability = liveEstimate?.liveProbabilityRadiant ?? Number(draftProbabilityRadiant);
+      currentMapProbabilityA = game.radiantTeam === match.team_a ? radiantProbability : 1 - radiantProbability;
+    }
+    const winsA = game ? (game.radiantTeam === match.team_a ? game.seriesScoreRadiant : game.seriesScoreDire) : 0;
+    const winsB = game ? (game.radiantTeam === match.team_b ? game.seriesScoreRadiant : game.seriesScoreDire) : 0;
+    const forecast = combinedSeriesForecast({ teamA: match.team_a, teamB: match.team_b, seriesProbabilityA: frozenSeriesProbabilityA, bestOf: game?.seriesBestOf ?? 3, winsA, winsB, currentMapProbabilityA });
+    return {
+      match,
+      seriesId,
+      forecast,
+      live: game ? { ...game, history: undefined } : null,
+      liveEstimate,
+      sources: {
+        opinionWeight: weight,
+        statisticsWeight: 100 - weight,
+        onlineSeriesCount: matches.filter((item) => item.winner).length,
+        draftApplied: draftProbabilityRadiant !== null && Number.isFinite(Number(draftProbabilityRadiant)),
+        liveStateApplied: liveEstimate?.liveProbabilityRadiant !== null && liveEstimate?.liveProbabilityRadiant !== undefined && Number.isFinite(Number(liveEstimate.liveProbabilityRadiant)),
+      },
+    };
+  });
+  return {
+    generatedAt: now(),
+    policy: {
+      historicalBaseline: "frozen",
+      tiResults: "online_bradley_terry_once",
+      draft: "frozen_after_complete_draft",
+      liveMap: "observation_after_10_minutes",
+      futureMaps: "frozen_pre_series_map_prior",
+    },
+    opinionWeight: weight,
+    series,
+    maps,
+    live: { fetchedAt: live.fetchedAt, error: live.error },
+  };
+}
+
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
@@ -702,6 +849,7 @@ const server = createServer(async (req, res) => {
       catch { return json(res, 503, { error: "live_map_model_unavailable" }); }
     }
     if (req.method === "GET" && url.pathname === "/api/draft/live") return json(res, 200, await refreshLiveDrafts());
+    if (req.method === "GET" && url.pathname === "/api/combined") return json(res, 200, await combinedForecastState(url.searchParams.get("opinionWeight") ?? 10));
     const liveDraftPredictionMatch = req.method === "POST" ? url.pathname.match(/^\/api\/draft\/live\/([^/]+)\/prediction$/) : null;
     if (liveDraftPredictionMatch) {
       if (!sameOrigin(req)) return json(res, 403, { error: "origin" });

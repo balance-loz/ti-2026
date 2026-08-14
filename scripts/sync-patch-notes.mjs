@@ -10,7 +10,12 @@ const LIST_URL = "https://www.dota2.com/datafeed/patchnoteslist?language=english
 
 const state = JSON.parse(await readFile(STATE_PATH, "utf8"));
 const windowStart = Number(state.windowStart);
-const windowEnd = Number(state.windowEnd);
+// The bulk census has a frozen historical cutoff, but the resumable live cache
+// can contain newer tournament maps.  Keep the lower bound reproducible while
+// extending the active patch through the instant at which this timeline is
+// regenerated; otherwise valid live maps are incorrectly labelled as being
+// outside the last subpatch.
+const windowEnd = Math.max(Number(state.windowEnd), Math.floor(Date.now() / 1000) + 1);
 if (!windowStart || !windowEnd) throw new Error("Bulk collection state has no fixed research window.");
 
 async function json(url) {

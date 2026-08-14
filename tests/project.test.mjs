@@ -16,6 +16,37 @@ import { latestOfficialBaseline, latestSnapshotForHistoryRow, visibleSnapshotHis
 import { seriesEvidenceWeight, updateProbabilitiesWithLiveSeries } from "../server/live-team-update.mjs";
 import { buildSnapshotCalculationTrace } from "../server/forecast-diagnostics.mjs";
 import { assessLiveMap, estimateLiveMap } from "../server/live-map-prediction.mjs";
+import { combinedSeriesForecast, exactSeriesScores, orientedProbability } from "../server/combined-forecast.mjs";
+
+test("combined series forecast exposes exact map scores without leaking live state into future maps", () => {
+  const even = exactSeriesScores({ bestOf: 3, baseMapProbabilityA: .5 });
+  assert.deepEqual(Object.fromEntries(even.map((row) => [row.score, row.probability])), { "0:2": .25, "1:2": .25, "2:0": .25, "2:1": .25 });
+  const live = combinedSeriesForecast({ teamA: "spirit", teamB: "liquid", seriesProbabilityA: .5, winsA: 1, winsB: 0, currentMapProbabilityA: .8 });
+  assert.ok(Math.abs(live.probabilityA - .9) < 1e-12);
+  const liveScores = Object.fromEntries(live.exactScores.map((row) => [row.score, row.probability]));
+  assert.ok(Math.abs(liveScores["2:0"] - .8) < 1e-12);
+  assert.ok(Math.abs(liveScores["2:1"] - .1) < 1e-12);
+  assert.ok(Math.abs(liveScores["1:2"] - .1) < 1e-12);
+  assert.equal(orientedProbability("liquid", "spirit", { "liquid|spirit": 62 }), .62);
+  assert.equal(orientedProbability("spirit", "liquid", { "liquid|spirit": 62 }), .38);
+});
+
+test("combined page and API persist map truth and explain the no-double-count policy", async () => {
+  const [api, page, checkpoint] = await Promise.all([
+    readFile("server/api.mjs", "utf8"), readFile("app/combined/page.tsx", "utf8"), readFile("scripts/checkpoint-production.mjs", "utf8"),
+  ]);
+  assert.match(api, /CREATE TABLE IF NOT EXISTS tournament_maps/);
+  assert.match(api, /\/api\/combined/);
+  assert.match(api, /hydrateTournamentMapDetails/);
+  assert.match(page, /Online Bradley–Terry/);
+  assert.match(page, /Положение по матчам/);
+  assert.match(page, /Счёт по матчам/);
+  assert.match(page, /buildMatchStandings/);
+  assert.match(page, /Точный счёт карт/);
+  assert.match(page, /draft-прогноз не был сохранён/);
+  assert.match(checkpoint, /Checkpoint refused/);
+  assert.match(checkpoint, /backup\(source/);
+});
 
 test("draft decides a matchup between equally strong teams", () => {
   const betterDraft = combineDraftSignals(0.5, [0.25]);

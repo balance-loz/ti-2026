@@ -1,5 +1,13 @@
 # TI 2026 Predictor
 
+## Единый live-прогноз
+
+Страница `/combined` сводит в один экран групповой этап, стыки и плей-офф. Главное положение команд показывается по победам и поражениям в матчах; счёт карт остаётся вторичной детализацией конкретной серии. Расчёт идёт слоями: исторический baseline, однократное online-обновление по завершённым сериям TI, сохранённый draft-прогноз только для текущей карты и live-модель после 10:00. Наблюдения текущей карты никогда не переносятся на ещё не начавшиеся карты.
+
+Draft Lab сохраняет прогноз до результата. После появления результата карта связывается со снимком по `match_id`, а `/combined` показывает исход, Brier score и суммарную accuracy сохранённых map-level прогнозов.
+
+После завершения контрольного раунда создайте проверяемый checkpoint командой `npm run checkpoint:r3`. Скрипт использует SQLite Online Backup API, проверяет целостность, число завершённых серий, дубликаты и наличие frozen pre-match вероятностей, затем сохраняет базу, модельные артефакты, SHA-256 и отчёт в `DATA_DIR/checkpoints`.
+
 > Next-generation all-pro/player, full pick/ban, CatBoost/Deep Sets and series-calibration results: [docs/NEXTGEN_MODEL_2026-08-12.md](docs/NEXTGEN_MODEL_2026-08-12.md). Weak challengers remain shadow/experimental and do not silently replace production.
 
 > Математический статус моделей и список спорных допущений: [docs/MODEL_AUDIT_2026-08-12.md](docs/MODEL_AUDIT_2026-08-12.md). Командные проценты остаются экспериментальными; temporal ensemble работает в SHADOW, а активная map-level формула прошла отдельный frozen holdout против team+side baseline.

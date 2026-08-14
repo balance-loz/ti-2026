@@ -84,6 +84,20 @@ DatDota follows the same rule. Its draft/position tables are cached with checksu
 
 The official tournament forecast uses an adaptive simulation budget and records convergence diagnostics. See [ADAPTIVE_MONTE_CARLO.md](ADAPTIVE_MONTE_CARLO.md).
 
+## Live tournament maps and no-double-counting contract
+
+The API persists every TI map in `tournament_maps`: stable match/series IDs, sides, winner, duration, patch, first-pick side, players and the ordered pick/ban sequence. Lightweight result sync is never blocked by replay-detail hydration; missing OpenDota details are filled in bounded batches on later syncs.
+
+The combined forecast applies evidence in this order:
+
+1. the pre-tournament team baseline stays frozen;
+2. each completed TI series enters the online Bradley–Terry layer exactly once;
+3. a saved draft prediction may replace the map prior only for the current unresolved map;
+4. the live-map estimate may replace that same current-map probability only after 10:00;
+5. every future map keeps the frozen pre-series map prior.
+
+Exact BO3/BO5 score probabilities are computed from the current score with dynamic programming. This prevents a 2:0 from being treated as two independent series and prevents current-map draft/live evidence from leaking into future maps.
+
 ## Next metrics unlocked by own `.dem` parsing
 
 - lane matchups and lane net worth by player;

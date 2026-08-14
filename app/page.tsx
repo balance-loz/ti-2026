@@ -1244,6 +1244,7 @@ export default function Home() {
           <a href="#matchups">Матчапы</a>
           <a href="#forecast">Прогноз</a>
           <a href="/drafts">Пики</a>
+          <a href="/combined">Общий прогноз</a>
           <a href="/intel">Разведка</a>
           <a href="#format">Формат</a>
         </nav>
