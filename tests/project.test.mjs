@@ -69,6 +69,11 @@ test("combined page and API persist map truth and explain the no-double-count po
   assert.match(page, /Таблица по матчам/);
   assert.match(page, /MAIN \/ СТАВКА/);
   assert.match(page, /buildMatchStandings/);
+  assert.match(page, /function seriesPresentation/);
+  assert.match(page, /expandedMatches/);
+  assert.match(page, /fusion-round-match/);
+  assert.match(page, /UPPER_PLACEMENT/);
+  assert.match(page, /LOWER_PLACEMENT/);
   assert.match(page, /Точный счёт/);
   assert.match(page, /Нет draft-прогноза/);
   assert.match(checkpoint, /Checkpoint refused/);

@@ -88,56 +88,86 @@ function buildMatchStandings(rows: SeriesRow[]): StandingRow[] {
   return [...table.values()].sort((a, b) => b.wins - a.wins || a.losses - b.losses || team(a.teamId).name.localeCompare(team(b.teamId).name, "ru"));
 }
 
-function MatchStandings({ rows }: { rows: SeriesRow[] }) {
-  const standings = useMemo(() => buildMatchStandings(rows), [rows]);
-  return <section className="fusion-panel fusion-standings"><header><div><span>SWISS</span><h2>Таблица по матчам</h2></div><b>{rows.filter((row) => row.match.winner).length}</b></header><div className="fusion-table-wrap"><table className="fusion-table fusion-standings-table"><thead><tr><th>#</th><th>Команда</th><th>Группа</th><th>Матчи</th><th>Сейчас</th></tr></thead><tbody>{standings.map((row) => { const place = standings.findIndex((item) => item.wins === row.wins && item.losses === row.losses) + 1; return <tr key={row.teamId}><td><strong>{place}</strong></td><td><Team id={row.teamId} /></td><td><span className={`fusion-group fusion-group--${row.group.toLowerCase()}`}>{row.group === "A" ? "A" : "Б"}</span></td><td><strong>{row.wins}–{row.losses}</strong><small>серии</small></td><td>{row.liveOpponent ? <span className="fusion-status fusion-status--live">LIVE · {team(row.liveOpponent).short}</span> : <span className="fusion-status">{row.wins + row.losses} сыграно</span>}</td></tr>; })}</tbody></table></div></section>;
+function seriesPresentation(row: SeriesRow, locks: BetLock[]) {
+  const betLock = locks.find((lock) => lock.scope === "series" && String(lock.subjectId) === String(row.match.id)) ?? null;
+  const latestProbabilityA = row.forecast.probabilityA;
+  const latestWinner = latestProbabilityA >= .5 ? row.match.team_a : row.match.team_b;
+  const latestExact = [...row.forecast.exactScores].sort((a, b) => b.probability - a.probability)[0] ?? null;
+  const displayProbabilityA = betLock?.probabilityA ?? latestProbabilityA;
+  const displayWinner = betLock?.recommendedWinner ?? latestWinner;
+  return { betLock, latestProbabilityA, latestWinner, latestExact, displayProbabilityA, displayWinner, displayExact: betLock?.exactScore ?? latestExact?.score ?? null };
 }
 
-function SeriesForecastTable({ title, rows, maps, heroes, locks, isAdmin, locking, onLock }: { title: string; rows: SeriesRow[]; maps: MapRow[]; heroes: Map<number, Hero>; locks: BetLock[]; isAdmin: boolean; locking: string | null; onLock: (request: LockRequest) => void }) {
-  return <section className="fusion-panel"><header><div><span>ПАРЫ И КАРТЫ</span><h2>{title}</h2></div><b>{rows.length}</b></header><div className="fusion-table-wrap"><table className="fusion-table fusion-series-table"><thead><tr><th>Пара</th><th>MAIN / СТАВКА</th><th>Точный счёт</th><th>LATEST</th><th>Факт</th></tr></thead><tbody>{rows.map((row) => {
-    const betLock = locks.find((lock) => lock.scope === "series" && String(lock.subjectId) === String(row.match.id));
-    const latestProbabilityA = row.forecast.probabilityA;
-    const latestWinner = latestProbabilityA >= .5 ? row.match.team_a : row.match.team_b;
-    const latestExact = [...row.forecast.exactScores].sort((a, b) => b.probability - a.probability)[0] ?? null;
-    const displayProbabilityA = betLock?.probabilityA ?? latestProbabilityA;
-    const displayWinner = betLock?.recommendedWinner ?? latestWinner;
-    const displayExact = betLock?.exactScore ?? latestExact?.score ?? null;
-    const delta = (latestProbabilityA - displayProbabilityA) * 100;
-    const seriesMaps = mapsForSeries(row, maps);
-    return <Fragment key={row.match.id}>
-      <tr className={row.live ? "is-live" : row.match.winner ? "is-complete" : ""}>
-        <td><small>{row.match.stage === "swiss" ? "SW" : row.match.stage === "playin" ? "PI" : "PO"} R{row.match.round}</small><span className="fusion-matchup"><Team id={row.match.team_a} /><i>—</i><Team id={row.match.team_b} /></span></td>
-        <td>{betLock ? <><span className="fusion-lock">СТАВКА ЗАФИКСИРОВАНА</span><strong>{team(displayWinner).short} {percent(displayWinner === row.match.team_a ? displayProbabilityA : 1 - displayProbabilityA)}</strong><small>{new Date(betLock.createdAt).toLocaleString("ru-RU")} · профиль {betLock.opinionWeight}%</small></> : <><span className="fusion-lock fusion-lock--snapshot">ТЕКУЩАЯ РЕКОМЕНДАЦИЯ</span><strong>{team(displayWinner).short} {percent(displayWinner === row.match.team_a ? displayProbabilityA : 1 - displayProbabilityA)}</strong>{isAdmin && !row.match.winner ? <button className="fusion-bet-button" disabled={locking === `series:${row.match.id}`} onClick={() => onLock({ scope: "series", subjectId: String(row.match.id), probabilityA: latestProbabilityA, recommendedWinner: latestWinner, exactScore: latestExact?.score, evidence: { exactScores: row.forecast.exactScores, sources: row.sources } })}>{locking === `series:${row.match.id}` ? "Фиксирую…" : "Я поставил по рекомендации"}</button> : <small>может обновляться до фиксации ставки</small>}</>}</td>
-        <td><strong>{displayExact ?? "—"}</strong><small>{betLock ? "сохранено со ставкой" : latestExact ? `${percent(latestExact.probability)} сценариев · обновляется` : "нет расчёта"}</small></td>
-        <td><strong>{team(latestWinner).short} {percent(latestWinner === row.match.team_a ? latestProbabilityA : 1 - latestProbabilityA)}</strong><small className={Math.abs(delta) >= 5 ? "fusion-delta is-large" : "fusion-delta"}>{betLock ? `${delta >= 0 ? "+" : ""}${delta.toFixed(1)} п.п. для ${team(row.match.team_a).short}` : "та же текущая рекомендация"}{row.sources.liveStateApplied ? " · LIVE" : row.sources.draftApplied ? " · DRAFT" : " · новые серии"}</small></td>
-        <td>{row.match.winner ? <><strong>{row.match.score_a}:{row.match.score_b} · {team(row.match.winner).short}</strong>{betLock ? <Grade correct={betLock.predictionCorrect} /> : <span className="fusion-grade fusion-grade--late">СТАВКИ НЕ БЫЛО</span>}</> : row.live ? <><strong>{row.forecast.winsA}:{row.forecast.winsB} · {clock(row.live.gameTime)}</strong><span className="fusion-status fusion-status--live">LIVE</span></> : <span className="fusion-status fusion-status--next">до матча</span>}</td>
-      </tr>
-      <tr className="fusion-map-row"><td colSpan={5}><MapStrip maps={seriesMaps} heroes={heroes} locks={locks} isAdmin={isAdmin} locking={locking} onLock={onLock} /></td></tr>
-    </Fragment>;
+function SeriesDetail({ row, maps, heroes, locks, isAdmin, locking, onLock }: { row: SeriesRow; maps: MapRow[]; heroes: Map<number, Hero>; locks: BetLock[]; isAdmin: boolean; locking: string | null; onLock: (request: LockRequest) => void }) {
+  const view = seriesPresentation(row, locks);
+  const delta = (view.latestProbabilityA - view.displayProbabilityA) * 100;
+  const seriesMaps = mapsForSeries(row, maps);
+  return <div className="fusion-expanded-series">
+    <div className="fusion-expanded-summary">
+      <article><small>ПАРА · SW R{row.match.round}</small><span className="fusion-matchup"><Team id={row.match.team_a} /><i>—</i><Team id={row.match.team_b} /></span></article>
+      <article><small>MAIN / СТАВКА</small>{view.betLock ? <><span className="fusion-lock">СТАВКА ЗАФИКСИРОВАНА</span><strong>{team(view.displayWinner).short} {percent(view.displayWinner === row.match.team_a ? view.displayProbabilityA : 1 - view.displayProbabilityA)}</strong><em>{new Date(view.betLock.createdAt).toLocaleString("ru-RU")} · профиль {view.betLock.opinionWeight}%</em></> : <><span className="fusion-lock fusion-lock--snapshot">ТЕКУЩАЯ РЕКОМЕНДАЦИЯ</span><strong>{team(view.displayWinner).short} {percent(view.displayWinner === row.match.team_a ? view.displayProbabilityA : 1 - view.displayProbabilityA)}</strong>{isAdmin && !row.match.winner ? <button className="fusion-bet-button" disabled={locking === `series:${row.match.id}`} onClick={() => onLock({ scope: "series", subjectId: String(row.match.id), probabilityA: view.latestProbabilityA, recommendedWinner: view.latestWinner, exactScore: view.latestExact?.score, evidence: { exactScores: row.forecast.exactScores, sources: row.sources } })}>{locking === `series:${row.match.id}` ? "Фиксирую…" : "Я поставил по рекомендации"}</button> : <em>может обновляться до фиксации ставки</em>}</>}</article>
+      <article><small>Точный счёт</small><strong>{view.displayExact ?? "—"}</strong><em>{view.betLock ? "сохранён со ставкой" : view.latestExact ? `${percent(view.latestExact.probability)} сценариев · обновляется` : "нет расчёта"}</em></article>
+      <article><small>LATEST</small><strong>{team(view.latestWinner).short} {percent(view.latestWinner === row.match.team_a ? view.latestProbabilityA : 1 - view.latestProbabilityA)}</strong><em className={Math.abs(delta) >= 5 ? "fusion-delta is-large" : "fusion-delta"}>{view.betLock ? `${delta >= 0 ? "+" : ""}${delta.toFixed(1)} п.п. для ${team(row.match.team_a).short}` : "совпадает с MAIN"}{row.sources.liveStateApplied ? " · LIVE" : row.sources.draftApplied ? " · DRAFT" : " · новые серии"}</em></article>
+      <article><small>ФАКТ</small>{row.match.winner ? <><strong>{row.match.score_a}:{row.match.score_b} · {team(row.match.winner).short}</strong>{view.betLock ? <Grade correct={view.betLock.predictionCorrect} /> : <span className="fusion-grade fusion-grade--late">СТАВКИ НЕ БЫЛО</span>}</> : row.live ? <><strong>{row.forecast.winsA}:{row.forecast.winsB} · {clock(row.live.gameTime)}</strong><span className="fusion-status fusion-status--live">LIVE</span></> : <span className="fusion-status fusion-status--next">до матча</span>}</article>
+    </div>
+    <MapStrip maps={seriesMaps} heroes={heroes} locks={locks} isAdmin={isAdmin} locking={locking} onLock={onLock} />
+  </div>;
+}
+
+function SwissMatrix({ rows, maps, heroes, locks, isAdmin, locking, onLock, expanded, onToggle }: { rows: SeriesRow[]; maps: MapRow[]; heroes: Map<number, Hero>; locks: BetLock[]; isAdmin: boolean; locking: string | null; onLock: (request: LockRequest) => void; expanded: Record<string, string>; onToggle: (matchId: number, teamId: string) => void }) {
+  const standings = useMemo(() => buildMatchStandings(rows), [rows]);
+  const roundCount = Math.max(5, ...rows.map((row) => row.match.round));
+  const rounds = Array.from({ length: roundCount }, (_, index) => index + 1);
+  return <section className="fusion-panel fusion-matrix"><header><div><span>SWISS · МАТЧИ, НЕ КАРТЫ</span><h2>Таблица по матчам</h2><p>Одна таблица — вся история. Нажмите на матч: прогноз, ставка, карты и пики раскроются под командой. Можно открыть несколько.</p></div><b>{rows.filter((row) => row.match.winner).length}/{rows.length}</b></header><div className="fusion-table-wrap"><table className="fusion-table fusion-history-table"><thead><tr><th>#</th><th>Команда</th><th>Группа</th><th>Счёт</th>{rounds.map((round) => <th key={round}>Раунд {round}</th>)}<th>Итог</th></tr></thead><tbody>{standings.map((standing) => {
+    const teamRows = rows.filter((row) => row.match.team_a === standing.teamId || row.match.team_b === standing.teamId);
+    const openRows = teamRows.filter((row) => expanded[String(row.match.id)] === standing.teamId).sort((a, b) => a.match.round - b.match.round);
+    const place = standings.findIndex((item) => item.wins === standing.wins && item.losses === standing.losses) + 1;
+    return <Fragment key={standing.teamId}><tr><td><strong>{place}</strong></td><td><Team id={standing.teamId} /></td><td><span className={`fusion-group fusion-group--${standing.group.toLowerCase()}`}>{standing.group === "A" ? "A" : "Б"}</span></td><td><strong>{standing.wins}–{standing.losses}</strong></td>{rounds.map((round) => {
+      const row = teamRows.find((item) => item.match.round === round);
+      if (!row) return <td key={round} className="fusion-empty-round">—</td>;
+      const opponent = row.match.team_a === standing.teamId ? row.match.team_b : row.match.team_a;
+      const view = seriesPresentation(row, locks);
+      const confidence = view.displayWinner === row.match.team_a ? view.displayProbabilityA : 1 - view.displayProbabilityA;
+      const isOpen = expanded[String(row.match.id)] === standing.teamId;
+      const won = row.match.winner ? row.match.winner === standing.teamId : null;
+      return <td key={round} className={won === true ? "is-won" : won === false ? "is-lost" : row.live ? "is-live" : ""}><button className={`fusion-round-match ${isOpen ? "is-open" : ""}`} aria-expanded={isOpen} onClick={() => onToggle(row.match.id, standing.teamId)}><span><Team id={opponent} /><b>{team(view.displayWinner).short} {percent(confidence)}</b></span><small>{row.match.winner ? `${row.match.score_a}:${row.match.score_b} · ${won ? "W" : "L"}` : row.live ? "LIVE" : `${view.displayExact ?? "—"} · ${view.betLock ? "ставка" : "main"}`}</small></button></td>;
+    })}<td><span className={`fusion-outcome ${standing.wins >= 4 ? "is-qualified" : standing.losses >= 4 ? "is-eliminated" : ""}`}>{standing.wins >= 4 ? "НАПРЯМУЮ" : standing.losses >= 4 ? "ВЫЛЕТ" : standing.wins + standing.losses >= 5 ? "СТЫК" : "В ИГРЕ"}</span></td></tr>{openRows.map((row) => <tr key={`open-${row.match.id}`} className="fusion-matrix-expanded"><td colSpan={rounds.length + 5}><SeriesDetail row={row} maps={maps} heroes={heroes} locks={locks} isAdmin={isAdmin} locking={locking} onLock={onLock} /></td></tr>)}</Fragment>;
   })}</tbody></table></div></section>;
 }
 
-function BracketCard({ node, series, maps, heroes, locks, isAdmin, locking, onLock }: { node: BracketNode; series: SeriesRow[]; maps: MapRow[]; heroes: Map<number, Hero>; locks: BetLock[]; isAdmin: boolean; locking: string | null; onLock: (request: LockRequest) => void }) {
+function BracketCard({ node, series, locks, isAdmin, locking, onLock }: { node: BracketNode; series: SeriesRow[]; locks: BetLock[]; isAdmin: boolean; locking: string | null; onLock: (request: LockRequest) => void }) {
   const actualSeries = node.matchId === null ? null : series.find((row) => row.match.id === node.matchId) ?? null;
-  const nodeMaps = actualSeries ? mapsForSeries(actualSeries, maps) : [];
   const betLock = node.matchId === null ? null : locks.find((lock) => lock.scope === "series" && String(lock.subjectId) === String(node.matchId)) ?? null;
-  const probabilityA = betLock?.teamA === node.a ? betLock.probabilityA : betLock?.teamB === node.a ? 1 - betLock.probabilityA : node.latestProbabilityA;
-  const predictedWinner = betLock?.recommendedWinner ?? (probabilityA >= .5 ? node.a : node.b);
-  const exactScore = betLock?.exactScore ?? node.exactScore;
+  const actualView = actualSeries ? seriesPresentation(actualSeries, locks) : null;
+  const actualProbabilityA = actualView ? (actualSeries!.match.team_a === node.a ? actualView.displayProbabilityA : 1 - actualView.displayProbabilityA) : null;
+  const probabilityA = actualProbabilityA ?? (betLock?.teamA === node.a ? betLock.probabilityA : betLock?.teamB === node.a ? 1 - betLock.probabilityA : node.latestProbabilityA);
+  const predictedWinner = actualView?.displayWinner ?? betLock?.recommendedWinner ?? (probabilityA >= .5 ? node.a : node.b);
+  const exactScore = actualView?.displayExact ?? betLock?.exactScore ?? node.exactScore;
   return <article className={`fusion-bracket-card fusion-bracket-card--${node.status} ${betLock?.predictionCorrect === true ? "is-correct" : betLock?.predictionCorrect === false ? "is-wrong" : ""}`}>
     <header><span>{node.label}</span><b>BO{node.bestOf}</b></header>
     <div className={predictedWinner === node.a ? "is-winner" : ""}><Team id={node.a} /><em>{percent(probabilityA)}</em></div>
     <div className={predictedWinner === node.b ? "is-winner" : ""}><Team id={node.b} /><em>{percent(1 - probabilityA)}</em></div>
     <p><span>прогноз <b>{exactScore}</b></span>{node.actualScore ? <span>факт <b>{node.actualScore}</b></span> : <span>{betLock ? "ставка locked" : "main · обновляется"}</span>}</p>
     {node.actualWinner ? (betLock ? <Grade correct={betLock.predictionCorrect} /> : <span className="fusion-grade fusion-grade--late">СТАВКИ НЕ БЫЛО</span>) : betLock ? <small>ставка: {team(betLock.recommendedWinner).name}</small> : actualSeries && isAdmin ? <button className="fusion-bet-button" disabled={locking === `series:${actualSeries.match.id}`} onClick={() => onLock({ scope: "series", subjectId: String(actualSeries.match.id), probabilityA: actualSeries.forecast.probabilityA, recommendedWinner: actualSeries.forecast.probabilityA >= .5 ? actualSeries.match.team_a : actualSeries.match.team_b, exactScore: [...actualSeries.forecast.exactScores].sort((a, b) => b.probability - a.probability)[0]?.score, evidence: { bracketLabel: node.label } })}>Я поставил по рекомендации</button> : <small>→ дальше: {team(node.winner).name}</small>}
-    {nodeMaps.length ? <MapStrip maps={nodeMaps} heroes={heroes} locks={locks} isAdmin={isAdmin} locking={locking} onLock={onLock} /> : null}
   </article>;
 }
 
-function PlayoffBracket({ state, heroes, locking, onLock }: { state: CombinedState; heroes: Map<number, Hero>; locking: string | null; onLock: (request: LockRequest) => void }) {
-  const columns = [1, 2, 3, 4, 5, 6];
-  const lane = (name: "upper" | "lower" | "final") => <div className={`fusion-bracket-lane fusion-bracket-lane--${name}`}>{columns.map((column) => <section key={`${name}-${column}`}><h4>{column === 6 ? "Гранд-финал" : name === "upper" ? `Верхняя · ${column}` : `Нижняя · ${column}`}</h4>{state.bracket.nodes.filter((node) => node.lane === name && node.column === column).map((node) => <BracketCard key={node.label} node={node} series={state.series} maps={state.maps} heroes={heroes} locks={state.betLocks} isAdmin={state.isAdmin} locking={locking} onLock={onLock} />)}</section>)}</div>;
-  return <section className="fusion-panel fusion-bracket"><header><div><span>MAIN FORECAST · DOUBLE ELIMINATION</span><h2>Как развивается сетка</h2></div><b>{state.bracket.champion ? team(state.bracket.champion).short : "—"}</b></header>{state.bracket.nodes.length ? <div className="fusion-bracket-scroll">{lane("upper")}{lane("lower")}{lane("final")}</div> : <p className="fusion-empty">Сетка появится после сохранения основного Monte Carlo snapshot с восьмёркой участников.</p>}</section>;
+const UPPER_PLACEMENT: Record<string, { column: number; row: string }> = {
+  "UB QF 1": { column: 1, row: "1 / span 2" }, "UB QF 2": { column: 1, row: "3 / span 2" }, "UB QF 3": { column: 1, row: "5 / span 2" }, "UB QF 4": { column: 1, row: "7 / span 2" },
+  "UB SF 1": { column: 2, row: "2 / span 2" }, "UB SF 2": { column: 2, row: "6 / span 2" }, "UB FINAL": { column: 3, row: "4 / span 2" }, "GRAND FINAL": { column: 4, row: "4 / span 2" },
+};
+const LOWER_PLACEMENT: Record<string, { column: number; row: string }> = {
+  "LB R1 1": { column: 1, row: "1 / span 2" }, "LB R1 2": { column: 1, row: "3 / span 2" }, "LB R2 1": { column: 2, row: "1 / span 2" }, "LB R2 2": { column: 2, row: "3 / span 2" }, "LB SF": { column: 3, row: "2 / span 2" }, "LB FINAL": { column: 4, row: "2 / span 2" },
+};
+
+function PlayoffBracket({ state, locking, onLock }: { state: CombinedState; locking: string | null; onLock: (request: LockRequest) => void }) {
+  const track = (lane: "upper" | "lower") => {
+    const placement = lane === "upper" ? UPPER_PLACEMENT : LOWER_PLACEMENT;
+    const nodes = state.bracket.nodes.filter((node) => lane === "upper" ? node.lane === "upper" || node.lane === "final" : node.lane === "lower");
+    const headings = lane === "upper" ? ["Четвертьфиналы", "Полуфиналы", "Финал верхней", "Гранд-финал"] : ["Раунд 1", "Раунд 2", "Полуфинал нижней", "Финал нижней"];
+    return <section className={`fusion-bracket-track-wrap fusion-bracket-track-wrap--${lane}`}><h3>{lane === "upper" ? "ВЕРХНЯЯ СЕТКА" : "НИЖНЯЯ СЕТКА"}</h3><div className="fusion-bracket-rounds">{headings.map((heading) => <span key={heading}>{heading}</span>)}</div><div className={`fusion-bracket-track fusion-bracket-track--${lane}`}>{nodes.map((node) => { const slot = placement[node.label]; return slot ? <div key={node.label} className="fusion-bracket-slot" style={{ gridColumn: slot.column, gridRow: slot.row }}><BracketCard node={node} series={state.series} locks={state.betLocks} isAdmin={state.isAdmin} locking={locking} onLock={onLock} /></div> : null; })}</div></section>;
+  };
+  return <section className="fusion-panel fusion-bracket"><header><div><span>MAIN FORECAST · DOUBLE ELIMINATION</span><h2>Ровная сетка плей-офф</h2><p>Один матч — один прогноз. Для назначенных пар значение совпадает с раскрытой карточкой в таблице.</p></div><b>{state.bracket.champion ? team(state.bracket.champion).short : "—"}</b></header>{state.bracket.nodes.length ? <div className="fusion-bracket-scroll">{track("upper")}{track("lower")}</div> : <p className="fusion-empty">Сетка появится после сохранения основного Monte Carlo snapshot с восьмёркой участников.</p>}</section>;
 }
 
 export default function CombinedForecastPage() {
@@ -148,6 +178,7 @@ export default function CombinedForecastPage() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [locking, setLocking] = useState<string | null>(null);
   const [lockMessage, setLockMessage] = useState<string | null>(null);
+  const [expandedMatches, setExpandedMatches] = useState<Record<string, string>>({});
   useEffect(() => { fetch("/draft-stats.json").then((response) => response.json()).then((data) => setHeroes(new Map((data.heroes as Hero[]).map((hero) => [hero.id, hero])))).catch(() => undefined); }, []);
   useEffect(() => { let cancelled = false; const load = async () => { try { const response = await fetch(`/api/combined?opinionWeight=${opinionWeight}`, { cache: "no-store" }); if (!response.ok) throw new Error(`API ${response.status}`); const data = await response.json(); if (!cancelled) { setState(data); setError(null); } } catch (reason) { if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason)); } }; void load(); const timer = window.setInterval(() => void load(), 10_000); return () => { cancelled = true; window.clearInterval(timer); }; }, [opinionWeight, refreshKey]);
   const lockBet = async (request: LockRequest) => {
@@ -166,16 +197,16 @@ export default function CombinedForecastPage() {
   const gradedMapBets = useMemo(() => state?.betLocks.filter((lock) => lock.scope === "map" && lock.winner) ?? [], [state]);
   const seriesCorrect = gradedSeriesBets.filter((lock) => lock.predictionCorrect).length;
   const draftCorrect = gradedMapBets.filter((lock) => lock.predictionCorrect).length;
+  const toggleMatch = (matchId: number, teamId: string) => setExpandedMatches((current) => { const next = { ...current }; if (next[String(matchId)]) delete next[String(matchId)]; else next[String(matchId)] = teamId; return next; });
   return <main className="fusion-page"><header className="fusion-topbar"><a href="/" className="brand"><span className="brand-glyph">T</span><span>TI / PREDICTOR</span></a><nav><a href="/">Турнир</a><a href="/drafts">Пики</a><a href="/intel">Разведка</a><a className="active" href="/combined">Общий прогноз</a></nav><span className="live-pill"><i /> LIVE FUSION</span></header>
     <section className="fusion-hero fusion-hero--compact"><div><p>TABLE · BRACKET · MAP DRAFT · RESULT</p><h1>Прогноз,<br /><em>который помнит.</em></h1><span>Пока ставки нет, рекомендация свободно обновляется после новых матчей, пиков и live-данных. Нажатие «Я поставил» создаёт неизменяемый снимок именно того прогноза, по которому принято решение.</span></div><aside><label><span>ОСНОВНОЙ ПРОФИЛЬ</span><select value={opinionWeight} onChange={(event) => setOpinionWeight(Number(event.target.value))}><option value={0}>0% · только статистика</option><option value={10}>10% · рекомендуемая смесь</option><option value={20}>20% · заметное влияние</option><option value={30}>30% · агрессивно</option></select></label><div><span><b>СТАВКИ НЕТ</b>можно обновлять</span><i>→</i><span><b>Я ПОСТАВИЛ</b>заморозить</span></div><small>{state?.isAdmin ? "Админский режим активен · кнопки фиксации доступны" : "Войдите в админский режим на главной странице, чтобы фиксировать ставки"}</small></aside></section>
     {error ? <p className="fusion-error">Не удалось загрузить общий прогноз: {error}</p> : null}
     {lockMessage ? <p className="fusion-lock-message">{lockMessage}</p> : null}
     <section className="fusion-decision-rule"><article><b>1</b><h3>Рекомендация</h3><p>Без ставки MAIN/LATEST может перепрогнозироваться сколько угодно.</p></article><article><b>2</b><h3>Нажал «Я поставил»</h3><p>Сохраняются победитель, вероятность, точный счёт, профиль, модель, пики и время.</p></article><article><b>3</b><h3>Пришёл результат</h3><p>Ставка получает «угадан/не угадан»; новые расчёты рядом не меняют историю.</p></article></section>
     <section className="fusion-metrics"><article><span>СТАВКИ НА СЕРИИ</span><b>{gradedSeriesBets.length ? `${seriesCorrect}/${gradedSeriesBets.length}` : "—"}</b><small>угадано из завершённых ставок</small></article><article><span>СТАВКИ ПОСЛЕ ПИКОВ</span><b>{gradedMapBets.length ? `${draftCorrect}/${gradedMapBets.length}` : "—"}</b><small>угадано карт из завершённых ставок</small></article><article><span>ВСЕГО ЗАФИКСИРОВАНО</span><b>{state?.betLocks.length ?? "—"}</b><small>неизменяемых решений</small></article><article><span>ОБНОВЛЕНО</span><b>{state ? new Date(state.generatedAt).toLocaleTimeString("ru-RU") : "—"}</b><small>{state?.live.error ? "live-feed с ошибкой" : "опрос каждые 10 секунд"}</small></article></section>
-    <MatchStandings rows={swiss} />
-    <SeriesForecastTable title="Матчи группового этапа" rows={swiss} maps={state?.maps ?? []} heroes={heroes} locks={state?.betLocks ?? []} isAdmin={Boolean(state?.isAdmin)} locking={locking} onLock={lockBet} />
-    {playins.length ? <SeriesForecastTable title="Стыковые матчи" rows={playins} maps={state?.maps ?? []} heroes={heroes} locks={state?.betLocks ?? []} isAdmin={Boolean(state?.isAdmin)} locking={locking} onLock={lockBet} /> : null}
-    {state ? <PlayoffBracket state={state} heroes={heroes} locking={locking} onLock={lockBet} /> : null}
+    <SwissMatrix rows={swiss} maps={state?.maps ?? []} heroes={heroes} locks={state?.betLocks ?? []} isAdmin={Boolean(state?.isAdmin)} locking={locking} onLock={lockBet} expanded={expandedMatches} onToggle={toggleMatch} />
+    {playins.length ? <section className="fusion-panel"><header><div><span>СТЫКОВЫЕ МАТЧИ</span><h2>Пары определятся по итогам Swiss</h2></div><b>{playins.length}</b></header></section> : null}
+    {state ? <PlayoffBracket state={state} locking={locking} onLock={lockBet} /> : null}
     <footer><div className="brand"><span className="brand-glyph">T</span><span>TI / PREDICTOR</span></div><p>LOCKED оценивает решение · LATEST объясняет новую информацию</p><a href="/drafts">Открыть Draft Lab →</a></footer>
   </main>;
 }
