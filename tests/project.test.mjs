@@ -93,6 +93,8 @@ test("combined page and API persist map truth and explain the no-double-count po
   assert.match(page, /fusion-round-match/);
   assert.match(page, /ПРОГНОЗ УГАДАН/);
   assert.match(page, /fusion-prediction-verdict/);
+  assert.match(page, /const place = standingIndex \+ 1/);
+  assert.match(page, /fusion-result-square/);
   assert.match(page, /function RouletteRisk/);
   assert.match(page, /const isLowConfidence = .* < \.58/);
   assert.match(tournamentPage, /round\.probability\.toFixed\(0\).*%/);
