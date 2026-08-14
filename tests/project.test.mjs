@@ -413,11 +413,23 @@ test("server forecast can create an automatic snapshot payload", async () => {
   for (const team of result.teams) assert.ok(Math.abs(team.direct + team.viaPlayin + team.playinLoss + team.swissOut - 100) < 0.001);
 });
 
+test("completed Swiss results make impossible perfect records disappear from scenarios", async () => {
+  const stats = JSON.parse(await readFile("public/team-stats.json", "utf8"));
+  const probabilities = buildForecastSource({ answers: {}, stats, matches: [], mode: "stats", opinionWeight: 0 });
+  const result = runForecast(probabilities, 200, 2468, { stats, matches: [{ id: 1, stage: "swiss", round: 1, team_a: "yandex", team_b: "l1ga", winner: "l1ga" }] });
+  assert.ok(result.scenarios.every((scenario) => !scenario.direct40.includes("yandex")));
+});
+
 test("official pairing changes are part of automatic snapshot deduplication", async () => {
   const api = await readFile("server/api.mjs", "utf8");
   assert.match(api, /snapshot_kind=\? AND trigger=\?/);
   assert.match(api, /queueAutomaticSnapshot\(officialPairingTrigger\(\)\)/);
   assert.match(api, /auto_pairing_/);
+  assert.match(api, /pendingAutomaticSnapshotTrigger/);
+  assert.match(api, /if \(autoForecastRunning\) \{[\s\S]*queueAutomaticSnapshot/);
+  assert.match(api, /liveConstraintSignature: liveConstraintSignature\(matches\)/);
+  assert.match(api, /officialSnapshotNeedsRefresh\(persistedMatches\)/);
+  assert.match(api, /auto_reconcile/);
 });
 
 test("group scenarios rank raw counts before percentage conversion and exclude playoff identity", () => {
@@ -477,15 +489,20 @@ test("manual Monte Carlo UI exposes adaptive, 500K and 1M budgets", async () => 
   assert.match(styles, /td\.round-cell--wrong/);
   assert.match(page, /const scenarioSource = selectedRoot\?\.probabilities \?\? activeBaselineSnapshot\?\.probabilities \?\? forecastSource/);
   assert.match(page, /buildLikelyBracket\(scenarioSource, liveMatches, stats, scenarioSnapshotCreatedAt, scenarioUsesOfficialPrematch\)/);
-  assert.match(page, /displayedResult = selectedRoot\?\.result \?\? result/);
+  assert.match(page, /displayedResult = selectedRoot[\s\S]*selectedLatestSnapshotIsCurrent \? selectedLatest!\.result/);
   assert.match(page, /resultHappenedAfter\(match, snapshotCreatedAt, useOfficialPrematch\)/);
   assert.match(page, /useOfficialPrematch && Number\.isFinite\(match\.predicted_probability\)/);
   assert.match(page, /selectedRoot\?\.forecast_mode === "stats" && selectedRoot\.trigger !== "manual_run"/);
   assert.match(page, /ИСТОРИЧЕСКИЙ ПРОГНОЗ/);
   assert.match(page, /ti26-official-baseline/);
   assert.match(page, /latestOfficialBaseline\(snapshots\)/);
-  assert.match(page, /без нового пересчёта/);
+  assert.match(page, /повторный прогон не нужен/);
   assert.doesNotMatch(page, /setResult\(runSimulation\(parsed, 4000\)\)/);
+  assert.match(page, /latestOfficialSnapshotIsCurrent/);
+  assert.match(page, /selectedLatestSnapshotIsCurrent/);
+  assert.match(page, /selectedRoot\?\.probabilities \?\?/);
+  assert.match(page, /runSimulationInWorker\(source, Math\.min\(iterationCount, 250_000\)/);
+  assert.match(page, /Сыгранные исходы зафиксированы/);
 });
 
 test("conditional branches freeze ratings and compare probabilistic outcomes", async () => {

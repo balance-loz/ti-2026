@@ -117,6 +117,7 @@ let liveDraftCache = { games: [], fetchedAt: null, error: null };
 let liveLeagueMapsCache = { maps: [], fetchedAt: null };
 let autoForecastRunning = false;
 let autoSnapshotTimer = null;
+let pendingAutomaticSnapshotTrigger = null;
 const loginAttempts = new Map();
 let temporalModelCache = { mtimeMs: -1, value: null };
 const json = (res, status, value) => {
@@ -220,6 +221,20 @@ function profileKey(mode, opinionWeight, answers) {
   return createHash("sha256").update(JSON.stringify({ mode, opinionWeight: Number(opinionWeight), answers })).digest("hex").slice(0, 24);
 }
 
+function liveConstraintSignature(matches) {
+  return matches.map((match) => `${match.id}:${match.stage}:${match.round}:${match.team_a}:${match.team_b}:${match.winner ?? "scheduled"}:${match.score_a ?? ""}:${match.score_b ?? ""}`).join(";");
+}
+
+function officialSnapshotNeedsRefresh(matches) {
+  const latest = db.prepare("SELECT completed_match_count, inputs_json FROM prediction_snapshots WHERE snapshot_kind!='revision' AND forecast_mode='stats' AND trigger!='manual_run' ORDER BY completed_match_count DESC,id DESC LIMIT 1").get();
+  if (!latest) return true;
+  if (Number(latest.completed_match_count) !== matches.filter((match) => match.winner).length) return true;
+  try {
+    const savedSignature = latest.inputs_json ? JSON.parse(latest.inputs_json).liveConstraintSignature : null;
+    return Boolean(savedSignature && savedSignature !== liveConstraintSignature(matches));
+  } catch { return true; }
+}
+
 function currentForecast(config = OFFICIAL_FORECAST_CONFIG, profileAnswers = null) {
   const answers = Object.fromEntries(db.prepare("SELECT pair_key, probability FROM answers").all().map((row) => [row.pair_key, row.probability]));
   const selectedAnswers = profileAnswers ?? answers;
@@ -262,7 +277,7 @@ async function saveProfileSnapshot(trigger, config, profileAnswers, { kind = "or
     const minimum = Number(config.iterations || AUTO_SNAPSHOT_ITERATIONS);
     const adaptive = config.adaptive ? { enabled: true, minIterations: minimum, maxIterations: Number(config.maxIterations || AUTO_SNAPSHOT_MAX_ITERATIONS), batchSize: Number(config.batchSize || AUTO_SNAPSHOT_BATCH_SIZE), tolerancePp: Number(config.tolerancePp || AUTO_SNAPSHOT_TOLERANCE_PP), stableChecksRequired: 2 } : null;
     const result = await runForecastWorker({ probabilities, minimum, seed, matches, stats, adaptive });
-    const id = insertSnapshot({ trigger, config, probabilities, result, stats, matches, inputs: { answers: profileAnswers, cutoffCompletedMatches: completedMatchCount }, kind, rootId, parentId, key });
+    const id = insertSnapshot({ trigger, config, probabilities, result, stats, matches, inputs: { answers: profileAnswers, cutoffCompletedMatches: completedMatchCount, liveConstraintSignature: liveConstraintSignature(matches) }, kind, rootId, parentId, key });
     audit("snapshot_saved", { id, trigger, completedMatchCount, kind, rootId, profileKey: key });
     return id;
 }
@@ -283,10 +298,18 @@ async function saveAutomaticSnapshots(trigger) {
 }
 
 function queueAutomaticSnapshot(trigger, delay = 100) {
+  pendingAutomaticSnapshotTrigger = trigger;
   if (autoSnapshotTimer) clearTimeout(autoSnapshotTimer);
   autoSnapshotTimer = setTimeout(async () => {
     autoSnapshotTimer = null;
-    try { await saveAutomaticSnapshots(trigger); } catch (error) { console.error("Automatic forecast failed:", error); audit("automatic_snapshot_failed", { trigger, error: error instanceof Error ? error.message : String(error) }); }
+    if (autoForecastRunning) {
+      queueAutomaticSnapshot(pendingAutomaticSnapshotTrigger ?? trigger, 1_000);
+      return;
+    }
+    const queuedTrigger = pendingAutomaticSnapshotTrigger ?? trigger;
+    pendingAutomaticSnapshotTrigger = null;
+    try { await saveAutomaticSnapshots(queuedTrigger); } catch (error) { console.error("Automatic forecast failed:", error); audit("automatic_snapshot_failed", { trigger: queuedTrigger, error: error instanceof Error ? error.message : String(error) }); }
+    if (pendingAutomaticSnapshotTrigger) queueAutomaticSnapshot(pendingAutomaticSnapshotTrigger, 100);
   }, delay);
   autoSnapshotTimer.unref();
 }
@@ -426,6 +449,11 @@ async function syncLiveMatches(trigger = "timer") {
       if (scheduleChanged) {
         audit("official_schedule_sync", summary);
         queueAutomaticSnapshot(officialPairingTrigger());
+        summary.forecastQueued = true;
+      }
+      const persistedMatches = db.prepare("SELECT * FROM matches ORDER BY round,id").all();
+      if (!summary.forecastQueued && officialSnapshotNeedsRefresh(persistedMatches)) {
+        queueAutomaticSnapshot("auto_reconcile");
         summary.forecastQueued = true;
       }
       db.prepare("INSERT INTO settings(key,value,updated_at) VALUES ('live_sync',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").run(JSON.stringify(summary), now());
@@ -571,7 +599,7 @@ const server = createServer(async (req, res) => {
         const profileAnswers = data.answers && typeof data.answers === "object" ? data.answers : {};
         const matches = db.prepare("SELECT * FROM matches ORDER BY round,id").all();
         const key = profileKey(config.forecastMode, config.opinionWeight, profileAnswers);
-        const id = insertSnapshot({ trigger: data.trigger || "manual_run", config, probabilities: data.probabilities, result: data.result, stats: { generatedAt: data.modelGeneratedAt || null }, matches, inputs: { answers: profileAnswers, cutoffCompletedMatches: Number(data.completedMatchCount || 0) }, kind: "original", key });
+        const id = insertSnapshot({ trigger: data.trigger || "manual_run", config, probabilities: data.probabilities, result: data.result, stats: { generatedAt: data.modelGeneratedAt || null }, matches, inputs: { answers: profileAnswers, cutoffCompletedMatches: Number(data.completedMatchCount || 0), liveConstraintSignature: liveConstraintSignature(matches) }, kind: "original", key });
         audit("snapshot_saved", { id, trigger: data.trigger || "manual_run", profileKey: key });
         return json(res, 201, { ok: true, id });
       }

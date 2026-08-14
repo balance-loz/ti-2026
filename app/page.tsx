@@ -229,7 +229,7 @@ type PredictionSnapshot = {
   probabilities: AnswerMap;
   result: SimulationResult;
   created_at: string;
-  inputs?: { answers?: AnswerMap; cutoffCompletedMatches?: number } | null;
+  inputs?: { answers?: AnswerMap; cutoffCompletedMatches?: number; liveConstraintSignature?: string } | null;
   snapshot_kind?: "original" | "revision";
   root_snapshot_id?: number | null;
   parent_snapshot_id?: number | null;
@@ -815,7 +815,15 @@ export default function Home() {
   const likelyPlayoff = useMemo(() => buildLikelyPlayoff(likelyBracket, scenarioSource, liveMatches, stats, scenarioSnapshotCreatedAt, scenarioUsesOfficialPrematch), [likelyBracket, liveMatches, scenarioSnapshotCreatedAt, scenarioSource, scenarioUsesOfficialPrematch, stats]);
   const playoffMatches = useMemo(() => Object.fromEntries(likelyPlayoff.stages.flatMap((stage) => stage.matches).map((match) => [match.label, match])) as Record<string, LikelyPlayoffMatch>, [likelyPlayoff]);
   const liveConstraintSignature = liveMatches.map((match) => `${match.id}:${match.stage}:${match.round}:${match.team_a}:${match.team_b}:${match.winner ?? "scheduled"}:${match.score_a ?? ""}:${match.score_b ?? ""}`).join(";");
-  const displayedResult = selectedRoot?.result ?? result;
+  const latestOfficialSnapshotIsCurrent = Boolean(latestOfficialSnapshot
+    && latestOfficialSnapshot.completed_match_count === completedLiveMatches.length
+    && (!latestOfficialSnapshot.inputs?.liveConstraintSignature || latestOfficialSnapshot.inputs.liveConstraintSignature === liveConstraintSignature));
+  const selectedLatestSnapshotIsCurrent = Boolean(selectedLatest
+    && selectedLatest.completed_match_count === completedLiveMatches.length
+    && (!selectedLatest.inputs?.liveConstraintSignature || selectedLatest.inputs.liveConstraintSignature === liveConstraintSignature));
+  const displayedResult = selectedRoot
+    ? selectedLatestSnapshotIsCurrent ? selectedLatest!.result : result ?? selectedLatest?.result ?? selectedRoot.result
+    : result;
   const matchMetrics = useMemo(() => matchEvaluation(completedLiveMatches), [completedLiveMatches]);
   const staticMatchMetrics = useMemo(() => staticGroupSnapshot ? matchEvaluation(completedLiveMatches, (match) => storedProbability(match.team_a, match.team_b, staticGroupSnapshot.probabilities)) : null, [completedLiveMatches, staticGroupSnapshot]);
   const stageMetrics = useMemo(() => (["swiss", "playin", "playoff"] as const).map((stage) => {
@@ -959,18 +967,26 @@ export default function Home() {
   }, [answers, answersLoaded]);
 
   useEffect(() => {
-    if (!answersLoaded || previousLiveSignature.current === liveConstraintSignature) return;
-    previousLiveSignature.current = liveConstraintSignature;
+    const scenarioRefreshSignature = `${selectedRoot?.id ?? "official"}:${liveConstraintSignature}`;
+    if (!answersLoaded || (forecastMode !== "personal" && !stats) || previousLiveSignature.current === scenarioRefreshSignature) return;
+    previousLiveSignature.current = scenarioRefreshSignature;
     if (!liveConstraintSignature) return;
-    if (selectedRunId !== null || (forecastMode === "stats" && latestOfficialSnapshot)) return;
-    const baseSource = forecastMode === "stats" ? statisticalAnswers(stats) : forecastMode === "mixed" ? mixedAnswers(answers, stats, opinionWeight) : answers;
+    if (selectedRoot ? selectedLatestSnapshotIsCurrent : forecastMode === "stats" && latestOfficialSnapshotIsCurrent) return;
+    const baseSource = selectedRoot?.probabilities ?? (forecastMode === "stats" ? statisticalAnswers(stats) : forecastMode === "mixed" ? mixedAnswers(answers, stats, opinionWeight) : answers);
     const source = applyLiveEvidence(baseSource, completedLiveMatches, stats);
-    const timer = window.setTimeout(() => {
-      setResult(runSimulation(source, iterationCount, undefined, { liveMatches, statisticalModel: stats }));
-      setAdminMessage("Прогноз автоматически пересчитан с учётом официальных пар и результатов TI.");
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [answers, answersLoaded, completedLiveMatches, forecastMode, iterationCount, latestOfficialSnapshot, liveConstraintSignature, liveMatches, opinionWeight, selectedRunId, stats]);
+    let cancelled = false;
+    setSimulationStatus({ kind: "running", message: "Появились новые пары или результаты — обновляю сценарии…" });
+    void runSimulationInWorker(source, Math.min(iterationCount, 250_000), Math.floor(Math.random() * 0xffffffff), { liveMatches, statisticalModel: stats })
+      .then((simulation) => {
+        if (cancelled) return;
+        setResult(simulation);
+        setSimulationStatus({ kind: "success", message: `Сценарии обновлены по ${completedLiveMatches.length} завершённым сериям. Сыгранные исходы зафиксированы.` });
+      })
+      .catch(() => {
+        if (!cancelled) setSimulationStatus({ kind: "error", message: "Не удалось обновить сценарии в браузере; ожидаю автоматический серверный прогон." });
+      });
+    return () => { cancelled = true; };
+  }, [answers, answersLoaded, completedLiveMatches, forecastMode, iterationCount, latestOfficialSnapshotIsCurrent, liveConstraintSignature, liveMatches, opinionWeight, selectedLatestSnapshotIsCurrent, selectedRoot, stats]);
 
   useEffect(() => {
     if (!selectedTeamId) return;
@@ -1285,7 +1301,7 @@ export default function Home() {
         })}</div>}
         <div className="prediction-history">
           <div className="prediction-history__head"><div><p className="eyebrow">ИСТОРИЯ МОДЕЛИ</p><h3>Что модель думала до результатов</h3></div><span>{historySnapshots.length} сохранённых прогнозов</span></div>
-          {selectedRoot && selectedLatest ? <div className="selected-run-banner"><div><b>ПРОГНОЗ #{selectedRoot.id} · {selectedRoot.forecast_mode === "mixed" ? `${selectedRoot.opinion_weight}% личного мнения` : selectedRoot.forecast_mode === "stats" ? "официальная статистическая база" : "личный сценарий"}</b><span>На странице и в сетке показан неизменный оригинал от {new Date(selectedRoot.created_at).toLocaleString("ru-RU")}. Его прогнозы сравниваются с последующими результатами; накопительная оценка уже учитывает {selectedLatest.completed_match_count} завершённых серий.</span></div><button type="button" onClick={() => selectSnapshot(null)}>Вернуться к Official baseline</button></div> : <div className="official-baseline-banner"><b>OFFICIAL BASELINE</b><span>{activeBaselineSnapshot ? `Загружен сохранённый снимок от ${new Date(activeBaselineSnapshot.created_at).toLocaleString("ru-RU")} · без нового пересчёта` : "Ожидаем первый сохранённый серверный снимок"}</span></div>}
+          {selectedRoot && selectedLatest ? <div className="selected-run-banner"><div><b>ПРОГНОЗ #{selectedRoot.id} · {selectedRoot.forecast_mode === "mixed" ? `${selectedRoot.opinion_weight}% личного мнения` : selectedRoot.forecast_mode === "stats" ? "официальная статистическая база" : "личный сценарий"}</b><span>Исходные вероятности от {new Date(selectedRoot.created_at).toLocaleString("ru-RU")} не переписываются. {selectedLatestSnapshotIsCurrent ? `Сценарии пересчитаны с фиксацией ${selectedLatest.completed_match_count} завершённых серий.` : `Появились новые данные — сценарии обновляются с фиксацией ${completedLiveMatches.length} завершённых серий.`} STATIC оценивает оригинал, ADAPTIVE — его последовательные ревизии.</span></div><button type="button" onClick={() => selectSnapshot(null)}>Вернуться к Official baseline</button></div> : <div className="official-baseline-banner"><b>OFFICIAL BASELINE</b><span>{activeBaselineSnapshot ? latestOfficialSnapshotIsCurrent ? `Загружен актуальный снимок от ${new Date(activeBaselineSnapshot.created_at).toLocaleString("ru-RU")} · повторный прогон не нужен` : `Появились новые пары или результаты · сценарии пересчитываются с фиксацией ${completedLiveMatches.length} завершённых серий` : "Ожидаем первый сохранённый серверный снимок"}</span></div>}
           {matchHistoryPoints.length > 0 && <div className="history-chart">
             <div className="history-chart__controls"><strong>НАКОПИТЕЛЬНАЯ ТОЧНОСТЬ · STATIC ПРОТИВ ADAPTIVE</strong><span><i className="legend-static" /> STATIC заморожен до групп · <i className="legend-adaptive" /> ADAPTIVE сохранён перед матчем</span></div>
             <div className="history-chart__bars">{matchHistoryPoints.map((point) => { const staticAccuracy = 100 * point.static.correct / point.static.count; const adaptiveAccuracy = 100 * point.adaptive.correct / point.adaptive.count; return <div key={point.match.id} title={`${getTeam(point.match.team_a).name} — ${getTeam(point.match.team_b).name} · STATIC ${staticAccuracy.toFixed(1)}%, Brier ${point.static.brier?.toFixed(3)}, log loss ${point.static.logLoss?.toFixed(3)} · ADAPTIVE ${adaptiveAccuracy.toFixed(1)}%, Brier ${point.adaptive.brier?.toFixed(3)}, log loss ${point.adaptive.logLoss?.toFixed(3)}`}><b>{staticAccuracy.toFixed(0)}/{adaptiveAccuracy.toFixed(0)}%</b><span className="history-chart__pair"><i className="history-chart__static" style={{ height: `${Math.max(3, staticAccuracy)}%` }} /><i className="history-chart__adaptive" style={{ height: `${Math.max(3, adaptiveAccuracy)}%` }} /></span><small>{point.match.stage === "swiss" ? `S${point.match.round}` : point.match.stage === "playin" ? "PI" : "PO"}</small></div>; })}</div>
