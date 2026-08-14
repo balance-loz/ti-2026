@@ -41,6 +41,7 @@ const SWISS_GROUP_BY_TEAM = Object.fromEntries(Object.entries(SWISS_GROUPS).flat
 const team = (id: string) => TEAMS[id] ?? { name: id, short: id.toUpperCase(), logo: "" };
 const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
 const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.max(0, seconds % 60)).padStart(2, "0")}`;
+const isLowConfidence = (probabilityForWinner: number | null) => probabilityForWinner !== null && probabilityForWinner < .58;
 
 function Team({ id }: { id: string }) {
   const item = team(id);
@@ -51,6 +52,10 @@ function Grade({ correct, eligible = true }: { correct: boolean | null; eligible
   if (!eligible) return <span className="fusion-grade fusion-grade--late">ТОЛЬКО АНАЛИЗ</span>;
   if (correct === null) return <span className="fusion-grade">ЖДЁМ РЕЗУЛЬТАТ</span>;
   return <span className={`fusion-grade ${correct ? "is-correct" : "is-wrong"}`}>{correct ? "УГАДАН" : "НЕ УГАДАН"}</span>;
+}
+
+function RouletteRisk({ label = false }: { label?: boolean }) {
+  return <span className={`fusion-roulette-risk ${label ? "has-label" : ""}`} title="Низкая уверенность: вероятность близка к 50/50" aria-label="Рулетка: низкая уверенность прогноза"><i aria-hidden="true" />{label ? <small>RISK</small> : null}</span>;
 }
 
 function HeroPicks({ ids, heroes }: { ids: number[]; heroes: Map<number, Hero> }) {
@@ -64,11 +69,14 @@ function MapStrip({ maps, heroes, locks, isAdmin, locking, onLock }: { maps: Map
     const predicted = prediction?.predictedWinner ?? null;
     const predictedProbability = prediction ? (predicted === map.radiantTeam ? prediction.probabilityRadiant : 1 - prediction.probabilityRadiant) : null;
     const betLock = locks.find((lock) => lock.scope === "map" && String(lock.subjectId) === String(map.matchId));
-    return <article key={map.matchId} className={map.winner ? "is-complete" : ""}>
-      <header><b>КАРТА {index + 1}</b><span>{map.duration ? clock(map.duration) : map.winner ? "завершена" : "ожидание"}</span></header>
-      <div className={`fusion-map-side ${map.winner === map.radiantTeam ? "is-winner" : ""}`}><Team id={map.radiantTeam} /><HeroPicks ids={map.picks?.radiant ?? []} heroes={heroes} /><em>{map.winner === map.radiantTeam ? "W" : map.winner ? "L" : "R"}</em></div>
-      <div className={`fusion-map-side ${map.winner === map.direTeam ? "is-winner" : ""}`}><Team id={map.direTeam} /><HeroPicks ids={map.picks?.dire ?? []} heroes={heroes} /><em>{map.winner === map.direTeam ? "W" : map.winner ? "L" : "D"}</em></div>
-      <footer>{betLock ? <><span><b>СТАВКА · {team(betLock.recommendedWinner).short} {percent(betLock.recommendedWinner === betLock.teamA ? betLock.probabilityA : 1 - betLock.probabilityA)}</b><small>зафиксирована {new Date(betLock.createdAt).toLocaleTimeString("ru-RU")}</small></span><Grade correct={betLock.predictionCorrect} /></> : prediction ? <><span><b>{team(predicted!).short} {percent(predictedProbability!)}</b><small>текущий draft-прогноз · ещё не ставка</small></span>{isAdmin && !map.winner ? <button className="fusion-bet-button" disabled={locking === `map:${map.matchId}`} onClick={() => onLock({ scope: "map", subjectId: map.matchId, probabilityA: prediction.probabilityRadiant, recommendedWinner: predicted!, evidence: { capturedAt: prediction.capturedAt, modelId: prediction.modelId } })}>{locking === `map:${map.matchId}` ? "Фиксирую…" : "Я поставил по рекомендации"}</button> : <Grade correct={null} />}</> : <span><b>Нет draft-прогноза</b><small>ставку задним числом не создаём</small></span>}</footer>
+    const decisionWinner = betLock?.recommendedWinner ?? predicted;
+    const decisionProbability = betLock ? (betLock.recommendedWinner === betLock.teamA ? betLock.probabilityA : 1 - betLock.probabilityA) : predictedProbability;
+    const lowConfidence = isLowConfidence(decisionProbability);
+    return <article key={map.matchId} className={`${map.winner ? "is-complete" : ""} ${lowConfidence ? "has-risk" : ""}`}>
+      <header><b>КАРТА {index + 1}</b>{lowConfidence ? <RouletteRisk label /> : null}<span>{map.duration ? clock(map.duration) : map.winner ? "завершена" : "ожидание"}</span></header>
+      <div className={`fusion-map-side ${map.winner === map.radiantTeam ? "is-winner" : ""}`}><Team id={map.radiantTeam} /><HeroPicks ids={map.picks?.radiant ?? []} heroes={heroes} /><span className="fusion-map-risk-slot">{lowConfidence && decisionWinner === map.radiantTeam ? <RouletteRisk /> : null}</span><em>{map.winner === map.radiantTeam ? "W" : map.winner ? "L" : "R"}</em></div>
+      <div className={`fusion-map-side ${map.winner === map.direTeam ? "is-winner" : ""}`}><Team id={map.direTeam} /><HeroPicks ids={map.picks?.dire ?? []} heroes={heroes} /><span className="fusion-map-risk-slot">{lowConfidence && decisionWinner === map.direTeam ? <RouletteRisk /> : null}</span><em>{map.winner === map.direTeam ? "W" : map.winner ? "L" : "D"}</em></div>
+      <footer>{betLock ? <><span><b>СТАВКА · {team(betLock.recommendedWinner).short} {percent(betLock.recommendedWinner === betLock.teamA ? betLock.probabilityA : 1 - betLock.probabilityA)}{lowConfidence ? <RouletteRisk /> : null}</b><small>зафиксирована {new Date(betLock.createdAt).toLocaleTimeString("ru-RU")}</small></span><Grade correct={betLock.predictionCorrect} /></> : prediction ? <><span><b>{team(predicted!).short} {percent(predictedProbability!)}{lowConfidence ? <RouletteRisk /> : null}</b><small>текущий draft-прогноз · ещё не ставка</small></span>{isAdmin && !map.winner ? <button className="fusion-bet-button" disabled={locking === `map:${map.matchId}`} onClick={() => onLock({ scope: "map", subjectId: map.matchId, probabilityA: prediction.probabilityRadiant, recommendedWinner: predicted!, evidence: { capturedAt: prediction.capturedAt, modelId: prediction.modelId } })}>{locking === `map:${map.matchId}` ? "Фиксирую…" : "Я поставил по рекомендации"}</button> : <Grade correct={null} />}</> : <span><b>Нет draft-прогноза</b><small>ставку задним числом не создаём</small></span>}</footer>
     </article>;
   })}</div>;
 }
@@ -141,7 +149,10 @@ function SwissMatrix({ rows, maps, heroes, locks, isAdmin, locking, onLock, expa
       const teamProbability = standing.teamId === row.match.team_a ? view.displayProbabilityA : 1 - view.displayProbabilityA;
       const isOpen = expanded[String(row.match.id)] === standing.teamId;
       const won = row.match.winner ? row.match.winner === standing.teamId : null;
-      return <td key={round} className={won === true ? "is-won" : won === false ? "is-lost" : row.live ? "is-live" : ""}><button className={`fusion-round-match ${isOpen ? "is-open" : ""}`} aria-expanded={isOpen} onClick={() => onToggle(row.match.id, standing.teamId)}><span><Team id={opponent} /><b>{percent(teamProbability)}</b></span><small>{row.match.winner ? `${row.match.score_a}:${row.match.score_b} · ${won ? "W" : "L"}` : row.live ? "LIVE" : `${view.displayExact ?? "—"} · ${view.betLock ? "ставка" : "main"}`}</small></button></td>;
+      const predictionCorrect = row.match.winner ? view.displayWinner === row.match.winner : null;
+      const winnerProbability = view.displayWinner === row.match.team_a ? view.displayProbabilityA : 1 - view.displayProbabilityA;
+      const lowConfidence = isLowConfidence(winnerProbability);
+      return <td key={round} className={won === true ? "is-won" : won === false ? "is-lost" : row.live ? "is-live" : ""}><button className={`fusion-round-match ${isOpen ? "is-open" : ""}`} aria-expanded={isOpen} onClick={() => onToggle(row.match.id, standing.teamId)}><span><Team id={opponent} /><span className="fusion-cell-forecast">{lowConfidence ? <RouletteRisk /> : null}<b>{percent(teamProbability)}</b></span></span><small>{row.match.winner ? `${row.match.score_a}:${row.match.score_b} · ${won ? "W" : "L"}` : row.live ? "LIVE" : `${view.displayExact ?? "—"} · ${view.betLock ? "ставка" : "main"}`}</small>{predictionCorrect !== null ? <em className={`fusion-prediction-verdict ${predictionCorrect ? "is-correct" : "is-wrong"}`}>{predictionCorrect ? "ПРОГНОЗ УГАДАН" : "ПРОГНОЗ НЕ УГАДАН"}</em> : <em className="fusion-prediction-verdict is-pending">MAIN: {team(view.displayWinner).short} · {percent(winnerProbability)}</em>}</button></td>;
     })}<td><span className={`fusion-outcome ${standing.wins >= 4 ? "is-qualified" : standing.losses >= 4 ? "is-eliminated" : ""}`}>{standing.wins >= 4 ? "НАПРЯМУЮ" : standing.losses >= 4 ? "ВЫЛЕТ" : standing.wins + standing.losses >= 5 ? "СТЫК" : "В ИГРЕ"}</span></td></tr>{openRows.map((row) => <tr key={`open-${row.match.id}`} className="fusion-matrix-expanded"><td colSpan={rounds.length + 5}><SeriesDetail row={row} maps={maps} heroes={heroes} locks={locks} isAdmin={isAdmin} locking={locking} onLock={onLock} /></td></tr>)}</Fragment>;
   })}</tbody></table></div></section>;
 }

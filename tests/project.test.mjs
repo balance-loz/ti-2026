@@ -62,8 +62,8 @@ test("production gate keeps adaptive forecasts in shadow when proper scores get 
 });
 
 test("combined page and API persist map truth and explain the no-double-count policy", async () => {
-  const [api, page, checkpoint, modelGate] = await Promise.all([
-    readFile("server/api.mjs", "utf8"), readFile("app/combined/page.tsx", "utf8"), readFile("scripts/checkpoint-production.mjs", "utf8"), readFile("server/model-gate.mjs", "utf8"),
+  const [api, page, tournamentPage, checkpoint, modelGate] = await Promise.all([
+    readFile("server/api.mjs", "utf8"), readFile("app/combined/page.tsx", "utf8"), readFile("app/page.tsx", "utf8"), readFile("scripts/checkpoint-production.mjs", "utf8"), readFile("server/model-gate.mjs", "utf8"),
   ]);
   assert.match(api, /CREATE TABLE IF NOT EXISTS tournament_maps/);
   assert.match(api, /CREATE TABLE IF NOT EXISTS bet_locks/);
@@ -91,6 +91,12 @@ test("combined page and API persist map truth and explain the no-double-count po
   assert.match(page, /const teamProbability = standing\.teamId === row\.match\.team_a/);
   assert.match(page, /expandedMatches/);
   assert.match(page, /fusion-round-match/);
+  assert.match(page, /ПРОГНОЗ УГАДАН/);
+  assert.match(page, /fusion-prediction-verdict/);
+  assert.match(page, /function RouletteRisk/);
+  assert.match(page, /const isLowConfidence = .* < \.58/);
+  assert.match(tournamentPage, /round\.probability\.toFixed\(0\).*%/);
+  assert.doesNotMatch(tournamentPage, /round-confidence[^}]+round\.confidence\.score/);
   assert.match(page, /UPPER_PLACEMENT/);
   assert.match(page, /LOWER_PLACEMENT/);
   assert.match(page, /Точный счёт/);
