@@ -30,6 +30,11 @@ function run(script, index, total) {
   });
 }
 
-process.stdout.write(`[refresh] start ${STEPS.length} steps\n`);
-for (const [index, script] of STEPS.entries()) await run(script, index + 1, STEPS.length);
-process.stdout.write("[refresh] done\n");
+try {
+  process.stdout.write(`[refresh] start ${STEPS.length} steps\n`);
+  for (const [index, script] of STEPS.entries()) await run(script, index + 1, STEPS.length);
+  process.stdout.write("[refresh] done\n");
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.exit(1);
+}

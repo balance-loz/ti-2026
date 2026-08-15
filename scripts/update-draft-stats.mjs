@@ -1,10 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const ROOT = process.cwd();
 const API = process.env.OPENDOTA_API_URL || "https://api.opendota.com/api";
 const MATCH_CACHE = path.join(ROOT, "work", "opendota-cache", "matches");
+const META_CACHE = path.join(ROOT, "work", "opendota-cache", "meta");
 const TEAM_STATS_FILE = path.join(ROOT, "public", "team-stats.json");
 const OUTPUT = path.join(ROOT, "public", "draft-stats.json");
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "data");
@@ -21,7 +22,31 @@ const TI_LEAGUE_ID = Number(process.env.TI_LEAGUE_ID || 19719);
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const pairKey = (a, b) => [Number(a), Number(b)].sort((left, right) => left - right).join("|");
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const errorMessage = (error) => error instanceof Error ? error.message : String(error);
+const asInteger = (value) => { const n = Number(value); return Number.isInteger(n) ? n : null; };
 let nextRequestAt = 0;
+
+function slimMatch(match) {
+  const matchId = asInteger(match?.match_id);
+  const patch = asInteger(match?.patch);
+  if (matchId === null || patch === null) return null;
+  const players = (match.players ?? []).map((player) => ({
+    account_id: Number(player.account_id || 0),
+    hero_id: Number(player.hero_id || 0),
+    player_slot: Number(player.player_slot),
+  }));
+  if (players.length < 10) return null;
+  return {
+    match_id: matchId,
+    patch,
+    start_time: Number(match.start_time || 0),
+    leagueid: Number(match.leagueid || 0),
+    radiant_team_id: Number(match.radiant_team_id || 0),
+    dire_team_id: Number(match.dire_team_id || 0),
+    radiant_win: Boolean(match.radiant_win),
+    players,
+  };
+}
 
 function increment(record, key, won, startTime = 0) {
   const row = record[key] ?? { games: 0, wins: 0, lastPlayedAt: 0 };
@@ -43,27 +68,72 @@ function teamSide(match, openDotaIds) {
 }
 
 async function apiJson(endpoint) {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  const attempts = 8;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     const wait = Math.max(0, nextRequestAt - Date.now());
     if (wait) await sleep(wait);
     nextRequestAt = Date.now() + REQUEST_GAP_MS;
     try {
       const response = await fetch(`${API}${endpoint}`, {
         headers: { "user-agent": "TI26Predictor/0.4 (local personal analytics)" },
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(30_000),
       });
       if (response.ok) return response.json();
-      process.stderr.write(`OpenDota ${response.status} ${endpoint} attempt ${attempt + 1}/5\n`);
-      if (response.status !== 429 && response.status < 500) throw new Error(`${endpoint}: OpenDota returned ${response.status}`);
+      process.stderr.write(`OpenDota ${response.status} ${endpoint} attempt ${attempt + 1}/${attempts}\n`);
+      if (response.status === 429) {
+        const retryAfter = Number(response.headers.get("retry-after"));
+        const delayMs = (Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 8 * 2 ** attempt) * 1000;
+        nextRequestAt = Date.now() + delayMs;
+        continue;
+      }
+      if (response.status < 500) throw new Error(`${endpoint}: OpenDota returned ${response.status}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      process.stderr.write(`OpenDota error ${endpoint} attempt ${attempt + 1}/5: ${message}\n`);
+      const message = errorMessage(error);
+      process.stderr.write(`OpenDota error ${endpoint} attempt ${attempt + 1}/${attempts}: ${message}\n`);
       const returned = Number((message.match(/returned (\d+)/) || [])[1] || 0);
-      if (attempt === 4 || (returned && returned !== 429 && returned < 500)) throw error;
+      if (attempt === attempts - 1 || (returned && returned !== 429 && returned < 500)) throw error;
     }
-    await sleep(1000 * 2 ** attempt);
+    await sleep(1000 * 2 ** Math.min(attempt, 5));
   }
   throw new Error(`${endpoint}: retry limit reached`);
+}
+
+async function readMetaCache(name, maxAgeMs) {
+  try {
+    const parsed = JSON.parse(await readFile(path.join(META_CACHE, `${name}.json`), "utf8"));
+    if (Date.now() - Date.parse(parsed.fetchedAt) <= maxAgeMs && parsed.body != null) return parsed.body;
+  } catch {
+    // Missing or stale cache is a normal first-run path.
+  }
+  return null;
+}
+
+async function writeMetaCache(name, body) {
+  await mkdir(META_CACHE, { recursive: true });
+  await writeFile(path.join(META_CACHE, `${name}.json`), `${JSON.stringify({ fetchedAt: new Date().toISOString(), body })}\n`);
+}
+
+async function apiJsonCached(endpoint, name, { preferAgeMs, staleAgeMs }) {
+  const fresh = await readMetaCache(name, preferAgeMs);
+  if (fresh != null) return fresh;
+  try {
+    const body = await apiJson(endpoint);
+    await writeMetaCache(name, body);
+    return body;
+  } catch (error) {
+    const stale = await readMetaCache(name, staleAgeMs);
+    if (stale != null) {
+      process.stderr.write(`OpenDota ${endpoint} failed (${errorMessage(error)}); using stale cache ${name}\n`);
+      return stale;
+    }
+    throw error;
+  }
+}
+
+async function apiJsonArray(endpoint, name, cache) {
+  const payload = name ? await apiJsonCached(endpoint, name, cache) : await apiJson(endpoint);
+  if (!Array.isArray(payload)) throw new Error(`${endpoint}: expected an array, got ${typeof payload}`);
+  return payload;
 }
 
 function eligiblePatchMaps(teamStats, patchStartSeconds) {
@@ -99,7 +169,10 @@ function addLiveTournamentMaps(eligible, teamStats, leagueMaps, patchStartSecond
     eligible.all.add(matchId);
     for (const openDotaId of [map.radiant_team_id, map.dire_team_id]) {
       const teamId = teamByOpenDotaId.get(Number(openDotaId));
-      if (teamId) eligible.byTeam[teamId].add(matchId);
+      if (teamId) {
+        if (!eligible.byTeam[teamId]) eligible.byTeam[teamId] = new Set();
+        eligible.byTeam[teamId].add(matchId);
+      }
     }
   }
   return added;
@@ -121,7 +194,7 @@ async function downloadMissingMatches(matchIds) {
       downloaded += 1;
     } catch (error) {
       failed += 1;
-      process.stderr.write(`Match ${matchId} skipped: ${error.message}\n`);
+      process.stderr.write(`Match ${matchId} skipped: ${errorMessage(error)}\n`);
     }
     if (downloaded + failed === 1 || (downloaded + failed) % 5 === 0 || downloaded + failed === queue.length) {
       process.stdout.write(`Draft details: ${downloaded + failed}/${queue.length} processed (${failed} failed)\n`);
@@ -132,10 +205,13 @@ async function downloadMissingMatches(matchIds) {
 
 async function loadCachedMatches(matchIds, patchId) {
   const matches = [];
+  const seen = new Set();
   for (const matchId of matchIds) {
     try {
-      const match = JSON.parse(await readFile(path.join(MATCH_CACHE, `${matchId}.json`), "utf8"));
-      if (Number(match.patch) === patchId && Array.isArray(match.players) && match.players.length >= 10) matches.push(match);
+      const match = slimMatch(JSON.parse(await readFile(path.join(MATCH_CACHE, `${matchId}.json`), "utf8")));
+      if (!match || match.patch !== patchId || seen.has(match.match_id)) continue;
+      seen.add(match.match_id);
+      matches.push(match);
     } catch {
       // A missing or partial cache entry remains resumable on the next update.
     }
@@ -145,11 +221,14 @@ async function loadCachedMatches(matchIds, patchId) {
 
 async function loadAllCachedProMatches(patchId) {
   const matches = [];
+  const seen = new Set();
   for (const file of await readdir(MATCH_CACHE)) {
     if (!file.endsWith(".json")) continue;
     try {
-      const match = JSON.parse(await readFile(path.join(MATCH_CACHE, file), "utf8"));
-      if (Number(match.patch) === patchId && Number(match.leagueid || 0) > 0 && Array.isArray(match.players) && match.players.length >= 10) matches.push(match);
+      const match = slimMatch(JSON.parse(await readFile(path.join(MATCH_CACHE, file), "utf8")));
+      if (!match || match.patch !== patchId || match.leagueid <= 0 || seen.has(match.match_id)) continue;
+      seen.add(match.match_id);
+      matches.push(match);
     } catch {
       // Corrupt or partial cache files are excluded and reported by the training manifest.
     }
@@ -227,8 +306,11 @@ function modelSample(row, priorRate, priorGames) {
   };
 }
 
-async function persistDatabase(output, matches) {
-  await mkdir(path.dirname(DB_PATH), { recursive: true });
+async function removeDraftDatabase() {
+  await Promise.all([DB_PATH, `${DB_PATH}-wal`, `${DB_PATH}-shm`].map((file) => unlink(file).catch(() => {})));
+}
+
+function writeDraftDatabase(output, matches) {
   const db = new DatabaseSync(DB_PATH);
   db.exec(`
     PRAGMA journal_mode=WAL;
@@ -252,24 +334,48 @@ async function persistDatabase(output, matches) {
     const heroInsert = db.prepare("INSERT INTO heroes VALUES (?,?,?,?,?,?,?,?,?)");
     const patchInsert = db.prepare("INSERT INTO hero_patch VALUES (?,?,?,?,?)");
     for (const hero of output.heroes) {
-      heroInsert.run(hero.id, hero.name, hero.slug, hero.primaryAttribute, JSON.stringify(hero.roles), hero.proPicks, hero.proBans, hero.modelWinRate, hero.patchSample);
+      const heroId = asInteger(hero.id);
+      if (heroId === null) continue;
+      heroInsert.run(heroId, hero.name, hero.slug, hero.primaryAttribute ?? null, JSON.stringify(hero.roles ?? []), hero.proPicks, hero.proBans, hero.modelWinRate, hero.patchSample);
       const patch = output.heroPatch[String(hero.id)] ?? { games: 0, wins: 0, winRate: hero.modelWinRate, lastPlayedAt: 0 };
-      patchInsert.run(hero.id, patch.games, patch.wins, patch.winRate, patch.lastPlayedAt);
+      patchInsert.run(heroId, patch.games, patch.wins, patch.winRate, patch.lastPlayedAt || 0);
     }
-    const matchInsert = db.prepare("INSERT INTO patch_matches VALUES (?,?,?,?,?,?)");
-    for (const match of matches) matchInsert.run(Number(match.match_id), Number(match.patch), Number(match.start_time), Number(match.radiant_team_id || 0), Number(match.dire_team_id || 0), match.radiant_win ? 1 : 0);
+    const matchInsert = db.prepare("INSERT OR REPLACE INTO patch_matches VALUES (?,?,?,?,?,?)");
+    for (const match of matches) {
+      const matchId = asInteger(match.match_id);
+      const patch = asInteger(match.patch);
+      if (matchId === null || patch === null) continue;
+      matchInsert.run(matchId, patch, Number(match.start_time || 0), Number(match.radiant_team_id || 0), Number(match.dire_team_id || 0), match.radiant_win ? 1 : 0);
+    }
     const teamInsert = db.prepare("INSERT INTO team_heroes VALUES (?,?,?,?,?,?)");
     const playerInsert = db.prepare("INSERT INTO player_heroes VALUES (?,?,?,?,?,?,?,?)");
     for (const [teamId, team] of Object.entries(output.teams)) {
-      for (const [heroId, row] of Object.entries(team.heroes)) teamInsert.run(teamId, Number(heroId), row.games, row.wins, row.winRate, row.lastPlayedAt);
-      for (const player of team.players) for (const [heroId, row] of Object.entries(player.heroes)) playerInsert.run(teamId, player.accountId, player.name, Number(heroId), row.games, row.wins, row.winRate, row.lastPlayedAt);
+      for (const [heroId, row] of Object.entries(team.heroes)) {
+        const id = asInteger(heroId);
+        if (id === null) continue;
+        teamInsert.run(teamId, id, row.games, row.wins, row.winRate, row.lastPlayedAt || 0);
+      }
+      for (const player of team.players) for (const [heroId, row] of Object.entries(player.heroes)) {
+        const id = asInteger(heroId);
+        const accountId = asInteger(player.accountId);
+        if (id === null || accountId === null) continue;
+        playerInsert.run(teamId, accountId, String(player.name || `Player ${accountId}`), id, row.games, row.wins, row.winRate, row.lastPlayedAt || 0);
+      }
     }
-    const synergyInsert = db.prepare("INSERT INTO hero_synergy VALUES (?,?,?,?,?,?)");
-    for (const [key, row] of Object.entries(output.synergy)) { const [a, b] = key.split("|").map(Number); synergyInsert.run(a, b, row.games, row.wins, row.winRate, row.lastPlayedAt); }
-    const matchupInsert = db.prepare("INSERT INTO hero_matchups VALUES (?,?,?,?,?,?)");
-    for (const [key, row] of Object.entries(output.counters)) { const [a, b] = key.split("|").map(Number); matchupInsert.run(a, b, row.games, row.wins, row.winRate, row.lastPlayedAt); }
-    const lineupInsert = db.prepare("INSERT INTO hero_lineups VALUES (?,?,?,?,?)");
-    for (const [key, row] of Object.entries(output.lineups)) lineupInsert.run(key, row.games, row.wins, row.winRate, row.lastPlayedAt);
+    const synergyInsert = db.prepare("INSERT OR REPLACE INTO hero_synergy VALUES (?,?,?,?,?,?)");
+    for (const [key, row] of Object.entries(output.synergy)) {
+      const [a, b] = key.split("|").map(Number);
+      if (!Number.isInteger(a) || !Number.isInteger(b)) continue;
+      synergyInsert.run(a, b, row.games, row.wins, row.winRate, row.lastPlayedAt || 0);
+    }
+    const matchupInsert = db.prepare("INSERT OR REPLACE INTO hero_matchups VALUES (?,?,?,?,?,?)");
+    for (const [key, row] of Object.entries(output.counters)) {
+      const [a, b] = key.split("|").map(Number);
+      if (!Number.isInteger(a) || !Number.isInteger(b)) continue;
+      matchupInsert.run(a, b, row.games, row.wins, row.winRate, row.lastPlayedAt || 0);
+    }
+    const lineupInsert = db.prepare("INSERT OR REPLACE INTO hero_lineups VALUES (?,?,?,?,?)");
+    for (const [key, row] of Object.entries(output.lineups)) lineupInsert.run(key, row.games, row.wins, row.winRate, row.lastPlayedAt || 0);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -279,18 +385,33 @@ async function persistDatabase(output, matches) {
   }
 }
 
+async function persistDatabase(output, matches) {
+  await mkdir(path.dirname(DB_PATH), { recursive: true });
+  try {
+    writeDraftDatabase(output, matches);
+  } catch (error) {
+    process.stderr.write(`Draft sqlite persist failed, rebuilding ${DB_PATH}: ${errorMessage(error)}\n`);
+    await removeDraftDatabase();
+    writeDraftDatabase(output, matches);
+  }
+}
+
 async function main() {
+  process.stdout.write("Draft details: fetching OpenDota metadata...\n");
   const teamStats = JSON.parse(await readFile(TEAM_STATS_FILE, "utf8"));
-  const [rawHeroes, proPlayers, patches] = await Promise.all([apiJson("/heroStats"), apiJson("/proPlayers"), apiJson("/constants/patch")]);
+  const rawHeroes = await apiJsonArray("/heroStats", "heroStats", { preferAgeMs: 6 * 3600 * 1000, staleAgeMs: 7 * 24 * 3600 * 1000 });
+  const proPlayers = await apiJsonArray("/proPlayers", "proPlayers", { preferAgeMs: 6 * 3600 * 1000, staleAgeMs: 7 * 24 * 3600 * 1000 });
+  const patches = await apiJsonArray("/constants/patch", "patches", { preferAgeMs: 24 * 3600 * 1000, staleAgeMs: 30 * 24 * 3600 * 1000 });
   const currentPatch = [...patches].sort((a, b) => Number(b.id) - Number(a.id))[0];
+  if (!currentPatch) throw new Error("OpenDota /constants/patch returned no patches");
   const patchStartSeconds = Math.floor(Date.parse(currentPatch.date) / 1000);
   const eligible = eligiblePatchMaps(teamStats, patchStartSeconds);
   let liveTournamentMaps = 0;
   try {
-    const leagueMaps = await apiJson(`/leagues/${TI_LEAGUE_ID}/matches`);
-    liveTournamentMaps = addLiveTournamentMaps(eligible, teamStats, Array.isArray(leagueMaps) ? leagueMaps : [], patchStartSeconds);
+    const leagueMaps = await apiJsonArray(`/leagues/${TI_LEAGUE_ID}/matches`, `league-${TI_LEAGUE_ID}`, { preferAgeMs: 10 * 60 * 1000, staleAgeMs: 6 * 3600 * 1000 });
+    liveTournamentMaps = addLiveTournamentMaps(eligible, teamStats, leagueMaps, patchStartSeconds);
   } catch (error) {
-    process.stderr.write(`Live TI draft discovery skipped: ${error.message}\n`);
+    process.stderr.write(`Live TI draft discovery skipped: ${errorMessage(error)}\n`);
   }
   process.stdout.write(`Draft details: ${eligible.all.size} eligible maps, ${liveTournamentMaps} live TI maps discovered\n`);
   const download = await downloadMissingMatches(eligible.all);
@@ -336,9 +457,18 @@ async function main() {
     lineups: Object.fromEntries(Object.entries(patchStats.lineups).map(([key, row]) => [key, modelSample(row, 0.5, 16)])),
     teams: teamHeroes,
   };
+  process.stdout.write("Draft details: writing draft-stats.json...\n");
   await writeFile(OUTPUT, `${JSON.stringify(output, null, 2)}\n`);
-  await persistDatabase(output, matches);
+  process.stdout.write("Draft details: persisting draft-model.sqlite...\n");
+  try {
+    await persistDatabase(output, matches);
+  } catch (error) {
+    process.stderr.write(`Draft sqlite persist skipped after JSON save: ${errorMessage(error)}\n`);
+  }
   console.log(`Saved draft model: patch ${currentPatch.name}, ${matches.length}/${eligible.all.size} maps, ${heroes.length} heroes; database ${DB_PATH}.`);
 }
 
-main().catch((error) => { console.error(error); process.exitCode = 1; });
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

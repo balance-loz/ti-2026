@@ -325,10 +325,17 @@ function persistRefreshProgress(progress, force = false) {
     .run(JSON.stringify(progress), now());
 }
 
+function isNoisyRefreshLine(line) {
+  return /^(Node\.js v\d|at |file:\/\/|\^$)/.test(line)
+    || line.includes("node:internal/child_process")
+    || line.includes("node:events")
+    || /^Error: scripts\/.+ exited with code \d+$/.test(line);
+}
+
 function applyRefreshLine(progress, line) {
   const trimmed = line.trim();
   if (!trimmed) return;
-  progress.detail = trimmed.slice(0, 280);
+  if (!isNoisyRefreshLine(trimmed)) progress.detail = trimmed.slice(0, 280);
   progress.heartbeatAt = now();
   const start = trimmed.match(/^\[refresh\]\s+(\d+)\/(\d+)\s+start\s+(\S+)/);
   if (start) {

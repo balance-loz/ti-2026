@@ -620,7 +620,7 @@ test("draft lab contains current-patch heroes and regularized matchup evidence",
   assert.match(page, /Игроки на героях/);
   assert.match(server, /scripts\/update-all-stats\.mjs/);
   assert.match(server, /refresh_progress/);
-  assert.match(server, /publicRefreshProgress/);
+  assert.match(server, /function isNoisyRefreshLine/);
   assert.match(await readFile("scripts/update-all-stats.mjs", "utf8"), /\[refresh\] \$\{index\}\/\$\{total\} start/);
   assert.match(await readFile("app/admin/page.tsx", "utf8"), /RefreshProgressPanel/);
   assert.match(server, /\/api\/draft\/predict/);
@@ -637,6 +637,12 @@ test("draft refresh discovers live TI league maps before training", async () => 
   assert.match(updater, /liveTournamentMapsAdded/);
   assert.match(updater, /processed \(\$\{failed\} failed\)/);
   assert.match(updater, /OpenDota \$\{response\.status\}/);
+  assert.match(updater, /function slimMatch/);
+  assert.match(updater, /INSERT OR REPLACE INTO patch_matches/);
+  assert.match(updater, /Draft sqlite persist skipped after JSON save/);
+  assert.match(updater, /async function apiJsonCached/);
+  assert.match(updater, /response\.headers\.get\("retry-after"\)/);
+  assert.doesNotMatch(updater, /Promise\.all\(\[apiJson/);
 });
 
 test("deployment files do not contain the administrator password", async () => {
