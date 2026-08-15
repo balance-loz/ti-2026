@@ -258,6 +258,7 @@ let refreshProcess = null;
 let liveSyncPromise = null;
 let liveDraftPromise = null;
 let liveDraftCache = { games: [], fetchedAt: null, error: null };
+const liveDraftErrors = new Map();
 let liveLeagueMapsCache = { maps: [], fetchedAt: null };
 let autoSnapshotTimer = null;
 let pendingAutomaticSnapshotTrigger = null;
@@ -394,7 +395,8 @@ function liveDraftHistory(matchId, limit = 120) {
 function decorateLiveDraft(game) {
   const storedPrediction = storedLiveDraftPrediction(game.matchId);
   const draftPrediction = storedDraftMatchesGame(storedPrediction, game) ? storedPrediction : null;
-  return { ...game, draftPrediction, history: liveDraftHistory(game.matchId) };
+  if (draftPrediction) liveDraftErrors.delete(String(game.matchId));
+  return { ...game, draftPrediction, draftError: draftPrediction ? null : liveDraftErrors.get(String(game.matchId)) ?? null, history: liveDraftHistory(game.matchId) };
 }
 
 function loadJson(relativePath) {
@@ -405,14 +407,16 @@ function observeStableDraft(game, observedAt) {
   if ((game.radiantPicks?.length ?? 0) !== 5 || (game.direPicks?.length ?? 0) !== 5) return null;
   const picksHash = livePicksHash(game);
   const existingPrediction = storedLiveDraftPrediction(game.matchId);
-  if (storedDraftMatchesGame(existingPrediction, game)) return existingPrediction;
+  if (storedDraftMatchesGame(existingPrediction, game)) {
+    liveDraftErrors.delete(String(game.matchId));
+    return existingPrediction;
+  }
   const candidate = db.prepare("SELECT * FROM live_draft_candidates WHERE match_id=?").get(String(game.matchId));
   const observations = candidate?.picks_hash === picksHash ? Number(candidate.observations) + 1 : 1;
   db.prepare(`INSERT INTO live_draft_candidates(match_id,picks_hash,observations,first_seen_at,last_seen_at)
     VALUES (?,?,?,?,?) ON CONFLICT(match_id) DO UPDATE SET picks_hash=excluded.picks_hash,
     observations=excluded.observations,first_seen_at=CASE WHEN live_draft_candidates.picks_hash=excluded.picks_hash THEN live_draft_candidates.first_seen_at ELSE excluded.first_seen_at END,
     last_seen_at=excluded.last_seen_at`).run(String(game.matchId), picksHash, observations, observedAt, observedAt);
-  if (observations < (game.phase === "game" ? 1 : 2)) return null;
   try {
     const prediction = calculateActiveDraftPrediction({ draftStats: loadJson("public/draft-stats.json"), teamStats: loadJson("public/team-stats.json"), game });
     const evidence = JSON.stringify({ sourceTeamProbability: prediction.sourceTeamProbability, completeness: prediction.completeness, signals: prediction.signals, ...prediction.evidence });
@@ -423,10 +427,13 @@ function observeStableDraft(game, observedAt) {
       WHERE live_draft_predictions.picks_hash<>excluded.picks_hash`).run(String(game.matchId), String(game.seriesId || ""), game.radiantTeam, game.direTeam, picksHash,
       JSON.stringify({ radiant: game.radiantPicks, dire: game.direPicks }), prediction.probabilityRadiant, prediction.modelId, evidence, observedAt);
     audit(existingPrediction ? "server_draft_refrozen" : "server_draft_frozen", { matchId: String(game.matchId), seriesId: String(game.seriesId || ""), picksHash, modelId: prediction.modelId });
+    liveDraftErrors.delete(String(game.matchId));
     return storedLiveDraftPrediction(game.matchId);
   } catch (error) {
     console.error("Server draft calculation failed:", error);
-    audit("server_draft_failed", { matchId: String(game.matchId), error: error instanceof Error ? error.message : String(error) });
+    const reason = error instanceof Error ? error.message : String(error);
+    liveDraftErrors.set(String(game.matchId), reason);
+    audit("server_draft_failed", { matchId: String(game.matchId), error: reason });
     return null;
   }
 }
@@ -575,6 +582,10 @@ function officialSnapshotNeedsRefresh(matches) {
     const savedSignature = latest.inputs_json ? JSON.parse(latest.inputs_json).liveConstraintSignature : null;
     return Boolean(savedSignature && savedSignature !== liveConstraintSignature(matches));
   } catch { return true; }
+}
+
+function storedAnswers() {
+  return Object.fromEntries(db.prepare("SELECT pair_key, probability FROM answers ORDER BY pair_key").all().map((row) => [row.pair_key, Number(row.probability)]));
 }
 
 function currentForecast(config = OFFICIAL_FORECAST_CONFIG, profileAnswers = null) {
@@ -1879,10 +1890,10 @@ const server = createServer(async (req, res) => {
           };
         }
       }
-      if (ready) return json(res, 200, { ...overlayCombinedLive(ready), isAdmin: isAdmin(req) });
+      if (ready) return json(res, 200, { ...overlayCombinedLive(ready), isAdmin: isAdmin(req), answers: isAdmin(req) ? storedAnswers() : {} });
       void materializeCombinedForecast(opinionWeight).catch(() => {});
       const fallback = await combinedForecastState(opinionWeight, requestedRun, { refreshLive: false });
-      return json(res, 200, { ...overlayCombinedLive(fallback), readModel: { status: "fallback", version: 0 }, isAdmin: isAdmin(req) });
+      return json(res, 200, { ...overlayCombinedLive(fallback), readModel: { status: "fallback", version: 0 }, isAdmin: isAdmin(req), answers: isAdmin(req) ? storedAnswers() : {} });
     }
     const liveDraftPredictionMatch = req.method === "POST" ? url.pathname.match(/^\/api\/draft\/live\/([^/]+)\/prediction$/) : null;
     if (liveDraftPredictionMatch) {

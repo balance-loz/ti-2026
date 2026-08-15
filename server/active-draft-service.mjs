@@ -19,25 +19,34 @@ function safeHeroes(draftStats, picks) {
   const ids = picks.map(Number);
   if (ids.some((id) => !Number.isInteger(id) || id <= 0) || new Set(ids).size !== ids.length) return null;
   const byId = new Map((draftStats?.heroes ?? []).map((hero) => [Number(hero.id), hero]));
-  const heroes = ids.map((id) => byId.get(id));
-  return heroes.every(Boolean) ? heroes : null;
+  return ids.map((id) => byId.get(id) ?? { id, name: `Hero ${id}`, modelWinRate: 50, icon: null, image: null });
+}
+
+function liveRoleFrom(row) {
+  const explicit = Number(row?.role);
+  if (explicit >= 1 && explicit <= 5) return explicit;
+  const slot = Number(row?.slot);
+  if (slot >= 0 && slot <= 4) return slot + 1;
+  if (slot >= 1 && slot <= 5) return slot;
+  return 0;
 }
 
 function assignmentScore(team, heroes, active, observedPlayers) {
   const players = team?.players ?? [];
-  if (!heroes.length || players.length < heroes.length) return { rate: .5, roleRate: .5, source: "unavailable", rows: [] };
+  if (!heroes.length) return { rate: .5, roleRate: .5, source: "unavailable", rows: [] };
   const score = (assignments, source) => {
     let pool = 0; let roles = 0;
     const rows = [];
-    for (const { player, hero } of assignments) {
-      const position = Number(active?.playerPositions?.[String(player.accountId)]?.role || 0);
-      const sample = active?.playerHero?.[`${player.accountId}|${hero.id}`] ?? player.heroes?.[String(hero.id)];
+    for (const { player, hero, liveRole } of assignments) {
+      const rosterRole = Number(active?.playerPositions?.[String(player?.accountId)]?.role || 0);
+      const position = Number(liveRole) >= 1 && Number(liveRole) <= 5 ? Number(liveRole) : rosterRole;
+      const sample = active?.playerHero?.[`${player?.accountId}|${hero.id}`] ?? player?.heroes?.[String(hero.id)];
       const role = position ? active?.heroRole?.[`${hero.id}|${position}`] : null;
       if (sample) pool += logit(Number(sample.winRate) / 100) * (active?.playerHero ? 1 : Math.min(1, Number(sample.games) / 5));
       if (role) roles += logit(Number(role.winRate) / 100) * Math.min(1, Number(role.games) / 8);
       rows.push({
-        accountId: Number(player.accountId),
-        player: player.name ?? String(player.accountId),
+        accountId: Number(player?.accountId || 0),
+        player: player?.name ?? String(player?.accountId || "unknown"),
         heroId: Number(hero.id),
         hero: hero.name,
         heroIcon: hero.icon ?? hero.image ?? null,
@@ -53,9 +62,21 @@ function assignmentScore(team, heroes, active, observedPlayers) {
   if (observedPlayers?.length === heroes.length) {
     const byAccount = new Map(players.map((player) => [Number(player.accountId), player]));
     const byHero = new Map(heroes.map((hero) => [Number(hero.id), hero]));
-    const exact = observedPlayers.map((row) => ({ player: byAccount.get(Number(row.accountId)), hero: byHero.get(Number(row.heroId)) }));
-    if (exact.every((row) => row.player && row.hero)) return score(exact, "observed");
+    const exact = observedPlayers.map((row) => {
+      const accountId = Number(row.accountId || 0);
+      const liveRole = liveRoleFrom(row);
+      return {
+        player: byAccount.get(accountId) ?? { accountId, name: row.name || `slot ${liveRole || "?"}`, heroes: {} },
+        hero: byHero.get(Number(row.heroId)),
+        liveRole,
+      };
+    });
+    if (exact.every((row) => row.hero)) {
+      const observed = exact.every((row) => byAccount.has(Number(row.player.accountId)));
+      return score(exact, observed ? "observed" : "inferred");
+    }
   }
+  if (players.length < heroes.length) return { rate: .5, roleRate: .5, source: "unavailable", rows: [] };
   let best = null;
   const visit = (index, used, rows, value) => {
     if (index === heroes.length) {
@@ -70,7 +91,7 @@ function assignmentScore(team, heroes, active, observedPlayers) {
       const role = position ? active?.heroRole?.[`${heroes[index].id}|${position}`] : null;
       if (active?.playerHero && Number(role?.games || 0) < 2) return;
       const evidence = (sample ? logit(Number(sample.winRate) / 100) : 0) + (role ? logit(Number(role.winRate) / 100) : 0);
-      used.add(playerIndex); rows.push({ player, hero: heroes[index] });
+      used.add(playerIndex); rows.push({ player, hero: heroes[index], liveRole: position });
       visit(index + 1, used, rows, value + evidence);
       rows.pop(); used.delete(playerIndex);
     });

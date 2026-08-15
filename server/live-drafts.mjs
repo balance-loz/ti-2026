@@ -24,7 +24,11 @@ export function liveDraftsFromOpenDota(rows, { leagueId = 19719, nowSeconds = Da
     if (!radiantTeam || !direTeam || radiantTeam === direTeam) return [];
     const livePlayers = (side) => (row.players ?? []).filter((player) => Number(player.team) === side && Number(player.hero_id) > 0)
       .sort((a, b) => Number(a.team_slot) - Number(b.team_slot)).slice(0, 5)
-      .map((player) => ({ accountId: Number(player.account_id || 0), heroId: Number(player.hero_id), name: player.name ? String(player.name) : null }));
+      .map((player) => {
+        const slot = Number(player.team_slot);
+        const role = slot >= 0 && slot <= 4 ? slot + 1 : slot >= 1 && slot <= 5 ? slot : null;
+        return { accountId: Number(player.account_id || 0), heroId: Number(player.hero_id), name: player.name ? String(player.name) : null, slot: Number.isInteger(slot) ? slot : null, role };
+      });
     const radiantPlayers = livePlayers(0);
     const direPlayers = livePlayers(1);
     const radiantPicks = radiantPlayers.map((player) => player.heroId);

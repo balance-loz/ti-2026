@@ -216,6 +216,34 @@ test("active draft prediction is server-calculated, validates picks and preserve
   assert.deepEqual(prediction.signals.map((signal) => signal.key), ["side", "hero", "draftPriority", "synergy", "counter", "teamPool", "playerPool", "roles"]);
   assert.ok(prediction.probabilityRadiant > .5 && prediction.probabilityRadiant < 1);
   assert.throws(() => calculateActiveDraftPrediction({ draftStats, teamStats, game: { ...game, direPicks: [2, 4] } }), /invalid_picks/);
+  const unknownHero = calculateActiveDraftPrediction({ draftStats, teamStats, game: { ...game, direPicks: [3, 99] } });
+  assert.ok(unknownHero.probabilityRadiant > 0 && unknownHero.probabilityRadiant < 1);
+
+  const carryStats = {
+    heroes: [10, 2, 3, 4, 5, 6, 7, 8, 9, 1].map((id) => ({ id, name: `H${id}`, modelWinRate: 50 })),
+    radiantWinRate: 50,
+    combiner: { version: 1, weights: { teamPrior: 0, side: 0, hero: 0, draftPriority: 0, synergy: 0, counter: 0, teamPool: 0, playerPool: 1, roles: 1 }, probabilityFloor: .08, probabilityCeiling: .92 },
+    activeSnapshot: {
+      radiantWinRate: 50,
+      playerPositions: { 101: { role: 1 }, 105: { role: 5 } },
+      playerHero: { "101|10": { games: 20, winRate: 78 }, "105|10": { games: 20, winRate: 28 } },
+      heroRole: { "10|1": { games: 40, winRate: 70 }, "10|5": { games: 40, winRate: 32 } },
+    },
+    teams: {
+      falcons: { players: [{ accountId: 101, name: "Carry", heroes: {} }, { accountId: 105, name: "Support", heroes: {} }, { accountId: 102, name: "P2", heroes: {} }, { accountId: 103, name: "P3", heroes: {} }, { accountId: 104, name: "P4", heroes: {} }] },
+      parivision: { players: [{ accountId: 201, name: "A", heroes: {} }, { accountId: 202, name: "B", heroes: {} }, { accountId: 203, name: "C", heroes: {} }, { accountId: 204, name: "D", heroes: {} }, { accountId: 205, name: "E", heroes: {} }] },
+    },
+    synergy: {},
+    counters: {},
+  };
+  const fillPlayers = (accountId, heroId, role) => ({ accountId, heroId, slot: role - 1, role });
+  const baseGame = { radiantTeam: "falcons", direTeam: "parivision", radiantPicks: [10, 2, 3, 4, 5], direPicks: [6, 7, 8, 9, 1], direPlayers: [6, 7, 8, 9, 1].map((heroId, index) => fillPlayers(201 + index, heroId, index + 1)) };
+  const carryOnHero = calculateActiveDraftPrediction({ draftStats: carryStats, teamStats, game: { ...baseGame, radiantPlayers: [fillPlayers(101, 10, 1), fillPlayers(102, 2, 2), fillPlayers(103, 3, 3), fillPlayers(104, 4, 4), fillPlayers(105, 5, 5)] } });
+  const supportOnHero = calculateActiveDraftPrediction({ draftStats: carryStats, teamStats, game: { ...baseGame, radiantPlayers: [fillPlayers(105, 10, 5), fillPlayers(102, 2, 2), fillPlayers(103, 3, 3), fillPlayers(104, 4, 4), fillPlayers(101, 5, 1)] } });
+  assert.ok(carryOnHero.probabilityRadiant > supportOnHero.probabilityRadiant);
+  assert.equal(carryOnHero.evidence.assignments.radiant.source, "observed");
+  assert.equal(carryOnHero.evidence.assignments.radiant.rows.find((row) => row.heroId === 10)?.position, 1);
+  assert.equal(supportOnHero.evidence.assignments.radiant.rows.find((row) => row.heroId === 10)?.position, 5);
 
   const api = await readFile("server/api.mjs", "utf8");
   assert.match(api, /calculateActiveDraftPrediction\(\{ draftStats: loadJson\("public\/draft-stats\.json"\), teamStats: loadJson\("public\/team-stats\.json"\), game \}\)/);
@@ -224,7 +252,9 @@ test("active draft prediction is server-calculated, validates picks and preserve
   assert.match(api, /function sameCompleteDraft/);
   assert.match(api, /storedDraftMatchesGame/);
   assert.match(api, /canonicalPicks\(game\.radiantPicks\)/);
-  assert.match(api, /game\.phase === "game" \? 1 : 2/);
+  assert.doesNotMatch(api, /observations < \(game\.phase === "game" \? 1 : 2\)/);
+  assert.match(api, /liveDraftErrors/);
+  assert.match(api, /storedAnswers\(\)/);
   assert.match(api, /liveEstimate,/);
   assert.match(api, /liveDraftHistoryMatch/);
   assert.match(api, /draftPredictionCorrect/);
@@ -247,7 +277,10 @@ test("combined UI keeps unique match rows, live rail, unique elimination slots a
   assert.match(page, /<article key=\{row\.match\.id\} className=\{`fusion-series-row/);
   assert.match(page, /const liveRows = rows\.filter\(\(row\) => row\.live && !row\.match\.winner\)/);
   assert.match(page, /POST-DRAFT · FROZEN/);
-  assert.match(page, /подтверждение пиков/);
+  assert.match(page, /считаем 5×5/);
+  assert.match(page, /function OpinionPanel/);
+  assert.match(page, /function AdminGate/);
+  assert.match(page, /standing\.losses < 4/);
   assert.match(page, /const usedTeams = new Set<string>\(\)/);
   assert.match(page, /usedTeams\.has\(row\.match\.team_a\) \|\| usedTeams\.has\(row\.match\.team_b\)/);
   assert.match(page, /usedTeams\.has\(match\.teamA\) \|\| usedTeams\.has\(match\.teamB\)/);
@@ -573,8 +606,9 @@ test("draft lab contains current-patch heroes and regularized matchup evidence",
   assert.match(page, /Игроки на героях/);
   assert.match(server, /scripts\/update-all-stats\.mjs/);
   assert.match(server, /\/api\/draft\/predict/);
-  assert.match(service, /score\(exact, "observed"\)/);
+  assert.match(service, /score\(exact, observed \? "observed" : "inferred"\)/);
   assert.match(service, /score\(best\.rows, "inferred"\)/);
+  assert.match(service, /function liveRoleFrom/);
 });
 
 test("draft refresh discovers live TI league maps before training", async () => {
@@ -613,8 +647,8 @@ test("OpenDota live feed becomes a partial TI draft and rejects stale games", ()
   ];
   assert.deepEqual(liveDraftsFromOpenDota(rows, { nowSeconds: 1_030, leagueMaps }), [{
     matchId: "42", seriesId: "7", radiantTeam: "falcons", direTeam: "parivision", radiantPicks: [80, 59], direPicks: [55], gameTime: -30, delay: 10,
-    radiantPlayers: [{ accountId: 10, heroId: 80, name: "First" }, { accountId: 20, heroId: 59, name: "Second" }],
-    direPlayers: [{ accountId: 30, heroId: 55, name: null }],
+    radiantPlayers: [{ accountId: 10, heroId: 80, name: "First", slot: 1, role: 2 }, { accountId: 20, heroId: 59, name: "Second", slot: 2, role: 3 }],
+    direPlayers: [{ accountId: 30, heroId: 55, name: null, slot: 1, role: 2 }],
     radiantScore: 0, direScore: 0, radiantLead: 2400, spectators: 1234, seriesScoreRadiant: 1, seriesScoreDire: 1, seriesBestOf: 3,
     lastUpdateAt: "1970-01-01T00:16:40.000Z", phase: "draft",
   }]);
