@@ -16,6 +16,7 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/public ./public
 COPY --from=build /app/public/draft-stats.json ./model/draft-stats.json
 COPY --from=build /app/public/team-stats.json ./model/team-stats.json
+COPY --from=build /app/public/intel-stats.json ./model/intel-stats.json
 COPY --from=build /app/public/draft-temporal-model.json ./model/draft-temporal-model.json
 COPY --from=build /app/public/all-pro-team-model.json ./model/all-pro-team-model.json
 COPY --from=build /app/public/draft-nextgen-model.json ./model/draft-nextgen-model.json

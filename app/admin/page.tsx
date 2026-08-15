@@ -138,7 +138,7 @@ export default function AdminPage() {
         body: JSON.stringify({
           kind: "manual",
           profile: { forecastMode, opinionWeight: weight, answers: weight ? parsed : {} },
-          simulation: { iterations: 250000, adaptive: true, maxIterations: 1000000, batchSize: 250000, tolerancePp: .1 },
+          simulation: { iterations: 1000000, adaptive: true, maxIterations: 1000000, batchSize: 250000, tolerancePp: .1 },
           trigger: "admin_manual",
         }),
       }) as { job?: ForecastJob };
@@ -161,7 +161,7 @@ export default function AdminPage() {
         <div className="admin-actions-grid">
         <button disabled={isBusy || state.liveSync?.running} onClick={() => void run("Результаты и расписание синхронизированы.", () => requestJson("/api/admin/live/sync", { method: "POST" }))}>Синхронизировать матчи</button>
         <button disabled={isBusy || state.refreshRunning} onClick={() => void run("Обновление model artifacts запущено.", () => requestJson("/api/admin/refresh", { method: "POST" }))}>Обновить статистику</button>
-        <button disabled={isBusy} onClick={() => void startForecast(DEFAULT_OPINION_WEIGHT)}>Monte Carlo 250K · 15%</button>
+        <button disabled={isBusy} onClick={() => void startForecast(DEFAULT_OPINION_WEIGHT)}>Monte Carlo 1M · 15%</button>
         <button disabled={isBusy} onClick={() => void run("Раунд 1 подготовлен.", () => requestJson("/api/admin/rounds/prepare", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ round: 1 }) }))}>Подготовить раунд 1</button>
         <button disabled={isBusy} onClick={() => void run("Сессия завершена.", () => requestJson("/api/logout", { method: "POST" }))}>Выйти</button>
       </div></section>

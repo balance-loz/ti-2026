@@ -1008,6 +1008,8 @@ test("unified forecast UI reads authoritative snapshots without browser-triggere
   assert.match(page, /document\.visibilityState === "visible"/);
   assert.doesNotMatch(page, /browser_scenario_refresh/);
   assert.match(admin, /kind: "manual"/);
+  assert.match(admin, /iterations: 1000000/);
+  assert.match(admin, /Monte Carlo 1M · 15%/);
   assert.match(admin, /EXPERT PAIRWISE/);
   assert.match(admin, /Моё мнение по командам/);
   assert.match(admin, /Пересчитать 15% \(основной\)/);
@@ -1045,6 +1047,70 @@ test("prediction audit keeps frozen and adaptive evaluations separate", async ()
   assert.match(page, /ЧЕСТНАЯ ИСТОРИЯ · STATIC \/ ADAPTIVE/);
   assert.match(styles, /\.fusion-accuracy-chart/);
   assert.match(styles, /polyline\.is-adaptive/);
+});
+
+test("intel page reads live artifacts from API and refreshes after stats jobs", async () => {
+  const [page, api, nginx, admin] = await Promise.all([
+    readFile("app/intel/page.tsx", "utf8"),
+    readFile("server/api.mjs", "utf8"),
+    readFile("deploy/nginx.conf", "utf8"),
+    readFile("app/admin/page.tsx", "utf8"),
+  ]);
+  assert.match(page, /\/api\/artifacts\/intel-stats\.json/);
+  assert.match(page, /\/api\/artifacts\/team-stats\.json/);
+  assert.match(page, /cache: "no-store"/);
+  assert.match(page, /document\.visibilityState !== "visible"/);
+  assert.match(page, /artifacts\?\.intelStats\?\.mtimeMs/);
+  assert.doesNotMatch(page, /fetch\("\/intel-stats\.json"/);
+  assert.match(api, /LIVE_JSON_ARTIFACTS/);
+  assert.match(api, /sendLiveJsonArtifact/);
+  assert.match(api, /publicArtifactFreshness/);
+  assert.match(api, /artifacts: publicArtifactFreshness\(\)/);
+  assert.match(nginx, /location = \/intel-stats\.json/);
+  assert.match(nginx, /location = \/team-stats\.json/);
+  assert.match(admin, /Monte Carlo 1M · 15%/);
+  assert.doesNotMatch(admin, /Monte Carlo 250K/);
+});
+
+test("API serves live intel artifacts without caching", { timeout: 20_000 }, async () => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), "ti2026-intel-artifacts-"));
+  const port = await availablePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const child = spawn(process.execPath, ["server/api.mjs"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      API_PORT: String(port),
+      DATA_DIR: dataDirectory,
+      LIVE_SYNC_ENABLED: "false",
+      LIVE_DRAFT_SYNC_ENABLED: "false",
+      SCHEDULE_SYNC_ENABLED: "false",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.on("data", (chunk) => { output += chunk; });
+  child.stderr.on("data", (chunk) => { output += chunk; });
+  try {
+    await waitForHealth(baseUrl, child);
+    const intel = await fetch(`${baseUrl}/api/artifacts/intel-stats.json`);
+    assert.equal(intel.status, 200);
+    assert.match(intel.headers.get("cache-control") ?? "", /no-store/);
+    const body = await intel.json();
+    assert.equal(typeof body.generatedAt, "string");
+    assert.equal(Object.keys(body.teams).length, 16);
+    const aliased = await fetch(`${baseUrl}/intel-stats.json`);
+    assert.equal(aliased.status, 200);
+    const state = await fetch(`${baseUrl}/api/state`).then((response) => response.json());
+    assert.equal(state.artifacts.intelStats.generatedAt, body.generatedAt);
+    assert.equal(typeof state.artifacts.intelStats.mtimeMs, "number");
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\nAPI output:\n${output}`);
+  } finally {
+    child.kill();
+    if (child.exitCode === null) await new Promise((resolve) => child.once("exit", resolve));
+    await rm(dataDirectory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  }
 });
 
 test("intel artifact covers every team and complete tournament outcomes", async () => {
@@ -1087,9 +1153,10 @@ test("production image exposes next-generation artifacts without activating shad
   const dockerfile = await readFile("Dockerfile", "utf8");
   const compose = await readFile("docker-compose.yml", "utf8");
   const api = await readFile("server/api.mjs", "utf8");
-  for (const file of ["all-pro-team-model.json", "draft-nextgen-model.json", "nextgen-series-calibration.json", "live-map-model.json", "draft-stats.json", "team-stats.json"]) assert.match(dockerfile, new RegExp(file.replaceAll(".", "\\.")));
+  for (const file of ["all-pro-team-model.json", "draft-nextgen-model.json", "nextgen-series-calibration.json", "live-map-model.json", "draft-stats.json", "team-stats.json", "intel-stats.json"]) assert.match(dockerfile, new RegExp(file.replaceAll(".", "\\.")));
   assert.match(compose, /DRAFT_STATS: \/app\/model\/draft-stats\.json/);
   assert.match(compose, /TEAM_STATS: \/app\/model\/team-stats\.json/);
+  assert.match(compose, /INTEL_STATS: \/app\/model\/intel-stats\.json/);
   assert.match(compose, /ALL_PRO_TEAM_MODEL: \/app\/model\/all-pro-team-model\.json/);
   assert.match(compose, /LIVE_MAP_MODEL: \/app\/model\/live-map-model\.json/);
   assert.match(api, /\/api\/models\/nextgen/);

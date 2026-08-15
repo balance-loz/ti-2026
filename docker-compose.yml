@@ -50,6 +50,7 @@ services:
       DRAFT_DB_PATH: /app/data/draft-model.sqlite
       DRAFT_STATS: /app/model/draft-stats.json
       TEAM_STATS: /app/model/team-stats.json
+      INTEL_STATS: /app/model/intel-stats.json
       DRAFT_TEMPORAL_MODEL: /app/model/draft-temporal-model.json
       LIVE_MAP_MODEL: /app/model/live-map-model.json
       ALL_PRO_TEAM_MODEL: /app/model/all-pro-team-model.json

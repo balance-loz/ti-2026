@@ -499,22 +499,65 @@ function existingFile(candidates) {
   return null;
 }
 
+const LIVE_JSON_ARTIFACTS = Object.freeze(["intel-stats.json", "team-stats.json"]);
+
+function artifactEnvPath(fileName) {
+  if (fileName === "draft-stats.json") return process.env.DRAFT_STATS;
+  if (fileName === "team-stats.json") return process.env.TEAM_STATS;
+  if (fileName === "intel-stats.json") return process.env.INTEL_STATS;
+  return "";
+}
+
 function resolvePublicArtifact(fileName) {
-  const envPath = fileName === "draft-stats.json" ? process.env.DRAFT_STATS : fileName === "team-stats.json" ? process.env.TEAM_STATS : "";
-  const fullPath = existingFile([path.join("public", fileName), envPath, path.join("model", fileName)]);
+  const fullPath = existingFile([path.join("public", fileName), artifactEnvPath(fileName), path.join("model", fileName)]);
   if (!fullPath) throw new Error(`missing_artifact:${fileName}`);
   return fullPath;
 }
 
 function seedPublicArtifacts() {
   mkdirSync(path.resolve("public"), { recursive: true });
-  for (const fileName of ["draft-stats.json", "team-stats.json"]) {
+  for (const fileName of ["draft-stats.json", "team-stats.json", "intel-stats.json"]) {
     const dest = path.resolve("public", fileName);
     if (existingFile([dest])) continue;
-    const source = existingFile([fileName === "draft-stats.json" ? process.env.DRAFT_STATS : process.env.TEAM_STATS, path.join("model", fileName)]);
+    const source = existingFile([artifactEnvPath(fileName), path.join("model", fileName)]);
     if (!source) continue;
     copyFileSync(source, dest);
   }
+}
+
+function liveJsonArtifactName(pathname) {
+  if (LIVE_JSON_ARTIFACTS.includes(pathname.slice(1)) && pathname.startsWith("/")) return pathname.slice(1);
+  const match = pathname.match(/^\/api\/artifacts\/([a-z0-9.-]+\.json)$/);
+  if (match && LIVE_JSON_ARTIFACTS.includes(match[1])) return match[1];
+  return null;
+}
+
+function sendLiveJsonArtifact(res, fileName) {
+  if (!LIVE_JSON_ARTIFACTS.includes(fileName)) return json(res, 404, { error: "unknown_artifact" });
+  let fullPath;
+  try { fullPath = resolvePublicArtifact(fileName); } catch { return json(res, 404, { error: `missing_artifact:${fileName}` }); }
+  const raw = readFileSync(fullPath);
+  const stamp = statSync(fullPath);
+  res.writeHead(200, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store, no-cache, must-revalidate",
+    "last-modified": stamp.mtime.toUTCString(),
+    "content-length": raw.length,
+  });
+  res.end(raw);
+}
+
+function publicArtifactFreshness() {
+  return Object.fromEntries(LIVE_JSON_ARTIFACTS.map((fileName) => {
+    const key = fileName === "intel-stats.json" ? "intelStats" : "teamStats";
+    try {
+      const fullPath = resolvePublicArtifact(fileName);
+      const generatedAt = loadJson(fullPath)?.generatedAt ?? null;
+      return [key, { generatedAt, mtimeMs: statSync(fullPath).mtimeMs }];
+    } catch {
+      return [key, { generatedAt: null, mtimeMs: null }];
+    }
+  }));
 }
 
 function loadJson(relativePath) {
@@ -701,6 +744,7 @@ function publicState() {
   try { lastSync = liveSyncRow ? { ...JSON.parse(liveSyncRow.value), updatedAt: liveSyncRow.updated_at } : null; } catch { lastSync = null; }
   return {
     answers, matches, snapshots, officialForecast: OFFICIAL_FORECAST_CONFIG, refresh, refreshRunning: Boolean(refreshProcess), refreshProgress: publicRefreshProgress(),
+    artifacts: publicArtifactFreshness(),
     liveSync: { enabled: LIVE_SYNC_ENABLED, scheduleEnabled: SCHEDULE_SYNC_ENABLED, leagueId: TI_LEAGUE_ID, intervalMinutes: LIVE_SYNC_INTERVAL_MINUTES, running: Boolean(liveSyncPromise), lastSync, autoForecastRunning: Boolean(db.prepare("SELECT 1 FROM automation_jobs WHERE job_type='forecast' AND kind='scenario_refresh' AND status IN ('pending','leased') AND superseded_by IS NULL LIMIT 1").get()) },
   };
 }
@@ -1909,6 +1953,8 @@ function readyCombinedForecast(opinionWeight = DEFAULT_OPINION_WEIGHT) {
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    const liveArtifact = req.method === "GET" ? liveJsonArtifactName(url.pathname) : null;
+    if (liveArtifact) return sendLiveJsonArtifact(res, liveArtifact);
     if (req.method === "GET" && url.pathname === "/api/health") {
       let nextgen = false;
       try { nextgen = Boolean(nextgenModelMetadata().team.modelId); } catch { nextgen = false; }

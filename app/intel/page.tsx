@@ -95,13 +95,48 @@ export default function IntelPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    Promise.all([
-      fetch("/intel-stats.json").then((response) => { if (!response.ok) throw new Error("intel-stats"); return response.json(); }),
-      fetch("/team-stats.json").then((response) => { if (!response.ok) throw new Error("team-stats"); return response.json(); }),
-      fetch("/api/state").then((response) => response.ok ? response.json() : null).catch(() => null),
-    ]).then(([intelData, teamData, state]) => {
-      setIntel(intelData); setStats(teamData); setSnapshot(state?.snapshots?.[0] ?? null);
-    }).catch(() => setError("Не удалось загрузить разведданные. Запусти npm run intel:update."));
+    let cancelled = false;
+    let freshness = "";
+    const fetchJson = async (path: string) => {
+      const response = await fetch(path, { cache: "no-store" });
+      if (!response.ok) throw new Error(path);
+      return response.json();
+    };
+    const loadArtifacts = async (state: { snapshots?: Snapshot[]; artifacts?: { intelStats?: { generatedAt?: string | null; mtimeMs?: number | null }; teamStats?: { generatedAt?: string | null; mtimeMs?: number | null } } } | null) => {
+      const [intelData, teamData] = await Promise.all([
+        fetchJson("/api/artifacts/intel-stats.json") as Promise<IntelData>,
+        fetchJson("/api/artifacts/team-stats.json") as Promise<TeamStats>,
+      ]);
+      if (cancelled) return;
+      setIntel(intelData);
+      setStats(teamData);
+      setSnapshot(state?.snapshots?.[0] ?? null);
+      setError("");
+    };
+    const tick = async () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        const state = await fetch("/api/state", { cache: "no-store" }).then((response) => response.ok ? response.json() : null).catch(() => null);
+        const next = `${state?.artifacts?.intelStats?.mtimeMs ?? ""}:${state?.artifacts?.teamStats?.mtimeMs ?? ""}:${state?.refresh?.updated_at ?? ""}`;
+        if (!freshness || next !== freshness) {
+          freshness = next;
+          await loadArtifacts(state);
+          return;
+        }
+        if (!cancelled && state?.snapshots?.[0]) setSnapshot(state.snapshots[0]);
+      } catch {
+        if (!cancelled && !freshness) setError("Не удалось загрузить разведданные. Запусти npm run intel:update.");
+      }
+    };
+    void tick();
+    const timer = window.setInterval(() => { void tick(); }, 10_000);
+    const onVisible = () => { void tick(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
   const modelProbabilities = useMemo(() => {
