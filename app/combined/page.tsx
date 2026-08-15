@@ -213,18 +213,21 @@ function LiveDraftRail({ rows, maps, heroes }: { rows: SeriesRow[]; maps: MapRow
       const seriesMaps = mapsForSeries(row, maps);
       const activeMap = [...seriesMaps].reverse().find((map) => !map.winner) ?? seriesMaps.at(-1) ?? null;
       const estimate = row.liveEstimate ?? row.live?.liveEstimate ?? null;
-      const draftRadiantProbability = activeMap?.draftPrediction?.probabilityRadiant ?? estimate?.probabilityRadiant ?? null;
-      const draftProbabilityA = estimate?.frozenProbabilityA ?? estimate?.draftProbabilityA ?? (draftRadiantProbability === null ? null : row.live?.radiantTeam === row.match.team_a ? draftRadiantProbability : 1 - draftRadiantProbability);
+      const liveRadiantPicks = row.live?.radiantPicks?.length ? row.live.radiantPicks : activeMap?.picks?.radiant ?? [];
+      const liveDirePicks = row.live?.direPicks?.length ? row.live.direPicks : activeMap?.picks?.dire ?? [];
+      const draftRadiantProbability = row.live?.draftPrediction?.probabilityRadiant ?? activeMap?.draftPrediction?.probabilityRadiant ?? estimate?.frozenDraftProbabilityRadiant ?? null;
+      const draftProbabilityA = estimate?.frozenProbabilityA ?? (draftRadiantProbability === null ? null : row.live?.radiantTeam === row.match.team_a ? draftRadiantProbability : 1 - draftRadiantProbability);
       const observedProbabilityA = estimate?.observedProbabilityA ?? estimate?.probabilityA ?? row.forecast.probabilityA;
       const canShowObservation = (row.live?.gameTime ?? 0) >= 600;
       const source = estimate?.source ?? row.live?.source ?? (row.sources.liveStateApplied ? "live feed" : row.sources.draftApplied ? "draft model" : "series model");
       const isStale = Boolean(estimate?.stale ?? row.live?.stale);
+      const picksReady = liveRadiantPicks.length === 5 && liveDirePicks.length === 5;
       return <article key={row.match.id} className={isStale ? "is-stale" : ""}>
         <header><span className="fusion-status fusion-status--live">LIVE · SW R{row.match.round}</span><span>{clock(row.live?.gameTime ?? 0)} · {row.live?.radiantScore ?? 0}:{row.live?.direScore ?? 0}</span></header>
-        <div className="fusion-live-side"><Team id={row.live?.radiantTeam ?? row.match.team_a} /><DraftSlots ids={activeMap?.picks?.radiant ?? []} heroes={heroes} /><b>R</b></div>
-        <div className="fusion-live-side"><Team id={row.live?.direTeam ?? row.match.team_b} /><DraftSlots ids={activeMap?.picks?.dire ?? []} heroes={heroes} /><b>D</b></div>
+        <div className="fusion-live-side"><Team id={row.live?.radiantTeam ?? row.match.team_a} /><DraftSlots ids={liveRadiantPicks} heroes={heroes} /><b>R</b></div>
+        <div className="fusion-live-side"><Team id={row.live?.direTeam ?? row.match.team_b} /><DraftSlots ids={liveDirePicks} heroes={heroes} /><b>D</b></div>
         <div className="fusion-live-estimates">
-          <span><small>POST-DRAFT · FROZEN</small><strong>{draftProbabilityA === null ? "ожидание 5×5" : `${team(draftProbabilityA >= .5 ? row.match.team_a : row.match.team_b).short} ${percent(Math.max(draftProbabilityA, 1 - draftProbabilityA))}`}</strong></span>
+          <span><small>POST-DRAFT · FROZEN</small><strong>{draftProbabilityA === null ? (picksReady ? "подтверждение пиков" : "ожидание 5×5") : `${team(draftProbabilityA >= .5 ? row.match.team_a : row.match.team_b).short} ${percent(Math.max(draftProbabilityA, 1 - draftProbabilityA))}`}</strong></span>
           <span><small>LIVE OBSERVATION</small><strong>{canShowObservation ? `${team(observedProbabilityA >= .5 ? row.match.team_a : row.match.team_b).short} ${percent(Math.max(observedProbabilityA, 1 - observedProbabilityA))}` : "после 10:00"}</strong></span>
         </div>
         <footer><span>series {row.live?.seriesId ?? row.seriesId ?? row.match.id}</span><span>source: {source} · {isStale ? "STALE" : "fresh"}</span></footer>

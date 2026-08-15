@@ -275,7 +275,21 @@ const json = (res, status, value) => {
 };
 const now = () => new Date().toISOString();
 const tokenHash = (token) => createHash("sha256").update(token).digest("hex");
-const livePicksHash = (game) => createHash("sha256").update(JSON.stringify([game.radiantPicks ?? [], game.direPicks ?? []])).digest("hex").slice(0, 20);
+function canonicalPicks(picks) {
+  return [...(picks ?? [])].map(Number).filter((id) => Number.isInteger(id) && id > 0).sort((left, right) => left - right);
+}
+
+function sameCompleteDraft(left, right) {
+  const radiantLeft = canonicalPicks(left?.radiant);
+  const direLeft = canonicalPicks(left?.dire);
+  const radiantRight = canonicalPicks(right?.radiant);
+  const direRight = canonicalPicks(right?.dire);
+  return radiantLeft.length === 5 && direLeft.length === 5
+    && JSON.stringify(radiantLeft) === JSON.stringify(radiantRight)
+    && JSON.stringify(direLeft) === JSON.stringify(direRight);
+}
+
+const livePicksHash = (game) => createHash("sha256").update(JSON.stringify([canonicalPicks(game.radiantPicks), canonicalPicks(game.direPicks)])).digest("hex").slice(0, 20);
 
 function liveSnapshotPayload(game, draftPrediction = null) {
   let liveEstimate = null;
@@ -342,9 +356,16 @@ function storedLiveDraftPrediction(matchId) {
     probabilityRadiant: Number(row.probability_radiant),
     modelId: row.model_id || null,
     picksHash: row.picks_hash,
+    picks: row.picks_json ? JSON.parse(row.picks_json) : null,
     capturedAt: row.captured_at,
     evidence: row.evidence_json ? JSON.parse(row.evidence_json) : null,
   } : null;
+}
+
+function storedDraftMatchesGame(stored, game) {
+  if (!stored) return false;
+  if (stored.picksHash === livePicksHash(game)) return true;
+  return sameCompleteDraft(stored.picks, { radiant: game.radiantPicks, dire: game.direPicks });
 }
 
 function liveDraftHistory(matchId, limit = 120) {
@@ -372,7 +393,7 @@ function liveDraftHistory(matchId, limit = 120) {
 
 function decorateLiveDraft(game) {
   const storedPrediction = storedLiveDraftPrediction(game.matchId);
-  const draftPrediction = storedPrediction?.picksHash === livePicksHash(game) ? storedPrediction : null;
+  const draftPrediction = storedDraftMatchesGame(storedPrediction, game) ? storedPrediction : null;
   return { ...game, draftPrediction, history: liveDraftHistory(game.matchId) };
 }
 
@@ -384,7 +405,7 @@ function observeStableDraft(game, observedAt) {
   if ((game.radiantPicks?.length ?? 0) !== 5 || (game.direPicks?.length ?? 0) !== 5) return null;
   const picksHash = livePicksHash(game);
   const existingPrediction = storedLiveDraftPrediction(game.matchId);
-  if (existingPrediction?.picksHash === picksHash) return existingPrediction;
+  if (storedDraftMatchesGame(existingPrediction, game)) return existingPrediction;
   const candidate = db.prepare("SELECT * FROM live_draft_candidates WHERE match_id=?").get(String(game.matchId));
   const observations = candidate?.picks_hash === picksHash ? Number(candidate.observations) + 1 : 1;
   db.prepare(`INSERT INTO live_draft_candidates(match_id,picks_hash,observations,first_seen_at,last_seen_at)

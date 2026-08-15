@@ -221,6 +221,9 @@ test("active draft prediction is server-calculated, validates picks and preserve
   assert.match(api, /calculateActiveDraftPrediction\(\{ draftStats: loadJson\("public\/draft-stats\.json"\), teamStats: loadJson\("public\/team-stats\.json"\), game \}\)/);
   assert.match(api, /INSERT OR IGNORE INTO live_draft_predictions/);
   assert.match(api, /existing && existing\.picksHash !== picksHash/);
+  assert.match(api, /function sameCompleteDraft/);
+  assert.match(api, /storedDraftMatchesGame/);
+  assert.match(api, /canonicalPicks\(game\.radiantPicks\)/);
   assert.match(api, /game\.phase === "game" \? 1 : 2/);
   assert.match(api, /liveEstimate,/);
   assert.match(api, /liveDraftHistoryMatch/);
@@ -244,6 +247,7 @@ test("combined UI keeps unique match rows, live rail, unique elimination slots a
   assert.match(page, /<article key=\{row\.match\.id\} className=\{`fusion-series-row/);
   assert.match(page, /const liveRows = rows\.filter\(\(row\) => row\.live && !row\.match\.winner\)/);
   assert.match(page, /POST-DRAFT · FROZEN/);
+  assert.match(page, /подтверждение пиков/);
   assert.match(page, /const usedTeams = new Set<string>\(\)/);
   assert.match(page, /usedTeams\.has\(row\.match\.team_a\) \|\| usedTeams\.has\(row\.match\.team_b\)/);
   assert.match(page, /usedTeams\.has\(match\.teamA\) \|\| usedTeams\.has\(match\.teamB\)/);
