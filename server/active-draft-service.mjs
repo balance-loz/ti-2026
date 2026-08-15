@@ -1,6 +1,10 @@
 import { combineDraftSignals, combineLearnedDraftSignals } from "./draft-combiner.mjs";
 
-const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, Number(value)));
+const clamp = (value, minimum, maximum) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return (minimum + maximum) / 2;
+  return Math.min(maximum, Math.max(minimum, numeric));
+};
 const sigmoid = (value) => 1 / (1 + Math.exp(-value));
 const logit = (value) => Math.log(clamp(value, .01, .99) / (1 - clamp(value, .01, .99)));
 const average = (values, fallback = .5) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : fallback;
@@ -42,8 +46,10 @@ function assignmentScore(team, heroes, active, observedPlayers) {
       const position = Number(liveRole) >= 1 && Number(liveRole) <= 5 ? Number(liveRole) : rosterRole;
       const sample = active?.playerHero?.[`${player?.accountId}|${hero.id}`] ?? player?.heroes?.[String(hero.id)];
       const role = position ? active?.heroRole?.[`${hero.id}|${position}`] : null;
-      if (sample) pool += logit(Number(sample.winRate) / 100) * (active?.playerHero ? 1 : Math.min(1, Number(sample.games) / 5));
-      if (role) roles += logit(Number(role.winRate) / 100) * Math.min(1, Number(role.games) / 8);
+      const sampleRate = Number(sample?.winRate);
+      const roleRate = Number(role?.winRate);
+      if (sample && Number.isFinite(sampleRate)) pool += logit(sampleRate / 100) * (active?.playerHero ? 1 : Math.min(1, Number(sample.games) / 5));
+      if (role && Number.isFinite(roleRate)) roles += logit(roleRate / 100) * Math.min(1, Number(role.games) / 8);
       rows.push({
         accountId: Number(player?.accountId || 0),
         player: player?.name ?? String(player?.accountId || "unknown"),
@@ -57,7 +63,7 @@ function assignmentScore(team, heroes, active, observedPlayers) {
         roleWinRate: Number(role?.winRate ?? 50),
       });
     }
-    return { rate: sigmoid(pool / assignments.length), roleRate: sigmoid(roles / assignments.length), source, rows };
+    return { rate: sigmoid(pool / Math.max(1, assignments.length)), roleRate: sigmoid(roles / Math.max(1, assignments.length)), source, rows };
   };
   if (observedPlayers?.length === heroes.length) {
     const byAccount = new Map(players.map((player) => [Number(player.accountId), player]));
@@ -161,7 +167,7 @@ export function calculateActiveDraftPrediction({ draftStats, teamStats, game } =
     ? combineLearnedDraftSignals(base, signals, draftStats.combiner, completeness)
     : combineDraftSignals(base, signals.map((signal) => signal.value), completeness);
   return {
-    probabilityRadiant: combined.probability,
+    probabilityRadiant: Number.isFinite(Number(combined.probability)) ? clamp(combined.probability, .01, .99) : .5,
     modelId: `active-draft-combiner-v${Number(draftStats.combiner?.version || 1)}`,
     completeness,
     sourceTeamProbability: combined.sourceTeamProbability,

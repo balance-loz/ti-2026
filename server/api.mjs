@@ -48,7 +48,9 @@ const FORECAST_JOB_LEASE_SECONDS = Math.max(30, Number(process.env.FORECAST_JOB_
 const FORECAST_JOB_POLL_MS = Math.max(100, Number(process.env.FORECAST_JOB_POLL_MS || 500));
 const FORECAST_JOB_MAX_ATTEMPTS = Math.max(1, Number(process.env.FORECAST_JOB_MAX_ATTEMPTS || 3));
 const FORECAST_SCENARIO_RATE_LIMIT = Math.max(1, Number(process.env.FORECAST_SCENARIO_RATE_LIMIT || 30));
-const FORECAST_CANONICAL_WEIGHTS = new Set([0, 10, 20, 30]);
+const DEFAULT_OPINION_WEIGHT = 15;
+const FORECAST_AUTO_WEIGHTS = Object.freeze([DEFAULT_OPINION_WEIGHT]);
+const FORECAST_CANONICAL_WEIGHTS = new Set([0, 10, 15, 20, 30]);
 const TI_PLAYIN_START = Date.parse(process.env.TI_PLAYIN_START || "2026-08-16T00:00:00+08:00") / 1000;
 const TI_PLAYOFF_START = Date.parse(process.env.TI_PLAYOFF_START || "2026-08-20T00:00:00+08:00") / 1000;
 const DRAFT_TEMPORAL_MODEL = path.resolve(process.env.DRAFT_TEMPORAL_MODEL || "public/draft-temporal-model.json");
@@ -399,8 +401,40 @@ function decorateLiveDraft(game) {
   return { ...game, draftPrediction, draftError: draftPrediction ? null : liveDraftErrors.get(String(game.matchId)) ?? null, history: liveDraftHistory(game.matchId) };
 }
 
+const jsonFileCache = new Map();
 function loadJson(relativePath) {
-  return JSON.parse(readFileSync(path.resolve(relativePath), "utf8"));
+  const fullPath = path.resolve(relativePath);
+  const mtimeMs = statSync(fullPath).mtimeMs;
+  const cached = jsonFileCache.get(fullPath);
+  if (cached?.mtimeMs === mtimeMs) return cached.value;
+  const value = JSON.parse(readFileSync(fullPath, "utf8"));
+  jsonFileCache.set(fullPath, { mtimeMs, value });
+  return value;
+}
+
+function finiteDraftProbability(value) {
+  const probability = Number(value);
+  if (!Number.isFinite(probability)) return 0.5;
+  return Math.min(0.99, Math.max(0.01, probability));
+}
+
+function persistCalculatedDraft(game, prediction, observedAt, picksHash) {
+  const probabilityRadiant = finiteDraftProbability(prediction.probabilityRadiant);
+  let evidence = "{}";
+  try {
+    evidence = JSON.stringify({
+      sourceTeamProbability: prediction.sourceTeamProbability,
+      completeness: prediction.completeness,
+      signals: prediction.signals,
+      ...prediction.evidence,
+    });
+  } catch { evidence = "{}"; }
+  db.prepare(`INSERT INTO live_draft_predictions(match_id,series_id,radiant_team,dire_team,picks_hash,picks_json,probability_radiant,model_id,evidence_json,captured_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(match_id) DO UPDATE SET series_id=excluded.series_id,radiant_team=excluded.radiant_team,
+    dire_team=excluded.dire_team,picks_hash=excluded.picks_hash,picks_json=excluded.picks_json,
+    probability_radiant=excluded.probability_radiant,model_id=excluded.model_id,evidence_json=excluded.evidence_json,captured_at=excluded.captured_at`)
+    .run(String(game.matchId), String(game.seriesId || ""), game.radiantTeam, game.direTeam, picksHash,
+      JSON.stringify({ radiant: game.radiantPicks, dire: game.direPicks }), probabilityRadiant, prediction.modelId ?? "active-draft-combiner", evidence, observedAt);
 }
 
 function observeStableDraft(game, observedAt) {
@@ -419,13 +453,7 @@ function observeStableDraft(game, observedAt) {
     last_seen_at=excluded.last_seen_at`).run(String(game.matchId), picksHash, observations, observedAt, observedAt);
   try {
     const prediction = calculateActiveDraftPrediction({ draftStats: loadJson("public/draft-stats.json"), teamStats: loadJson("public/team-stats.json"), game });
-    const evidence = JSON.stringify({ sourceTeamProbability: prediction.sourceTeamProbability, completeness: prediction.completeness, signals: prediction.signals, ...prediction.evidence });
-    db.prepare(`INSERT INTO live_draft_predictions(match_id,series_id,radiant_team,dire_team,picks_hash,picks_json,probability_radiant,model_id,evidence_json,captured_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(match_id) DO UPDATE SET series_id=excluded.series_id,radiant_team=excluded.radiant_team,
-      dire_team=excluded.dire_team,picks_hash=excluded.picks_hash,picks_json=excluded.picks_json,
-      probability_radiant=excluded.probability_radiant,model_id=excluded.model_id,evidence_json=excluded.evidence_json,captured_at=excluded.captured_at
-      WHERE live_draft_predictions.picks_hash<>excluded.picks_hash`).run(String(game.matchId), String(game.seriesId || ""), game.radiantTeam, game.direTeam, picksHash,
-      JSON.stringify({ radiant: game.radiantPicks, dire: game.direPicks }), prediction.probabilityRadiant, prediction.modelId, evidence, observedAt);
+    persistCalculatedDraft(game, prediction, observedAt, picksHash);
     audit(existingPrediction ? "server_draft_refrozen" : "server_draft_frozen", { matchId: String(game.matchId), seriesId: String(game.seriesId || ""), picksHash, modelId: prediction.modelId });
     liveDraftErrors.delete(String(game.matchId));
     return storedLiveDraftPrediction(game.matchId);
@@ -642,16 +670,24 @@ function snapshotDecisionEvaluation(requestedId) {
   const rootId = Number(requested.root_snapshot_id ?? requested.id);
   const rows = db.prepare("SELECT * FROM prediction_snapshots WHERE root_snapshot_id=? OR id=? ORDER BY created_at,id").all(rootId, rootId).map(parsedSnapshotRow);
   const root = rows.find((row) => Number(row.id) === rootId) ?? requested;
-  const matches = db.prepare("SELECT * FROM matches WHERE winner IS NOT NULL ORDER BY round,id").all()
-    .filter((match) => Date.parse(match.updated_at || match.created_at) > Date.parse(root.created_at));
-  const evaluated = matches.map((match) => {
+  const matches = db.prepare("SELECT * FROM matches WHERE winner IS NOT NULL ORDER BY COALESCE(scheduled_at, created_at), round, id").all();
+  const evaluated = matches.flatMap((match) => {
     const cutoff = Date.parse(match.scheduled_at || match.created_at);
-    const adaptiveSnapshot = rows.filter((snapshot) => Date.parse(snapshot.created_at) <= cutoff).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id)[0] ?? null;
-    const staticProbability = diagnosticProbabilityFor(match.team_a, match.team_b, root.probabilities);
-    const adaptiveProbability = root.forecast_mode === "stats" && match.predicted_probability !== null && Number.isFinite(Number(match.predicted_probability))
-      ? Number(match.predicted_probability)
-      : adaptiveSnapshot ? diagnosticProbabilityFor(match.team_a, match.team_b, adaptiveSnapshot.probabilities) : null;
-    return { match, static: scoreDiagnosticMatch(match, staticProbability), adaptive: scoreDiagnosticMatch(match, adaptiveProbability) };
+    const snapshotsBefore = Number.isFinite(cutoff)
+      ? rows.filter((snapshot) => Date.parse(snapshot.created_at) <= cutoff)
+      : [];
+    const adaptiveSnapshot = [...snapshotsBefore].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id)[0] ?? null;
+    const staticSnapshot = [...snapshotsBefore].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id - b.id)[0] ?? null;
+    const storedProbability = Number.isFinite(Number(match.predicted_probability)) ? Number(match.predicted_probability) : null;
+    const staticProbability = diagnosticProbabilityFor(match.team_a, match.team_b, staticSnapshot?.probabilities)
+      ?? storedProbability;
+    const adaptiveProbability = diagnosticProbabilityFor(match.team_a, match.team_b, adaptiveSnapshot?.probabilities)
+      ?? storedProbability
+      ?? staticProbability;
+    const staticScore = scoreDiagnosticMatch(match, staticProbability);
+    const adaptiveScore = scoreDiagnosticMatch(match, adaptiveProbability);
+    if (!staticScore && !adaptiveScore) return [];
+    return [{ match, static: staticScore, adaptive: adaptiveScore }];
   });
   const staticScore = aggregateDiagnosticScores(evaluated, "static");
   const adaptiveScore = aggregateDiagnosticScores(evaluated, "adaptive");
@@ -716,20 +752,27 @@ function snapshotExportBundle(requestedId) {
       simulationResult: snapshot.result,
     };
   });
-  const futureMatches = allMatches.filter((match) => match.winner && Date.parse(match.updated_at || match.created_at) > Date.parse(root.created_at));
-  const evaluatedMatches = futureMatches.map((match) => {
+  const futureMatches = allMatches.filter((match) => match.winner);
+  const evaluatedMatches = futureMatches.flatMap((match) => {
     const cutoff = Date.parse(match.scheduled_at || match.created_at);
-    const adaptiveSnapshot = rows.filter((snapshot) => Date.parse(snapshot.created_at) <= cutoff).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id)[0] ?? null;
-    const staticProbability = diagnosticProbabilityFor(match.team_a, match.team_b, root.probabilities);
-    const adaptiveProbability = root.forecast_mode === "stats" && match.predicted_probability !== null && Number.isFinite(Number(match.predicted_probability))
-      ? Number(match.predicted_probability)
-      : adaptiveSnapshot ? diagnosticProbabilityFor(match.team_a, match.team_b, adaptiveSnapshot.probabilities) : null;
-    return {
+    const snapshotsBefore = Number.isFinite(cutoff)
+      ? rows.filter((snapshot) => Date.parse(snapshot.created_at) <= cutoff)
+      : [];
+    const adaptiveSnapshot = [...snapshotsBefore].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id)[0] ?? null;
+    const staticSnapshot = [...snapshotsBefore].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id - b.id)[0] ?? null;
+    const storedProbability = Number.isFinite(Number(match.predicted_probability)) ? Number(match.predicted_probability) : null;
+    const staticProbability = diagnosticProbabilityFor(match.team_a, match.team_b, staticSnapshot?.probabilities)
+      ?? storedProbability;
+    const adaptiveProbability = diagnosticProbabilityFor(match.team_a, match.team_b, adaptiveSnapshot?.probabilities)
+      ?? storedProbability
+      ?? staticProbability;
+    if (!scoreDiagnosticMatch(match, staticProbability) && !scoreDiagnosticMatch(match, adaptiveProbability)) return [];
+    return [{
       match: { id: match.id, stage: match.stage, round: match.round, teamA: match.team_a, teamB: match.team_b, winner: match.winner, scoreA: match.score_a, scoreB: match.score_b, scheduledAt: match.scheduled_at, completedAt: match.updated_at },
       static: scoreDiagnosticMatch(match, staticProbability),
       adaptive: scoreDiagnosticMatch(match, adaptiveProbability),
       adaptiveSnapshotId: adaptiveSnapshot?.id ?? null,
-    };
+    }];
   });
   return {
     schema: "ti2026.forecast-diagnostic-export",
@@ -792,7 +835,7 @@ function validateForecastAnswers(value) {
 
 function normalizedForecastProfile(value = {}) {
   const forecastMode = ["personal", "mixed", "stats"].includes(value.forecastMode) ? value.forecastMode : "stats";
-  const opinionWeight = forecastMode === "stats" ? 0 : Math.round(Number(value.opinionWeight ?? (forecastMode === "personal" ? 100 : 10)));
+  const opinionWeight = forecastMode === "stats" ? 0 : Math.round(Number(value.opinionWeight ?? (forecastMode === "personal" ? 100 : DEFAULT_OPINION_WEIGHT)));
   if (!Number.isInteger(opinionWeight) || opinionWeight < 0 || opinionWeight > 100) throw new Error("invalid_opinion_weight");
   return { forecastMode, opinionWeight, answers: validateForecastAnswers(value.answers) };
 }
@@ -1094,25 +1137,12 @@ function queueAutomaticSnapshot(trigger, delay = 100) {
     pendingAutomaticSnapshotTrigger = null;
     try {
       const canonicalAnswers = Object.fromEntries(db.prepare("SELECT pair_key,probability FROM answers ORDER BY pair_key").all().map((row) => [row.pair_key, Number(row.probability)]));
-      for (const weight of FORECAST_CANONICAL_WEIGHTS) {
+      for (const weight of FORECAST_AUTO_WEIGHTS) {
         enqueueForecastJob({
           kind: "scenario_refresh",
           profile: { forecastMode: weight ? "mixed" : "stats", opinionWeight: weight, answers: weight ? canonicalAnswers : {} },
           simulation: normalizedSimulationConfig(OFFICIAL_FORECAST_CONFIG, "scenario_refresh"),
           trigger: queuedTrigger,
-        });
-      }
-      const roots = db.prepare("SELECT * FROM prediction_snapshots WHERE snapshot_kind='original' AND id=root_snapshot_id AND forecast_mode!='stats' GROUP BY profile_key ORDER BY id").all();
-      for (const root of roots) {
-        let inputs = {};
-        try { inputs = root.inputs_json ? JSON.parse(root.inputs_json) : {}; } catch { inputs = {}; }
-        if (root.forecast_mode === "mixed" && FORECAST_CANONICAL_WEIGHTS.has(Number(root.opinion_weight))) continue;
-        enqueueForecastJob({
-          kind: "scenario_refresh",
-          profile: normalizedForecastProfile({ forecastMode: root.forecast_mode, opinionWeight: root.opinion_weight, answers: inputs.answers ?? {} }),
-          simulation: normalizedSimulationConfig(OFFICIAL_FORECAST_CONFIG, "scenario_refresh"),
-          rootSnapshotId: Number(root.id),
-          trigger: `revision_${queuedTrigger}`,
         });
       }
     } catch (error) {
@@ -1433,18 +1463,28 @@ async function refreshLiveDrafts({ force = false } = {}) {
   return liveDraftPromise;
 }
 
+function snapshotMatchesProfile(row, mode, weight) {
+  if (!row) return false;
+  const rowWeight = Number(row.opinion_weight);
+  if (mode === "stats") return row.forecast_mode === "stats";
+  if (mode === "personal") return (row.forecast_mode === "personal" && rowWeight === 100) || (row.forecast_mode === "mixed" && rowWeight === 100);
+  return row.forecast_mode === "mixed" && rowWeight === weight;
+}
+
 function latestMainSnapshot(opinionWeight, requestedSnapshotId = null) {
   const weight = Math.round(Math.min(100, Math.max(0, Number(opinionWeight) || 0)));
-  const mode = weight > 0 ? "mixed" : "stats";
+  const mode = weight >= 100 ? "personal" : weight > 0 ? "mixed" : "stats";
   const fields = "id,trigger,forecast_mode,opinion_weight,completed_match_count,probabilities_json,result_json,snapshot_kind,root_snapshot_id,created_at";
-  const requested = Number.isInteger(Number(requestedSnapshotId)) && Number(requestedSnapshotId) > 0
+  const requestedRow = Number.isInteger(Number(requestedSnapshotId)) && Number(requestedSnapshotId) > 0
     ? db.prepare(`SELECT ${fields} FROM prediction_snapshots WHERE id=?`).get(Number(requestedSnapshotId))
     : null;
+  const requestedRoot = requestedRow
+    ? db.prepare(`SELECT ${fields} FROM prediction_snapshots WHERE id=?`).get(Number(requestedRow.root_snapshot_id ?? requestedRow.id)) ?? requestedRow
+    : null;
+  const requested = snapshotMatchesProfile(requestedRoot, mode, weight) ? requestedRow : null;
   const profileLatest = db.prepare(`SELECT ${fields}
     FROM prediction_snapshots WHERE forecast_mode=? AND opinion_weight=?
-    ORDER BY completed_match_count DESC,id DESC LIMIT 1`).get(mode, weight)
-    ?? (weight > 0 ? db.prepare(`SELECT ${fields}
-      FROM prediction_snapshots WHERE forecast_mode='stats' ORDER BY completed_match_count DESC,id DESC LIMIT 1`).get() : null);
+    ORDER BY completed_match_count DESC,id DESC LIMIT 1`).get(mode, mode === "personal" ? 100 : weight);
   const selected = requested ?? profileLatest;
   if (!selected) return null;
   const rootId = Number(selected.root_snapshot_id ?? selected.id);
@@ -1512,9 +1552,9 @@ function projectedMatchupState(simulationResult, matches) {
   return { swiss, playins: [...official, ...alternatives], officialPlayins: official, playinAlternatives: alternatives, playinProjectionScope: "marginal_not_joint_pairing_rule" };
 }
 
-async function combinedForecastState(opinionWeight = 10, requestedSnapshotId = null, { refreshLive = false } = {}) {
-  const weight = Math.round(Math.min(100, Math.max(0, Number(opinionWeight) || 0)));
-  const mode = weight > 0 ? "mixed" : "stats";
+async function combinedForecastState(opinionWeight = DEFAULT_OPINION_WEIGHT, requestedSnapshotId = null, { refreshLive = false } = {}) {
+  const weight = DEFAULT_OPINION_WEIGHT;
+  const mode = weight >= 100 ? "personal" : weight > 0 ? "mixed" : "stats";
   const { matches, probabilities } = currentForecast({ ...OFFICIAL_FORECAST_CONFIG, forecastMode: mode, opinionWeight: weight });
   const mainSnapshot = latestMainSnapshot(weight, requestedSnapshotId);
   const modelComparison = mainSnapshot ? snapshotDecisionEvaluation(mainSnapshot.baselineId) : null;
@@ -1643,7 +1683,7 @@ async function combinedForecastState(opinionWeight = 10, requestedSnapshotId = n
   };
 }
 
-function combinedInputHash(opinionWeight = 10) {
+function combinedInputHash(opinionWeight = DEFAULT_OPINION_WEIGHT) {
   const latestSnapshot = db.prepare("SELECT id,created_at FROM prediction_snapshots ORDER BY id DESC LIMIT 1").get() ?? null;
   const matches = db.prepare("SELECT id,updated_at FROM matches ORDER BY id").all();
   const locks = db.prepare("SELECT id,created_at FROM bet_locks ORDER BY id").all();
@@ -1707,7 +1747,7 @@ function overlayCombinedLive(state) {
   };
 }
 
-async function materializeCombinedForecast(opinionWeight = 10) {
+async function materializeCombinedForecast(opinionWeight = DEFAULT_OPINION_WEIGHT) {
   const viewKey = `combined:v2:weight:${Number(opinionWeight)}`;
   const running = combinedMaterializationPromises.get(viewKey);
   if (running) return running;
@@ -1740,7 +1780,7 @@ async function materializeCombinedForecast(opinionWeight = 10) {
   return materializationPromise;
 }
 
-function readyCombinedForecast(opinionWeight = 10) {
+function readyCombinedForecast(opinionWeight = DEFAULT_OPINION_WEIGHT) {
   const viewKey = `combined:v2:weight:${Number(opinionWeight)}`;
   const row = db.prepare("SELECT version,input_hash,payload_json,updated_at FROM materialized_views WHERE view_key=? AND status='ready'").get(viewKey);
   if (!row?.payload_json) return null;
@@ -1872,7 +1912,7 @@ const server = createServer(async (req, res) => {
       }
     }
     if (req.method === "GET" && url.pathname === "/api/combined") {
-      const opinionWeight = url.searchParams.get("opinionWeight") ?? 10;
+      const opinionWeight = DEFAULT_OPINION_WEIGHT;
       const requestedRun = url.searchParams.get("run");
       let ready = requestedRun ? null : readyCombinedForecast(opinionWeight);
       if (ready && ready.readModel?.inputHash !== combinedInputHash(opinionWeight)) {
@@ -1910,9 +1950,7 @@ const server = createServer(async (req, res) => {
       if (!existing) {
         try {
           const calculated = calculateActiveDraftPrediction({ draftStats: loadJson("public/draft-stats.json"), teamStats: loadJson("public/team-stats.json"), game });
-          const evidence = JSON.stringify({ sourceTeamProbability: calculated.sourceTeamProbability, completeness: calculated.completeness, signals: calculated.signals, ...calculated.evidence });
-          db.prepare("INSERT OR IGNORE INTO live_draft_predictions(match_id,series_id,radiant_team,dire_team,picks_hash,picks_json,probability_radiant,model_id,evidence_json,captured_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
-            .run(String(matchId), String(game.seriesId || ""), game.radiantTeam, game.direTeam, picksHash, JSON.stringify({ radiant: game.radiantPicks, dire: game.direPicks }), calculated.probabilityRadiant, calculated.modelId, evidence, now());
+          persistCalculatedDraft(game, calculated, now(), picksHash);
         } catch (error) {
           console.error("Authoritative draft prediction failed:", error);
           return json(res, 503, { error: "active_draft_model_unavailable" });
@@ -1987,7 +2025,7 @@ const server = createServer(async (req, res) => {
         } catch (error) { db.exec("ROLLBACK"); throw error; }
         audit("answers_saved", { count: entries.length });
         queueAutomaticSnapshot("auto_profile_change", 100);
-        for (const weight of [0, 10, 20, 30]) void materializeCombinedForecast(weight).catch(() => {});
+        void materializeCombinedForecast(DEFAULT_OPINION_WEIGHT).catch(() => {});
         return json(res, 200, { ok: true, count: entries.length });
       }
       if (req.method === "POST" && url.pathname === "/api/admin/bet-locks") {
@@ -2148,7 +2186,7 @@ server.listen(PORT, "0.0.0.0", () => {
   }
   const refreshLiveDraftCache = () => void refreshLiveDrafts({ force: true })
     .catch((error) => console.error("Live draft timer failed:", error.message));
-  void Promise.all([0, 10, 20, 30].map((weight) => materializeCombinedForecast(weight)))
+  void Promise.all(FORECAST_AUTO_WEIGHTS.map((weight) => materializeCombinedForecast(weight)))
     .catch((error) => console.error("Initial combined materialization failed:", error.message));
   if (LIVE_DRAFT_SYNC_ENABLED) {
     setTimeout(refreshLiveDraftCache, 2_000).unref();

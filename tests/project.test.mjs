@@ -179,6 +179,9 @@ test("combined page and API persist map truth and explain the no-double-count po
   assert.match(page, /ДВА ПОНЯТНЫХ СРЕЗА/);
   assert.match(page, /const isOpen = Boolean\(expanded\[String\(row\.match\.id\)\]\)/);
   assert.match(page, /fusion-matrix-progress/);
+  assert.match(page, /function seriesPredictionCorrect/);
+  assert.match(page, /seriesMisses/);
+  assert.match(page, /em className=\{row\.live \? "is-live" : predictionCorrect === true \? "is-correct" : predictionCorrect === false \? "is-wrong" : "is-pending"\}/);
   assert.match(page, /из \{rows\.length\} матчей/);
   assert.match(styles, /@media\(min-width:1100px\)/);
   assert.match(styles, /\.fusion-swiss-layout\{/);
@@ -245,9 +248,15 @@ test("active draft prediction is server-calculated, validates picks and preserve
   assert.equal(carryOnHero.evidence.assignments.radiant.rows.find((row) => row.heroId === 10)?.position, 1);
   assert.equal(supportOnHero.evidence.assignments.radiant.rows.find((row) => row.heroId === 10)?.position, 5);
 
+  const brokenSample = JSON.parse(JSON.stringify(carryStats));
+  brokenSample.activeSnapshot.playerHero["101|10"] = { games: 20 };
+  const nanSafe = calculateActiveDraftPrediction({ draftStats: brokenSample, teamStats, game: { ...baseGame, radiantPlayers: [fillPlayers(101, 10, 1), fillPlayers(102, 2, 2), fillPlayers(103, 3, 3), fillPlayers(104, 4, 4), fillPlayers(105, 5, 5)] } });
+  assert.ok(Number.isFinite(nanSafe.probabilityRadiant) && nanSafe.probabilityRadiant >= .01 && nanSafe.probabilityRadiant <= .99);
+
   const api = await readFile("server/api.mjs", "utf8");
   assert.match(api, /calculateActiveDraftPrediction\(\{ draftStats: loadJson\("public\/draft-stats\.json"\), teamStats: loadJson\("public\/team-stats\.json"\), game \}\)/);
-  assert.match(api, /INSERT OR IGNORE INTO live_draft_predictions/);
+  assert.match(api, /function persistCalculatedDraft/);
+  assert.match(api, /finiteDraftProbability/);
   assert.match(api, /existing && existing\.picksHash !== picksHash/);
   assert.match(api, /function sameCompleteDraft/);
   assert.match(api, /storedDraftMatchesGame/);
@@ -278,13 +287,17 @@ test("combined UI keeps unique match rows, live rail, unique elimination slots a
   assert.match(page, /const liveRows = rows\.filter\(\(row\) => row\.live && !row\.match\.winner\)/);
   assert.match(page, /POST-DRAFT · FROZEN/);
   assert.match(page, /считаем 5×5/);
-  assert.match(page, /function OpinionPanel/);
+  assert.match(page, /ошибка модели · /);
   assert.match(page, /function AdminGate/);
-  assert.match(page, /standing\.losses < 4/);
+  assert.doesNotMatch(page, /function OpinionPanel/);
+  assert.doesNotMatch(page, /fusion-simulation-table-wrap/);
   assert.match(page, /const usedTeams = new Set<string>\(\)/);
   assert.match(page, /usedTeams\.has\(row\.match\.team_a\) \|\| usedTeams\.has\(row\.match\.team_b\)/);
   assert.match(page, /usedTeams\.has\(match\.teamA\) \|\| usedTeams\.has\(match\.teamB\)/);
   assert.match(page, /Array\.from\(\{ length: 5 \}/);
+  assert.match(page, /fusion-projection-toggle/);
+  assert.match(page, /fusion-bracket-toggle/);
+  assert.match(page, /Пики карт и вероятности появятся/);
   assert.match(page, /fusion-scroll-hint/);
   assert.match(styles, /@media\(max-width:900px\)/);
   assert.match(styles, /@media\(max-width:560px\)/);
@@ -898,7 +911,7 @@ test("official pairing changes enqueue canonical scenario refresh jobs with dete
   assert.match(api, /queueAutomaticSnapshot\(officialPairingTrigger\(\)\)/);
   assert.match(api, /auto_pairing_/);
   assert.match(api, /pendingAutomaticSnapshotTrigger/);
-  assert.match(api, /for \(const weight of FORECAST_CANONICAL_WEIGHTS\) \{[\s\S]*enqueueForecastJob\(\{[\s\S]*kind: "scenario_refresh"/);
+  assert.match(api, /for \(const weight of FORECAST_AUTO_WEIGHTS\) \{[\s\S]*enqueueForecastJob\(\{[\s\S]*kind: "scenario_refresh"/);
   assert.match(api, /profile: \{ forecastMode: weight \? "mixed" : "stats", opinionWeight: weight, answers: weight \? canonicalAnswers : \{\} \}/);
   assert.match(api, /matchesLiveSignature: liveConstraintSignature\(matches\)/);
   assert.match(api, /const inputHash = createHash\("sha256"\)\.update\(stableJson\(seedMaterial\)\)\.digest\("hex"\)/);
@@ -963,14 +976,25 @@ test("unified forecast UI reads authoritative snapshots without browser-triggere
   assert.doesNotMatch(page, /forecast-client-worker/);
   assert.doesNotMatch(page, /import\s+\{?\s*runForecast/);
   assert.match(page, /fetch\(`\/api\/combined/);
+  assert.doesNotMatch(page, /opinionWeight=\$\{/);
+  assert.match(page, /const DISPLAY_OPINION_WEIGHT = 15/);
   assert.match(page, /document\.visibilityState === "visible"/);
   assert.doesNotMatch(page, /browser_scenario_refresh/);
   assert.match(admin, /kind: "manual"/);
+  assert.match(admin, /EXPERT PAIRWISE/);
+  assert.match(admin, /Моё мнение по командам/);
+  assert.match(admin, /Пересчитать 15% \(основной\)/);
+  assert.match(admin, /replace: true/);
+  assert.match(api, /const DEFAULT_OPINION_WEIGHT = 15/);
+  assert.match(api, /const FORECAST_AUTO_WEIGHTS = Object\.freeze\(\[DEFAULT_OPINION_WEIGHT\]\)/);
+  assert.match(api, /function snapshotMatchesProfile/);
+  assert.match(api, /url.pathname === "\/api\/combined"/);
+  assert.match(api, /const opinionWeight = DEFAULT_OPINION_WEIGHT;/);
   assert.match(api, /queueAutomaticSnapshot/);
   assert.match(api, /materializeCombinedForecast/);
   assert.match(page, /predictionCorrect/);
   assert.match(styles, /\.fusion-result-square\.is-correct/);
-  assert.match(styles, /\.fusion-result-square\.is-wrong/);
+  assert.match(styles, /\.fusion-series-row>button>em\.is-wrong\{color:var\(--fusion-danger\)/);
 });
 
 test("conditional branches remain server-authoritative and admin-gated", async () => {
@@ -985,6 +1009,7 @@ test("prediction audit keeps frozen and adaptive evaluations separate", async ()
   const [page, api] = await Promise.all([readFile("app/combined/page.tsx", "utf8"), readFile("server/api.mjs", "utf8")]);
   const styles = await readFile("app/globals.css", "utf8");
   assert.match(api, /function snapshotDecisionEvaluation/);
+  assert.doesNotMatch(api, /updated_at \|\| match\.created_at\) > Date\.parse\(root\.created_at\)/);
   assert.match(api, /static: scoreDiagnosticMatch/);
   assert.match(api, /adaptive: scoreDiagnosticMatch/);
   assert.match(api, /timeline/);

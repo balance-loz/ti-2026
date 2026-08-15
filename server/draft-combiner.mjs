@@ -4,7 +4,11 @@ export const CLOSE_DRAFT_SIGNAL_WEIGHT = 2.15;
 export const FAVORITE_DRAFT_SIGNAL_WEIGHT = 1.15;
 export const FULL_TEAM_GAP_LOGIT = 1.4;
 
-const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const clamp = (value, min, max) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return (min + max) / 2;
+  return Math.min(max, Math.max(min, numeric));
+};
 const sigmoid = (value) => 1 / (1 + Math.exp(-value));
 const logit = (value) => Math.log(clamp(value, 0.01, 0.99) / (1 - clamp(value, 0.01, 0.99)));
 const mix = (from, to, amount) => from + (to - from) * amount;
