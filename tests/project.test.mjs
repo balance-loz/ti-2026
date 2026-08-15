@@ -1,10 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { createServer as createNetServer } from "node:net";
+import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { completedSeriesFromMaps } from "../server/live-series.mjs";
 import { liveDraftsFromOpenDota } from "../server/live-drafts.mjs";
 import { scheduledSeriesFromCybersportHtml } from "../server/schedule-source.mjs";
 import { buildForecastSource, ROUND_ONE, runForecast, SWISS_GROUPS, SWISS_GROUP_BY_TEAM, swissBucketKey, topGroupScenarios } from "../server/forecast-engine.mjs";
+import { calculateActiveDraftPrediction } from "../server/active-draft-service.mjs";
 import { combineDraftSignals } from "../server/draft-combiner.mjs";
 import { predictTemporalDraft } from "../server/draft-inference.mjs";
 import { bestOfProbability, convertSeriesProbability } from "../server/team-model.mjs";
@@ -20,6 +25,32 @@ import { combinedSeriesForecast, exactSeriesScores, orientedProbability } from "
 import { predictionTimeliness, projectPlayoffBracket } from "../server/projected-bracket.mjs";
 import { selectProductionVariant } from "../server/model-gate.mjs";
 
+async function availablePort() {
+  const probe = createNetServer();
+  await new Promise((resolve, reject) => {
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", resolve);
+  });
+  const address = probe.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  await new Promise((resolve) => probe.close(resolve));
+  return port;
+}
+
+async function waitForHealth(baseUrl, child) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (child.exitCode !== null) throw new Error(`API exited before health check with code ${child.exitCode}`);
+    try {
+      const response = await fetch(`${baseUrl}/api/health`);
+      if (response.ok) return;
+    } catch {
+      // The listener may not be bound yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("API health check timed out");
+}
+
 test("combined series forecast exposes exact map scores without leaking live state into future maps", () => {
   const even = exactSeriesScores({ bestOf: 3, baseMapProbabilityA: .5 });
   assert.deepEqual(Object.fromEntries(even.map((row) => [row.score, row.probability])), { "0:2": .25, "1:2": .25, "2:0": .25, "2:1": .25 });
@@ -31,6 +62,32 @@ test("combined series forecast exposes exact map scores without leaking live sta
   assert.ok(Math.abs(liveScores["1:2"] - .1) < 1e-12);
   assert.equal(orientedProbability("liquid", "spirit", { "liquid|spirit": 62 }), .62);
   assert.equal(orientedProbability("spirit", "liquid", { "liquid|spirit": 62 }), .38);
+});
+
+test("combined forecast converts its declared BO3 or BO5 source before target-series scoring", () => {
+  const fromBo3 = combinedSeriesForecast({ teamA: "a", teamB: "b", seriesProbabilityA: .65, sourceBestOf: 3, bestOf: 5 });
+  assert.equal(fromBo3.sourceBestOf, 3);
+  assert.equal(fromBo3.bestOf, 5);
+  assert.ok(Math.abs(fromBo3.probabilityA - convertSeriesProbability(.65, 3, 5)) < 1e-12);
+  assert.ok(Math.abs(fromBo3.targetSeriesProbabilityA - fromBo3.probabilityA) < 1e-12);
+
+  const fromBo5 = combinedSeriesForecast({ teamA: "a", teamB: "b", seriesProbabilityA: .72, sourceBestOf: 5, bestOf: 3 });
+  assert.equal(fromBo5.sourceBestOf, 5);
+  assert.equal(fromBo5.bestOf, 3);
+  assert.ok(Math.abs(fromBo5.probabilityA - convertSeriesProbability(.72, 5, 3)) < 1e-12);
+});
+
+test("exact score distribution is normalized, ranked and excludes impossible conditional outcomes", () => {
+  const preSeries = combinedSeriesForecast({ teamA: "a", teamB: "b", seriesProbabilityA: .63, bestOf: 5 });
+  assert.equal(preSeries.exactScores.length, 6);
+  assert.ok(Math.abs(preSeries.exactScores.reduce((sum, row) => sum + row.probability, 0) - 1) < 1e-12);
+  assert.deepEqual(preSeries.topExactScores, preSeries.exactScores.slice(0, 5));
+  assert.ok(preSeries.exactScores.every((row, index, rows) => index === 0 || rows[index - 1].probability >= row.probability));
+
+  const conditional = exactSeriesScores({ bestOf: 5, winsA: 2, winsB: 1, baseMapProbabilityA: .6 });
+  assert.deepEqual(new Set(conditional.map((row) => row.score)), new Set(["3:1", "3:2", "2:3"]));
+  assert.ok(Math.abs(conditional.reduce((sum, row) => sum + row.probability, 0) - 1) < 1e-12);
+  assert.deepEqual(exactSeriesScores({ bestOf: 5, winsA: 3, winsB: 1, baseMapProbabilityA: .6 }), [{ score: "3:1", probability: 1 }]);
 });
 
 test("decision ledger separates actionable predictions from late revisions", () => {
@@ -75,7 +132,7 @@ test("combined page and API persist map truth and explain the no-double-count po
   assert.match(api, /decisionHistory/);
   assert.match(page, /Я поставил по рекомендации/);
   assert.match(page, /СТАВКА ЗАФИКСИРОВАНА/);
-  assert.match(page, /Таблица по матчам/);
+  assert.match(page, /Standings и матчи по раундам/);
   assert.match(page, /MAIN \/ СТАВКА/);
   assert.match(page, /buildMatchStandings/);
   assert.match(page, /function seriesPresentation/);
@@ -93,21 +150,18 @@ test("combined page and API persist map truth and explain the no-double-count po
   assert.match(page, /MONTE CARLO · SWISS → СТЫКИ → PLAYOFF/);
   assert.match(page, /simulation\.iterations\.toLocaleString/);
   assert.match(page, /БУДУЩИЕ ПАРЫ SWISS/);
-  assert.match(page, /Вероятные пары и альтернативы/);
+  assert.match(page, /ELIMINATION ROUND · 5 СЛОТОВ/);
   assert.match(page, /Строится новая миллионная ревизия/);
   assert.match(modelGate, /adaptive_failed_production_gate/);
   assert.match(page, /MAIN = \{comparison\.selected\.toUpperCase\(\)\}/);
-  assert.match(page, /const teamProbability = standing\.teamId === row\.match\.team_a/);
-  assert.match(page, /expandedMatches/);
-  assert.match(page, /fusion-round-match/);
-  assert.match(page, /ПРОГНОЗ УГАДАН/);
-  assert.match(page, /fusion-prediction-verdict/);
-  assert.match(page, /const place = standingIndex \+ 1/);
-  assert.match(page, /fusion-result-square/);
+  assert.match(page, /const \[expandedMatches, setExpandedMatches\]/);
+  assert.match(page, /fusion-series-row/);
+  assert.match(page, /ОДНА СЕРИЯ = ОДНА СТРОКА/);
+  assert.match(page, /const isOpen = Boolean\(expanded\[String\(row\.match\.id\)\]\)/);
   assert.match(page, /fusion-matrix-progress/);
   assert.match(page, /из \{rows\.length\} матчей/);
   assert.match(styles, /@media\(min-width:1100px\)/);
-  assert.match(styles, /fusion-history-table\{min-width:2050px\}/);
+  assert.match(styles, /\.fusion-swiss-layout\{/);
   assert.match(page, /function RouletteRisk/);
   assert.match(page, /const isLowConfidence = .* < \.58/);
   assert.match(tournamentPage, /round\.probability\.toFixed\(0\).*%/);
@@ -118,6 +172,58 @@ test("combined page and API persist map truth and explain the no-double-count po
   assert.match(page, /Нет draft-прогноза/);
   assert.match(checkpoint, /Checkpoint refused/);
   assert.match(checkpoint, /backup\(source/);
+});
+
+test("active draft prediction is server-calculated, validates picks and preserves partial completeness", async () => {
+  const draftStats = {
+    heroes: [1, 2, 3, 4].map((id) => ({ id, modelWinRate: id <= 2 ? 55 : 45 })),
+    radiantWinRate: 52,
+    teams: {},
+    synergy: {},
+    counters: {},
+  };
+  const teamStats = { pairwise: { "falcons|parivision": { mapProbabilityA: 60 } } };
+  const game = { radiantTeam: "falcons", direTeam: "parivision", radiantPicks: [1, 2], direPicks: [3, 4], radiantPlayers: [], direPlayers: [] };
+  const prediction = calculateActiveDraftPrediction({ draftStats, teamStats, game });
+  assert.equal(prediction.modelId, "active-draft-combiner-v1");
+  assert.equal(prediction.completeness, .4);
+  assert.equal(prediction.temporalWeight, 0);
+  assert.equal(prediction.nextgenWeight, 0);
+  assert.deepEqual(prediction.signals.map((signal) => signal.key), ["side", "hero", "draftPriority", "synergy", "counter", "teamPool", "playerPool", "roles"]);
+  assert.ok(prediction.probabilityRadiant > .5 && prediction.probabilityRadiant < 1);
+  assert.throws(() => calculateActiveDraftPrediction({ draftStats, teamStats, game: { ...game, direPicks: [2, 4] } }), /invalid_picks/);
+
+  const api = await readFile("server/api.mjs", "utf8");
+  assert.match(api, /calculateActiveDraftPrediction\(\{ draftStats: loadJson\("public\/draft-stats\.json"\), teamStats: loadJson\("public\/team-stats\.json"\), game \}\)/);
+  assert.match(api, /INSERT OR IGNORE INTO live_draft_predictions/);
+  assert.match(api, /existing && existing\.picksHash !== picksHash/);
+});
+
+test("combined API publishes explicit STATIC/MAIN and shadow-model policy metadata", async () => {
+  const api = await readFile("server/api.mjs", "utf8");
+  assert.match(api, /modelComparison\?\.selected === "static" \? mainSnapshot\?\.baselineProbabilities/);
+  assert.match(api, /modelComparison\?\.selected === "static" \? mainSnapshot\?\.baselineResult/);
+  assert.match(api, /activeDraft: "published_main_weight_1"/);
+  assert.match(api, /temporalDraft: "shadow_weight_0"/);
+  assert.match(api, /nextgen: "shadow_weight_0"/);
+  assert.match(api, /probabilitySet: modelComparison\?\.selected \?\? "adaptive"/);
+});
+
+test("combined UI keeps unique match rows, live rail, unique elimination slots and mobile hooks", async () => {
+  const [page, styles] = await Promise.all([readFile("app/combined/page.tsx", "utf8"), readFile("app/globals.css", "utf8")]);
+  assert.match(page, /rows\.filter\(\(row\) => row\.match\.round === round\)\.map/);
+  assert.match(page, /<article key=\{row\.match\.id\} className=\{`fusion-series-row/);
+  assert.match(page, /const liveRows = rows\.filter\(\(row\) => row\.live && !row\.match\.winner\)/);
+  assert.match(page, /POST-DRAFT · FROZEN/);
+  assert.match(page, /const usedTeams = new Set<string>\(\)/);
+  assert.match(page, /usedTeams\.has\(row\.match\.team_a\) \|\| usedTeams\.has\(row\.match\.team_b\)/);
+  assert.match(page, /usedTeams\.has\(match\.teamA\) \|\| usedTeams\.has\(match\.teamB\)/);
+  assert.match(page, /Array\.from\(\{ length: 5 \}/);
+  assert.match(page, /fusion-scroll-hint/);
+  assert.match(styles, /@media\(max-width:900px\)/);
+  assert.match(styles, /@media\(max-width:560px\)/);
+  assert.match(styles, /\.fusion-live-grid\{/);
+  assert.match(styles, /\.fusion-elimination/);
 });
 
 test("draft decides a matchup between equally strong teams", () => {
@@ -407,7 +513,7 @@ test("OpenDota maps become a completed series only after two wins", () => {
   ];
   const series = completedSeriesFromMaps(maps);
   assert.equal(series.length, 1);
-  assert.deepEqual(series[0], { seriesId: "99", teamA: "1w", teamB: "nigma", winsA: 2, winsB: 0, startTime: 100, seriesType: 1, mapIds: [1, 2] });
+  assert.deepEqual(series[0], { seriesId: "99", teamA: "1w", teamB: "nigma", winsA: 2, winsB: 0, startTime: 100, seriesType: 1, mapIds: [1, 2], bestOf: 3 });
 });
 
 test("OpenDota live feed becomes a partial TI draft and rejects stale games", () => {
@@ -475,7 +581,7 @@ test("former Tundra OpenDota team ID resolves to current 1w roster", () => {
     { match_id: 11, series_id: 199, start_time: 100, radiant_team_id: 8291895, dire_team_id: 10136357, radiant_win: true },
     { match_id: 12, series_id: 199, start_time: 200, radiant_team_id: 10136357, dire_team_id: 8291895, radiant_win: false },
   ];
-  assert.deepEqual(completedSeriesFromMaps(maps)[0], { seriesId: "199", teamA: "1w", teamB: "nigma", winsA: 2, winsB: 0, startTime: 100, seriesType: 1, mapIds: [11, 12] });
+  assert.deepEqual(completedSeriesFromMaps(maps)[0], { seriesId: "199", teamA: "1w", teamB: "nigma", winsA: 2, winsB: 0, startTime: 100, seriesType: 1, mapIds: [11, 12], bestOf: 3 });
 });
 
 test("Iron Wing OpenDota team ID resolves to current 1w roster", () => {
@@ -483,7 +589,7 @@ test("Iron Wing OpenDota team ID resolves to current 1w roster", () => {
     { match_id: 21, series_id: 299, start_time: 100, radiant_team_id: 10150413, dire_team_id: 10136357, radiant_win: true },
     { match_id: 22, series_id: 299, start_time: 200, radiant_team_id: 10136357, dire_team_id: 10150413, radiant_win: false },
   ];
-  assert.deepEqual(completedSeriesFromMaps(maps)[0], { seriesId: "299", teamA: "1w", teamB: "nigma", winsA: 2, winsB: 0, startTime: 100, seriesType: 1, mapIds: [21, 22] });
+  assert.deepEqual(completedSeriesFromMaps(maps)[0], { seriesId: "299", teamA: "1w", teamB: "nigma", winsA: 2, winsB: 0, startTime: 100, seriesType: 1, mapIds: [21, 22], bestOf: 3 });
 });
 
 test("snapshot history keeps one visible row while internal revisions advance", () => {
@@ -507,22 +613,32 @@ test("Cybersport schedule becomes official pre-match series", () => {
     <div>14.08.26 в 08:00<img alt="PARIVISION"><img alt="Nigma Galaxy"><span class="vs_pcDDl">vs</span><img alt="BetBoom"></div>
     <div>14.08.26 в 11:00<img alt="Team Spirit"><img alt="Xtreme Gaming"><span class="vs_pcDDl">vs</span></div>`;
   assert.deepEqual(scheduledSeriesFromCybersportHtml(html), [
-    { teamA: "parivision", teamB: "nigma", round: 2, scheduledAt: "2026-08-14T05:00:00.000Z", source: "cybersport" },
-    { teamA: "spirit", teamB: "xtreme", round: 2, scheduledAt: "2026-08-14T08:00:00.000Z", source: "cybersport" },
+    { teamA: "parivision", teamB: "nigma", round: 2, scheduledAt: "2026-08-14T05:00:00.000Z", scheduledDate: "2026-08-14", stage: "swiss", source: "cybersport" },
+    { teamA: "spirit", teamB: "xtreme", round: 2, scheduledAt: "2026-08-14T08:00:00.000Z", scheduledDate: "2026-08-14", stage: "swiss", source: "cybersport" },
   ]);
 });
 
-test("current Cybersport round parses UTF-8 today, LIVE and time-less official pairings", () => {
+test("time-less Swiss card keeps its semantic round stage", () => {
   const html = `<h2>Расписание</h2>
-    <div class="tab_x isActive_y"><span>Раунд 2</span></div>
+    <div class="tab_x isActive_y"><span>Раунд 5</span></div>
+    <div class="item_a"><div class="date_x"><span>LIVE</span></div><div class="participant_a"><img alt="LGD"></div><div class="participant_b"><img alt="Vici Gaming"></div><span>0:0</span></div>
+    <div id="stage-participants"></div>`;
+  assert.deepEqual(scheduledSeriesFromCybersportHtml(html), [
+    { teamA: "lgd", teamB: "vg", round: 5, scheduledAt: null, scheduledDate: null, stage: "swiss", source: "cybersport" },
+  ]);
+});
+
+test("semantic Elimination Round parsing preserves nullable LIVE and time-less timestamps", () => {
+  const html = `<h2>Расписание</h2>
+    <div class="tab_x isActive_y"><span>Elimination Round</span></div>
     <div class="item_a"><div class="date_x">Сегодня в 13:00</div><div class="participant_a"><img alt="Falcons"></div><div class="participant_b"><img alt="PARIVISION"></div><span class="vs_x">vs</span><img alt="BetBoom"></div>
     <div class="item_b"><div class="date_x"><span>LIVE</span></div><div class="participant_a"><img alt="OG"></div><div class="participant_b"><img alt="Nigma"></div><span>0:0</span></div>
     <div class="item_c"><div class="date_x"></div><div class="participant_a"><img alt="Liquid"></div><div class="participant_b"><img alt="Yandex"></div><span class="vs_x">vs</span></div>
     <div id="stage-participants"></div>`;
   assert.deepEqual(scheduledSeriesFromCybersportHtml(html, { now: new Date("2026-08-13T10:15:00.000Z") }), [
-    { teamA: "falcons", teamB: "parivision", round: 2, scheduledAt: "2026-08-13T10:00:00.000Z", source: "cybersport" },
-    { teamA: "og", teamB: "nigma", round: 2, scheduledAt: "2026-08-13T10:15:00.000Z", source: "cybersport" },
-    { teamA: "liquid", teamB: "yandex", round: 2, scheduledAt: "2026-08-13T10:15:00.000Z", source: "cybersport" },
+    { teamA: "falcons", teamB: "parivision", round: 1, scheduledAt: "2026-08-13T10:00:00.000Z", scheduledDate: "2026-08-13", stage: "playin", source: "cybersport" },
+    { teamA: "og", teamB: "nigma", round: 1, scheduledAt: null, scheduledDate: null, stage: "playin", source: "cybersport" },
+    { teamA: "liquid", teamB: "yandex", round: 1, scheduledAt: null, scheduledDate: null, stage: "playin", source: "cybersport" },
   ]);
 });
 
@@ -530,7 +646,7 @@ test("L1 TEAM sponsorship-safe name resolves to L1ga", () => {
   const html = `<div class="tab_x isActive_y"><span>Раунд 3</span></div>
     <div>15.08.26 в 14:00<img alt="L1 TEAM"><img alt="Team Liquid"><span class="vs_pcDDl">vs</span></div>`;
   assert.deepEqual(scheduledSeriesFromCybersportHtml(html), [
-    { teamA: "l1ga", teamB: "liquid", round: 3, scheduledAt: "2026-08-15T11:00:00.000Z", source: "cybersport" },
+    { teamA: "l1ga", teamB: "liquid", round: 3, scheduledAt: "2026-08-15T11:00:00.000Z", scheduledDate: "2026-08-15", stage: "swiss", source: "cybersport" },
   ]);
 });
 
@@ -538,7 +654,7 @@ test("Tundra schedule name resolves to transferred 1w roster", () => {
   const html = `<div class="tab_x isActive_y"><span>Раунд 2</span></div>
     <div>14.08.26 в 14:00<img alt="Tundra Esports"><img alt="Team Spirit"><span class="vs_pcDDl">vs</span></div>`;
   assert.deepEqual(scheduledSeriesFromCybersportHtml(html), [
-    { teamA: "1w", teamB: "spirit", round: 2, scheduledAt: "2026-08-14T11:00:00.000Z", source: "cybersport" },
+    { teamA: "1w", teamB: "spirit", round: 2, scheduledAt: "2026-08-14T11:00:00.000Z", scheduledDate: "2026-08-14", stage: "swiss", source: "cybersport" },
   ]);
 });
 
@@ -563,10 +679,14 @@ test("server forecast can create an automatic snapshot payload", async () => {
   const result = runForecast(probabilities, 100, 123, { stats, matches: [] });
   assert.equal(result.teams.length, 16);
   assert.equal(result.iterations, 100);
-  assert.equal(result.formatVersion, "hidden-groups-r1-r3-playoff-v6-matchup-distributions");
+  assert.equal(result.formatVersion, "hidden-groups-r1-r3-playoff-v7-partial-official-playins");
   assert.equal(result.convergence.stopReason, "fixed_budget");
   assert.equal(result.convergence.checkpoints.at(-1).iterations, 100);
-  assert.deepEqual(result.calibration, stats.tournamentCalibration.selected);
+  assert.deepEqual(result.calibration, {
+    ...stats.tournamentCalibration.selected,
+    formLogitSd: 0,
+    shadowFormLogitSd: stats.tournamentCalibration.selected.formLogitSd,
+  });
   assert.ok(Math.abs(result.teams.reduce((sum, team) => sum + team.champion, 0) - 100) < 1e-9);
   assert.ok(Math.abs(result.teams.reduce((sum, team) => sum + team.final, 0) - 200) < 1e-9);
   assert.ok(Math.abs(result.teams.reduce((sum, team) => sum + team.top3, 0) - 300) < 1e-9);
@@ -599,6 +719,19 @@ test("completed Swiss results make impossible perfect records disappear from sce
   const probabilities = buildForecastSource({ answers: {}, stats, matches: [], mode: "stats", opinionWeight: 0 });
   const result = runForecast(probabilities, 200, 2468, { stats, matches: [{ id: 1, stage: "swiss", round: 1, team_a: "yandex", team_b: "l1ga", winner: "l1ga" }] });
   assert.ok(result.scenarios.every((scenario) => !scenario.direct40.includes("yandex")));
+});
+
+test("partial official play-ins constrain their known result without duplicating a slot", async () => {
+  const stats = JSON.parse(await readFile("public/team-stats.json", "utf8"));
+  const probabilities = buildForecastSource({ answers: {}, stats, matches: [], mode: "stats", opinionWeight: 0 });
+  const official = { id: 901, stage: "playin", round: 1, team_a: "aurora", team_b: "gamerlegion", winner: "aurora" };
+  const result = runForecast(probabilities, 2_000, 13579, { stats, matches: [official] });
+  const matchup = result.playinMatchups.find((item) => item.a === "aurora" && item.b === "gamerlegion");
+  assert.ok(matchup, "the official pair should occur when both teams reach play-ins");
+  assert.equal(matchup.aWinProbability, 100);
+  assert.ok(matchup.probability > 0 && matchup.probability <= 100);
+  assert.equal(result.playinProjectionScope, "marginal_matchups_with_official_constraints");
+  assert.ok(result.scenarios.every((scenario) => new Set([...scenario.direct40, ...scenario.direct41, ...scenario.via]).size === 8));
 });
 
 test("scenario UI never renders outcomes contradicted by known Swiss records", async () => {
@@ -834,4 +967,67 @@ test("decision layer can sharpen probabilities but refuses unreliable matches", 
   assert.equal(predictionDecision({ modelEffectiveGames: 2, directEffectiveGames: 0, rosterReliability: .6 }, 70, { temperature: .8 }).status, "roulette");
   assert.equal(predictionDecision({ modelEffectiveGames: 30, directEffectiveGames: 4, rosterReliability: 1 }, 51).status, "even");
   assert.equal(predictionDecision({ modelEffectiveGames: 30, directEffectiveGames: 4, rosterReliability: 1 }, 70).status, "pick");
+});
+
+test("admin API rejects a series bet lock after its scheduled start", async () => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), "ti2026-bet-lock-"));
+  const port = await availablePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const child = spawn(process.execPath, ["server/api.mjs"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      API_PORT: String(port),
+      DATA_DIR: dataDirectory,
+      ADMIN_USERNAME: "regression-admin",
+      ADMIN_PASSWORD: "regression-password",
+      LIVE_SYNC_ENABLED: "false",
+      LIVE_DRAFT_SYNC_ENABLED: "false",
+      SCHEDULE_SYNC_ENABLED: "false",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.on("data", (chunk) => { output += chunk; });
+  child.stderr.on("data", (chunk) => { output += chunk; });
+
+  try {
+    await waitForHealth(baseUrl, child);
+    const login = await fetch(`${baseUrl}/api/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "regression-admin", password: "regression-password" }),
+    });
+    assert.equal(login.status, 200);
+    const cookie = login.headers.get("set-cookie")?.split(";")[0];
+    assert.ok(cookie);
+
+    const createMatch = await fetch(`${baseUrl}/api/admin/matches`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        stage: "playin",
+        round: 1,
+        teamA: "aurora",
+        teamB: "gamerlegion",
+        scheduledAt: new Date(Date.now() - 60_000).toISOString(),
+      }),
+    });
+    assert.equal(createMatch.status, 201);
+    const { id } = await createMatch.json();
+
+    const lock = await fetch(`${baseUrl}/api/admin/bet-locks`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ scope: "series", subjectId: String(id), probabilityA: .6, recommendedWinner: "aurora" }),
+    });
+    assert.equal(lock.status, 409);
+    assert.deepEqual(await lock.json(), { error: "bet_subject_started" });
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\nAPI output:\n${output}`);
+  } finally {
+    child.kill();
+    if (child.exitCode === null) await new Promise((resolve) => child.once("exit", resolve));
+    await rm(dataDirectory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  }
 });

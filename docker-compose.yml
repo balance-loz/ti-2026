@@ -30,6 +30,8 @@ services:
       TI_LEAGUE_ID: ${TI_LEAGUE_ID:-19719}
       LIVE_SYNC_ENABLED: ${LIVE_SYNC_ENABLED:-true}
       LIVE_SYNC_INTERVAL_MINUTES: ${LIVE_SYNC_INTERVAL_MINUTES:-10}
+      LIVE_DRAFT_SYNC_ENABLED: ${LIVE_DRAFT_SYNC_ENABLED:-true}
+      LIVE_DRAFT_INTERVAL_SECONDS: ${LIVE_DRAFT_INTERVAL_SECONDS:-10}
       SCHEDULE_SYNC_ENABLED: ${SCHEDULE_SYNC_ENABLED:-true}
       SCHEDULE_SOURCE_URL: ${SCHEDULE_SOURCE_URL:-https://www.cybersport.ru/tournaments/dota-2/the-international-2026}
       SCHEDULE_TIMEZONE_OFFSET: ${SCHEDULE_TIMEZONE_OFFSET:-+03:00}
@@ -44,7 +46,7 @@ services:
       ALL_PRO_TEAM_MODEL: /app/model/all-pro-team-model.json
       DRAFT_NEXTGEN_MODEL: /app/model/draft-nextgen-model.json
       NEXTGEN_SERIES_CALIBRATION: /app/model/nextgen-series-calibration.json
-      TI_PLAYIN_START: ${TI_PLAYIN_START:-2026-08-17T00:00:00+08:00}
+      TI_PLAYIN_START: ${TI_PLAYIN_START:-2026-08-16T00:00:00+08:00}
       TI_PLAYOFF_START: ${TI_PLAYOFF_START:-2026-08-20T00:00:00+08:00}
     volumes:
       - state:/app/data

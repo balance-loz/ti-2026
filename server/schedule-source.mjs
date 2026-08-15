@@ -32,10 +32,21 @@ function scheduledAtFromText(text, { now, timezoneOffset }) {
     const delta = /^Завтра/i.test(clean) ? 1 : 0;
     return new Date(`${calendarDateAt(now, timezoneOffset, delta)}T${relative[1]}:${relative[2]}:00${timezoneOffset}`).toISOString();
   }
-  // Cybersport removes the time as soon as a series becomes LIVE and can expose
-  // a newly drawn pair before assigning its start time. The pairing is still
-  // official and must constrain the Monte Carlo immediately.
-  return now.toISOString();
+  return null;
+}
+
+function scheduledDateFromText(text, scheduledAt) {
+  if (scheduledAt) return scheduledAt.slice(0, 10);
+  const clean = decodeHtml(text).replace(/\s+/g, " ").trim();
+  const explicit = /(\d{2})\.(\d{2})\.(\d{2})/.exec(clean);
+  return explicit ? `20${explicit[3]}-${explicit[2]}-${explicit[1]}` : null;
+}
+
+function semanticStage(text) {
+  const clean = decodeHtml(text).replace(/\s+/g, " ").toLowerCase();
+  return /elimination\s+round|стыки|play[\s-]?in/.test(clean) ? "playin"
+    : /playoff|плей-офф/.test(clean) ? "playoff"
+      : /group|групп|swiss|раунд\s*[1-5]\b/.test(clean) ? "swiss" : null;
 }
 
 function participantsFromChunk(chunk) {
@@ -43,15 +54,16 @@ function participantsFromChunk(chunk) {
     .map((item) => TEAM_ALIASES.get(normalize(item[1]))).filter(Boolean))].slice(0, 2);
 }
 
-function addScheduled(scheduled, seen, chunk, round, options) {
+function addScheduled(scheduled, seen, chunk, round, options, inheritedStage = null) {
   const [teamA, teamB] = participantsFromChunk(chunk);
   if (!teamA || !teamB || teamA === teamB) return;
   const dateHtml = chunk.match(/<div[^>]*class="[^"]*date_[^"]*"[^>]*>([\s\S]*?)<\/div>/i)?.[1] ?? chunk;
   const scheduledAt = scheduledAtFromText(dateHtml, options);
+  const scheduledDate = scheduledDateFromText(dateHtml, scheduledAt);
   const key = [teamA, teamB].sort().join("|");
   if (seen.has(key)) return;
   seen.add(key);
-  scheduled.push({ teamA, teamB, round, scheduledAt, source: "cybersport" });
+  scheduled.push({ teamA, teamB, round, scheduledAt, scheduledDate, stage: semanticStage(chunk) ?? inheritedStage, source: "cybersport" });
 }
 
 export function scheduledSeriesFromCybersportHtml(html, { timezoneOffset = "+03:00", now = new Date() } = {}) {
@@ -68,11 +80,13 @@ export function scheduledSeriesFromCybersportHtml(html, { timezoneOffset = "+03:
   const scheduleStart = html.search(/<h2[^>]*>\s*Расписание\s*<\/h2>/i);
   const scheduleEnd = html.search(/id="stage-participants"/i);
   const scope = scheduleStart >= 0 ? html.slice(scheduleStart, scheduleEnd > scheduleStart ? scheduleEnd : html.length) : html;
+  const inheritedStage = semanticStage(activeTab?.[1] || "");
   const itemStarts = [...scope.matchAll(/<div class="[^"]*item_[^"]*"/gi)];
   for (let index = 0; index < itemStarts.length; index += 1) {
     const start = itemStarts[index].index;
     const end = itemStarts[index + 1]?.index ?? scope.length;
-    addScheduled(scheduled, seen, scope.slice(start, end), round, options);
+    const nearbyStage = semanticStage(scope.slice(Math.max(0, start - 1200), start)) ?? inheritedStage;
+    addScheduled(scheduled, seen, scope.slice(start, end), round, options, nearbyStage);
   }
 
   // Keep compatibility with the former server-rendered layout and compact test
@@ -84,7 +98,7 @@ export function scheduledSeriesFromCybersportHtml(html, { timezoneOffset = "+03:
     const end = dates[index + 1]?.index ?? Math.min(scope.length, match.index + 6500);
     const chunk = scope.slice(match.index, end);
     if (!/<span[^>]*class="[^"]*vs_[^"]*"[^>]*>\s*vs\s*<\/span>/i.test(chunk)) continue;
-    addScheduled(scheduled, seen, chunk, round, options);
+    addScheduled(scheduled, seen, chunk, round, options, inheritedStage);
   }
   return scheduled;
 }

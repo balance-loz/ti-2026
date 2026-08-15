@@ -20,5 +20,8 @@ export function completedSeriesFromMaps(maps, teams = OPENDOTA_TEAMS) {
     series.mapIds.push(Number(map.match_id));
     grouped.set(key, series);
   }
-  return [...grouped.values()].filter((series) => Math.max(series.winsA, series.winsB) >= (series.seriesType === 2 ? 3 : 2)).sort((a, b) => a.startTime - b.startTime);
+  return [...grouped.values()]
+    .map((series) => ({ ...series, bestOf: series.seriesType === 2 ? 5 : series.seriesType === 0 ? 1 : 3 }))
+    .filter((series) => Math.max(series.winsA, series.winsB) >= Math.floor(series.bestOf / 2) + 1)
+    .sort((a, b) => a.startTime - b.startTime);
 }
