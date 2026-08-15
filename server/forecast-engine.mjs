@@ -76,7 +76,8 @@ export function buildForecastBase({ answers, stats, mode = "mixed", opinionWeigh
 
 export function buildForecastSource({ answers, stats, matches, mode = "mixed", opinionWeight = 50 }) {
   const base = buildForecastBase({ answers, stats, mode, opinionWeight });
-  const calibration = { ...DEFAULT_CALIBRATION, ...(stats?.tournamentCalibration?.selected ?? {}) };
+  const selectedCalibration = { ...DEFAULT_CALIBRATION, ...(stats?.tournamentCalibration?.selected ?? {}) };
+  const calibration = { ...selectedCalibration, formLogitSd: 0, shadowFormLogitSd: Number(selectedCalibration.formLogitSd || 0) };
   return updateProbabilitiesWithLiveSeries(base, matches, { liveGlobal: calibration.liveGlobal, seriesInformation: stats?.methodology?.seriesInformation });
 }
 
@@ -121,7 +122,8 @@ export function runForecast(answers, iterations = 100000, seed = Math.floor(Math
   } : { enabled: false, minIterations: requestedIterations, maxIterations: requestedIterations, batchSize: requestedIterations, tolerancePp: 0, stableChecksRequired: 0 };
   adaptiveConfig.maxIterations = Math.max(adaptiveConfig.minIterations, adaptiveConfig.maxIterations);
   const scores = teamScores(answers); const random = seededRandom(seed);
-  const calibration = { ...DEFAULT_CALIBRATION, ...(stats?.tournamentCalibration?.selected ?? {}) };
+  const selectedCalibration = { ...DEFAULT_CALIBRATION, ...(stats?.tournamentCalibration?.selected ?? {}) };
+  const calibration = { ...selectedCalibration, formLogitSd: 0, shadowFormLogitSd: Number(selectedCalibration.formLogitSd || 0) };
   const totals = Object.fromEntries(TEAMS.map((team) => [team.id, { direct: 0, playin: 0, viaPlayin: 0, playinLoss: 0, swissOut: 0, out: 0, wins: 0, losses: 0, champion: 0, final: 0, top3: 0 }]));
   const scenarioCounts = new Map(); const playoffScenarioCounts = new Map(); const matchupCounts = new Map(); const swissMatchupCounts = new Map(); const swissPathHashes = new Set(); const tournamentPathHashes = new Set(); const finalOutcomeSignatures = new Set();
   const pathSampleLimit = Math.min(adaptiveConfig.maxIterations, 250_000);
@@ -159,7 +161,27 @@ export function runForecast(answers, iterations = 100000, seed = Math.floor(Math
     const upper = TEAMS.filter((team) => records[team.id].wins === 3).map((team) => team.id).sort((a, b) => buchholz(b) - buchholz(a) || scores[b] - scores[a]);
     const lower = TEAMS.filter((team) => records[team.id].wins === 2).map((team) => team.id).sort((a, b) => buchholz(a) - buchholz(b) || scores[a] - scores[b]);
     const knownPlayins = matches.filter((match) => match.stage === "playin");
-    const playinPairs = knownPlayins.length === 5 ? knownPlayins.map((match) => [match.team_a, match.team_b]) : upper.map((a, index) => [a, lower[index]]);
+    const available = new Set([...upper, ...lower]);
+    const claimedOfficialTeams = new Set();
+    const officialPairs = knownPlayins.map((match) => [match.team_a, match.team_b])
+      .filter(([a, b]) => {
+        if (!available.has(a) || !available.has(b) || claimedOfficialTeams.has(a) || claimedOfficialTeams.has(b)) return false;
+        claimedOfficialTeams.add(a); claimedOfficialTeams.add(b);
+        return true;
+      });
+    const officialTeams = new Set(officialPairs.flat());
+    const remainingUpper = upper.filter((team) => !officialTeams.has(team));
+    const remainingLower = lower.filter((team) => !officialTeams.has(team));
+    const projectedPairs = [];
+    const remainingTeams = new Set([...remainingUpper, ...remainingLower]);
+    remainingUpper.forEach((a, index) => {
+      const b = remainingLower[index];
+      if (!remainingTeams.has(a) || !remainingTeams.has(b)) return;
+      projectedPairs.push([a, b]); remainingTeams.delete(a); remainingTeams.delete(b);
+    });
+    const leftovers = [...remainingTeams];
+    for (let index = 0; index + 1 < leftovers.length; index += 2) projectedPairs.push([leftovers[index], leftovers[index + 1]]);
+    const playinPairs = [...officialPairs, ...projectedPairs];
     playinPairs.forEach(([a, b]) => { const actual = knownPlayins.find((match) => (match.team_a === a && match.team_b === b) || (match.team_a === b && match.team_b === a)); const winner = actual?.winner || winnerFor(a, b); const loser = winner === a ? b : a; totals[winner].viaPlayin++; totals[loser].playinLoss++; totals[loser].out++; via.push(winner); const key = pairKey(a, b); const first = key.split("|")[0]; const item = matchupCounts.get(key) || { count: 0, firstWins: 0 }; item.count++; if (winner === first) item.firstWins++; matchupCounts.set(key, item); path.push(`P:${key}>${winner}`); });
     const signature = encodeGroupOutcome({ direct40: direct40.sort(), direct41: direct41.sort(), via: via.sort() }); scenarioCounts.set(signature, (scenarioCounts.get(signature) || 0) + 1);
     const compactHash = (value) => { let first = 2166136261; let second = 2246822519; for (const char of value) { const code = char.charCodeAt(0); first = Math.imul(first ^ code, 16777619); second = Math.imul(second ^ code, 3266489917); } return `${first >>> 0}:${second >>> 0}`; };
@@ -202,5 +224,5 @@ export function runForecast(answers, iterations = 100000, seed = Math.floor(Math
   const sampledIterations = Math.min(completedIterations, pathSampleLimit);
   const swissDuplicateRate = 100 * (1 - swissPathHashes.size / sampledIterations); const tournamentDuplicateRate = 100 * (1 - tournamentPathHashes.size / sampledIterations);
   const lastCheckpoint = convergenceHistory.at(-1);
-  return { teams, scenarios, playoffScenarios, swissMatchups, playinMatchups, iterations: completedIterations, requestedIterations, seed, uniqueBrackets: tournamentPathHashes.size, duplicateRate: tournamentDuplicateRate, uniqueSwissPaths: swissPathHashes.size, swissDuplicateRate, uniqueTournamentPaths: tournamentPathHashes.size, tournamentDuplicateRate, pathSampleIterations: sampledIterations, uniqueSwissOutcomes: scenarioCounts.size, uniquePlayoffPodiums: playoffScenarioCounts.size, uniqueFinalOutcomes: finalOutcomeSignatures.size, calibration, convergence: { adaptive: adaptiveConfig.enabled, converged, stopReason: converged ? "stable" : adaptiveConfig.enabled ? "max_iterations" : "fixed_budget", minIterations: adaptiveConfig.minIterations, maxIterations: adaptiveConfig.maxIterations, batchSize: adaptiveConfig.batchSize, tolerancePp: adaptiveConfig.tolerancePp, stableChecksRequired: adaptiveConfig.stableChecksRequired, stableChecks, maxDeltaPp: lastCheckpoint?.maxDeltaPp ?? null, maxSamplingMarginPp: lastCheckpoint?.maxSamplingMarginPp ?? 98 / Math.sqrt(completedIterations), checkpoints: convergenceHistory }, uncertaintyPolicy: stats?.tournamentCalibration?.validation?.validated ? "historical tournament holdout calibration" : "experimental latent logit shocks; calibration gate not passed", formatVersion: "hidden-groups-r1-r3-playoff-v6-matchup-distributions" };
+  return { teams, scenarios, playoffScenarios, swissMatchups, playinMatchups, iterations: completedIterations, requestedIterations, seed, uniqueBrackets: tournamentPathHashes.size, duplicateRate: tournamentDuplicateRate, uniqueSwissPaths: swissPathHashes.size, swissDuplicateRate, uniqueTournamentPaths: tournamentPathHashes.size, tournamentDuplicateRate, pathSampleIterations: sampledIterations, uniqueSwissOutcomes: scenarioCounts.size, uniquePlayoffPodiums: playoffScenarioCounts.size, uniqueFinalOutcomes: finalOutcomeSignatures.size, calibration, playinProjectionScope: "marginal_matchups_with_official_constraints", convergence: { adaptive: adaptiveConfig.enabled, converged, stopReason: converged ? "stable" : adaptiveConfig.enabled ? "max_iterations" : "fixed_budget", minIterations: adaptiveConfig.minIterations, maxIterations: adaptiveConfig.maxIterations, batchSize: adaptiveConfig.batchSize, tolerancePp: adaptiveConfig.tolerancePp, stableChecksRequired: adaptiveConfig.stableChecksRequired, stableChecks, maxDeltaPp: lastCheckpoint?.maxDeltaPp ?? null, maxSamplingMarginPp: lastCheckpoint?.maxSamplingMarginPp ?? 98 / Math.sqrt(completedIterations), checkpoints: convergenceHistory }, uncertaintyPolicy: stats?.tournamentCalibration?.validation?.validated ? "historical tournament holdout calibration; published MAIN formLogitSd=0" : "experimental series noise; published MAIN formLogitSd=0", formatVersion: "hidden-groups-r1-r3-playoff-v7-partial-official-playins" };
 }

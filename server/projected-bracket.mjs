@@ -50,7 +50,9 @@ export function projectPlayoffBracket({ simulationResult, probabilities, matches
     return {
       label, lane, column, a, b, bestOf, winner, predictedWinner, actualWinner,
       latestProbabilityA, lockedProbabilityA, decisionProbabilityA,
+      sourceBestOf: 3, targetProbabilityA: lockedForecast.probabilityA,
       exactScore: exact?.score ?? null, exactScoreProbability: exact?.probability ?? null,
+      exactScores: lockedForecast.exactScores, topExactScores: lockedForecast.topExactScores,
       actualScore: actual?.score_a === null || actual?.score_a === undefined ? null : actual.team_a === a ? `${actual.score_a}:${actual.score_b}` : `${actual.score_b}:${actual.score_a}`,
       predictionCorrect: actualWinner ? predictedWinner === actualWinner : null,
       status: actualWinner ? "completed" : actual ? "scheduled" : "projected",

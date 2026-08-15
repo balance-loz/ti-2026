@@ -47,26 +47,36 @@ export function combinedSeriesForecast({
   teamA,
   teamB,
   seriesProbabilityA,
+  sourceBestOf = 3,
   bestOf = 3,
   winsA = 0,
   winsB = 0,
   currentMapProbabilityA = null,
 } = {}) {
   const frozenSeries = clamp(seriesProbabilityA, 0.01, 0.99);
-  const baseMapProbabilityA = impliedMapProbability(frozenSeries, bestOf);
-  const exactScores = exactSeriesScores({ bestOf, winsA, winsB, baseMapProbabilityA, currentMapProbabilityA });
+  const normalizedSourceBestOf = Math.max(1, Math.trunc(Number(sourceBestOf) || 3));
+  const normalizedBestOf = Math.max(1, Math.trunc(Number(bestOf) || 3));
+  const baseMapProbabilityA = impliedMapProbability(frozenSeries, normalizedSourceBestOf);
+  const exactScores = exactSeriesScores({ bestOf: normalizedBestOf, winsA, winsB, baseMapProbabilityA, currentMapProbabilityA });
   const probabilityA = exactScores.filter((row) => Number(row.score.split(":")[0]) > Number(row.score.split(":")[1]))
     .reduce((sum, row) => sum + row.probability, 0);
+  const topExactScores = exactScores.slice(0, 5);
   return {
     teamA,
     teamB,
-    bestOf,
+    bestOf: normalizedBestOf,
     winsA,
     winsB,
     frozenSeriesProbabilityA: frozenSeries,
+    sourceBestOf: normalizedSourceBestOf,
     baseMapProbabilityA,
+    targetSeriesProbabilityA: exactSeriesScores({ bestOf: normalizedBestOf, baseMapProbabilityA })
+      .filter((row) => Number(row.score.split(":")[0]) > Number(row.score.split(":")[1]))
+      .reduce((sum, row) => sum + row.probability, 0),
     currentMapProbabilityA: suppliedProbability(currentMapProbabilityA) ? clamp(currentMapProbabilityA, 0.01, 0.99) : null,
     probabilityA,
     exactScores,
+    topExactScores,
+    exactScoresScope: winsA || winsB ? "conditional_current_score" : "pre_series",
   };
 }
