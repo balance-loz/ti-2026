@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { completedSeriesFromMaps } from "../server/live-series.mjs";
-import { liveDraftsFromOpenDota } from "../server/live-drafts.mjs";
+import { liveDraftsFromOpenDota, mergeLiveDraftGames } from "../server/live-drafts.mjs";
 import { scheduledSeriesFromCybersportHtml } from "../server/schedule-source.mjs";
 import { buildForecastSource, resolveTournamentCalibration, ROUND_ONE, runForecast, SWISS_GROUPS, SWISS_GROUP_BY_TEAM, swissBucketKey, topGroupScenarios } from "../server/forecast-engine.mjs";
 import { calculateActiveDraftPrediction } from "../server/active-draft-service.mjs";
@@ -141,6 +141,7 @@ test("combined page and API persist map truth and explain the no-double-count po
   assert.match(api, /UNIQUE\(scope,subject_id\)/);
   assert.match(api, /bet_already_locked/);
   assert.match(api, /\/api\/combined/);
+  assert.match(api, /ready\.readModel\?\.inputHash !== combinedInputHash\(opinionWeight\)/);
   assert.match(api, /\/api\/admin\/bet-locks/);
   assert.match(api, /hydrateTournamentMapDetails/);
   assert.match(api, /decisionHistory/);
@@ -183,15 +184,16 @@ test("combined page and API persist map truth and explain the no-double-count po
   assert.match(styles, /\.fusion-swiss-layout\{/);
   assert.match(page, /function RouletteRisk/);
   assert.match(page, /const isLowConfidence = .* < \.58/);
-  assert.match(tournamentPage, /round\.probability\.toFixed\(0\).*%/);
-  assert.doesNotMatch(tournamentPage, /round-confidence[^}]+round\.confidence\.score/);
+  assert.match(tournamentPage, /export \{ default \} from "\.\/combined\/page"/);
   assert.match(page, /UPPER_PLACEMENT/);
   assert.match(page, /LOWER_PLACEMENT/);
   assert.match(page, /Точный счёт/);
   assert.match(page, /ТЕКУЩАЯ КАРТА/);
   assert.match(page, /Number\.POSITIVE_INFINITY/);
   assert.match(page, /row\.forecast\.winsA \+ row\.forecast\.winsB \+ 1/);
-  assert.match(page, /Прогноза до старта не было/);
+  assert.match(page, /Draft-прогноз ещё не сохранён/);
+  assert.match(page, /ПО ПИКАМ/);
+  assert.match(page, /онлайн-состояние карты/);
   assert.match(checkpoint, /Checkpoint refused/);
   assert.match(checkpoint, /backup\(source/);
 });
@@ -219,6 +221,11 @@ test("active draft prediction is server-calculated, validates picks and preserve
   assert.match(api, /calculateActiveDraftPrediction\(\{ draftStats: loadJson\("public\/draft-stats\.json"\), teamStats: loadJson\("public\/team-stats\.json"\), game \}\)/);
   assert.match(api, /INSERT OR IGNORE INTO live_draft_predictions/);
   assert.match(api, /existing && existing\.picksHash !== picksHash/);
+  assert.match(api, /game\.phase === "game" \? 1 : 2/);
+  assert.match(api, /liveEstimate,/);
+  assert.match(api, /liveDraftHistoryMatch/);
+  assert.match(api, /draftPredictionCorrect/);
+  assert.match(api, /livePredictionCorrect/);
 });
 
 test("combined API publishes explicit STATIC/MAIN and shadow-model policy metadata", async () => {
@@ -232,7 +239,7 @@ test("combined API publishes explicit STATIC/MAIN and shadow-model policy metada
 });
 
 test("combined UI keeps unique match rows, live rail, unique elimination slots and mobile hooks", async () => {
-  const [page, styles] = await Promise.all([readFile("app/combined/page.tsx", "utf8"), readFile("app/globals.css", "utf8")]);
+  const [page, styles, layout] = await Promise.all([readFile("app/combined/page.tsx", "utf8"), readFile("app/globals.css", "utf8"), readFile("app/layout.tsx", "utf8")]);
   assert.match(page, /rows\.filter\(\(row\) => row\.match\.round === round\)\.map/);
   assert.match(page, /<article key=\{row\.match\.id\} className=\{`fusion-series-row/);
   assert.match(page, /const liveRows = rows\.filter\(\(row\) => row\.live && !row\.match\.winner\)/);
@@ -246,6 +253,13 @@ test("combined UI keeps unique match rows, live rail, unique elimination slots a
   assert.match(styles, /@media\(max-width:560px\)/);
   assert.match(styles, /\.fusion-live-grid\{/);
   assert.match(styles, /\.fusion-elimination/);
+  assert.match(page, /function ThemeToggle/);
+  assert.match(page, /fusion-mobile-team-history/);
+  assert.match(page, /pathname === "\/combined"/);
+  assert.match(styles, /:root\[data-theme=dark\]/);
+  assert.match(styles, /--fusion-canvas:#f3f1ea/);
+  assert.match(layout, /data-theme="light"/);
+  assert.match(layout, /ti26-theme/);
 });
 
 test("draft decides a matchup between equally strong teams", () => {
@@ -378,14 +392,14 @@ test("tournament calibration replays the production updater before every outcome
 });
 
 test("current TI results have one shared update path and appear in team history", async () => {
-  const page = await readFile("app/page.tsx", "utf8");
+  const [page, api] = await Promise.all([readFile("app/page.tsx", "utf8"), readFile("server/api.mjs", "utf8")]);
   const engine = await readFile("server/forecast-engine.mjs", "utf8");
   const stats = JSON.parse(await readFile("public/team-stats.json", "utf8"));
   assert.equal(stats.methodology.liveLeagueExcludedFromBaseline, 19719);
-  assert.match(page, /updateProbabilitiesWithLiveSeries\(source, matches/);
+  assert.match(page, /combined\/page/);
   assert.match(engine, /updateProbabilitiesWithLiveSeries\(base, matches/);
-  assert.match(page, /TI 2026 · ONLINE-СЛОЙ/);
-  assert.match(page, /в baseline не дублируются/);
+  assert.match(api, /currentForecast/);
+  assert.match(api, /onlineSeriesCount/);
   assert.doesNotMatch(engine, /strength\[match\.team_a\].*surprise/);
 });
 
@@ -414,9 +428,9 @@ test("saved forecast diagnostics freeze coefficients, pair decomposition and liv
 });
 
 test("snapshot history offers a detailed diagnostic export endpoint", async () => {
-  const [page, api] = await Promise.all([readFile("app/page.tsx", "utf8"), readFile("server/api.mjs", "utf8")]);
+  const [page, api] = await Promise.all([readFile("app/admin/page.tsx", "utf8"), readFile("server/api.mjs", "utf8")]);
   assert.match(page, /\/api\/snapshots\/\$\{snapshot\.id\}\/export/);
-  assert.match(page, /snapshot-download-button/);
+  assert.match(page, /Snapshots и diagnostics/);
   assert.match(api, /ti2026\.forecast-diagnostic-export/);
   assert.match(api, /diagnostics_json/);
   assert.match(api, /buildSnapshotCalculationTrace/);
@@ -523,7 +537,7 @@ test("statistics contain every TI matchup and calibrated methodology", async () 
 
 test("draft lab contains current-patch heroes and regularized matchup evidence", async () => {
   const stats = JSON.parse(await readFile("public/draft-stats.json", "utf8"));
-  const page = await readFile("app/drafts/page.tsx", "utf8");
+  const [page, service] = await Promise.all([readFile("app/components/live_map_story.tsx", "utf8"), readFile("server/active-draft-service.mjs", "utf8")]);
   const server = await readFile("server/api.mjs", "utf8");
   assert.ok(stats.heroes.length >= 120);
   assert.ok(stats.methodology.cachedPatchMaps >= 100);
@@ -550,13 +564,13 @@ test("draft lab contains current-patch heroes and regularized matchup evidence",
   assert.equal(stats.validation.activeFormula.bootstrap.frozenHoldoutVersusTeamSide.cluster, "series_id");
   assert.ok(Object.values(stats.teams).every((team) => team.players.length === 5));
   assert.ok(Object.values(stats.teams).some((team) => team.players.some((player) => Object.keys(player.heroes).length > 0)));
-  assert.match(page, /Почему получилась эта вероятность/);
-  assert.match(page, /Контрпики/);
+  assert.match(page, /Что изменило прогноз после пиков/);
+  assert.match(page, /Контрпики и синергии/);
   assert.match(page, /Игроки на героях/);
   assert.match(server, /scripts\/update-all-stats\.mjs/);
   assert.match(server, /\/api\/draft\/predict/);
-  assert.match(page, /Межпатчевая модель/);
-  assert.match(page, /MODEL ARENA/);
+  assert.match(service, /score\(exact, "observed"\)/);
+  assert.match(service, /score\(best\.rows, "inferred"\)/);
 });
 
 test("draft refresh discovers live TI league maps before training", async () => {
@@ -603,6 +617,26 @@ test("OpenDota live feed becomes a partial TI draft and rejects stale games", ()
   assert.deepEqual(liveDraftsFromOpenDota(rows, { nowSeconds: 1_301 }), []);
 });
 
+test("temporary empty live responses retain the active map but completed maps disappear immediately", () => {
+  const game = { matchId: "42", serverSeenAt: "2026-08-15T12:00:00.000Z", radiantTeam: "falcons", direTeam: "parivision" };
+  const retained = mergeLiveDraftGames([], [game], [], {
+    fetchedAt: "2026-08-15T12:01:00.000Z",
+    previousFetchedAt: "2026-08-15T12:00:00.000Z",
+    graceSeconds: 120,
+  });
+  assert.equal(retained.length, 1);
+  assert.equal(retained[0].retained, true);
+  assert.equal(retained[0].stale, true);
+  assert.deepEqual(mergeLiveDraftGames([], [game], [{ match_id: 42, radiant_win: true }], {
+    fetchedAt: "2026-08-15T12:01:00.000Z",
+    graceSeconds: 120,
+  }), []);
+  assert.deepEqual(mergeLiveDraftGames([], [game], [], {
+    fetchedAt: "2026-08-15T12:03:00.001Z",
+    graceSeconds: 120,
+  }), []);
+});
+
 test("live map model distinguishes validated checkpoints from interpolation and never extrapolates after 20", async () => {
   const model = JSON.parse(await readFile("public/live-map-model.json", "utf8"));
   const baseGame = { phase: "game", gameTime: 15 * 60, radiantLead: 5_000, radiantScore: 14, direScore: 8, radiantTeam: "falcons", direTeam: "parivision", lastUpdateAt: new Date().toISOString() };
@@ -630,28 +664,27 @@ test("live map model distinguishes validated checkpoints from interpolation and 
   assert.equal(model.provenance.servingPriorParity, true);
 });
 
-test("Draft Lab polls and binds the selected live draft", async () => {
-  const page = await readFile("app/drafts/page.tsx", "utf8");
+test("unified home loads server-owned live history and draft evidence", async () => {
+  const [page, story, redirect] = await Promise.all([readFile("app/combined/page.tsx", "utf8"), readFile("app/components/live_map_story.tsx", "utf8"), readFile("app/drafts/page.tsx", "utf8")]);
   const api = await readFile("server/api.mjs", "utf8");
-  assert.match(page, /fetch\("\/api\/draft\/live"/);
-  assert.match(page, /window\.setInterval\(load, 5_000\)/);
-  assert.match(page, /selectedLiveDraft\.radiantPicks/);
-  assert.match(page, /liveDraft\.radiantPlayers/);
-  assert.match(page, /calculateDraft\(.*boundLiveDraft\)/);
-  assert.match(page, /setLastSelectedLiveDraft\(selectedLiveDraft\)/);
-  assert.match(page, /точное распределение из live-feed/);
-  assert.match(page, /гипотеза модели · не подтверждено/);
-  assert.match(page, /result\.assignmentA\?\.rows\.length/);
-  assert.match(page, /assessLiveMap/);
-  assert.match(page, /NO BET · ИСХОД СЛОЖИЛСЯ/);
-  assert.match(page, /ЗАМОРОЖЕННЫЙ ПРОГНОЗ ПО ДРАФТУ/);
+  assert.match(page, /LiveMapStory/);
+  assert.match(story, /\/api\/draft\/live\/history\//);
+  assert.match(story, /SERVER-FROZEN EVIDENCE/);
+  assert.match(story, /fusion-chart-live/);
+  assert.match(redirect, /window\.location\.replace\("\/#live"\)/);
   assert.match(api, /OPENDOTA_API_URL}\/live/);
   assert.match(api, /OPENDOTA_API_URL}\/leagues\/\$\{TI_LEAGUE_ID\}\/matches/);
   assert.match(api, /liveDraftsFromOpenDota/);
   assert.match(api, /live_draft_snapshots/);
   assert.match(api, /live_draft_predictions/);
-  assert.match(page, /estimateLiveMap/);
-  assert.match(page, /live-probability-timeline/);
+  assert.match(api, /evidence_json/);
+  assert.match(api, /overlayCombinedLive/);
+  assert.match(api, /overlayCombinedLive\(ready\)/);
+  assert.match(api, /overlayCombinedLive\(fallback\)/);
+  assert.match(api, /SELECT match_id,picks_hash,captured_at FROM live_draft_predictions/);
+  assert.doesNotMatch(api, /JSON\.stringify\(\{ opinionWeight: Number\(opinionWeight\), latestSnapshot, matches, locks, drafts, liveFetchedAt \}\)/);
+  assert.match(api, /setInterval\(refreshLiveDraftCache/);
+  assert.doesNotMatch(api, /refreshLiveDraftCache[\s\S]{0,120}materializeCombinedForecast/);
 });
 
 test("OpenDota BO5 is not completed at 2-0", () => {
@@ -816,12 +849,10 @@ test("partial official play-ins constrain their known result without duplicating
 });
 
 test("scenario UI never renders outcomes contradicted by known Swiss records", async () => {
-  const page = await readFile("app/page.tsx", "utf8");
-  assert.match(page, /function scenarioMatchesKnownSwissResults/);
-  assert.match(page, /direct40\.has\(team\.id\) && record\.losses > 0/);
-  assert.match(page, /compatibleGroupScenarios\.map/);
-  assert.doesNotMatch(page, /result\.scenarios\.map/);
-  assert.match(page, /старых вариантов отброшено как невозможные/);
+  const [page, engine] = await Promise.all([readFile("app/combined/page.tsx", "utf8"), readFile("server/forecast-engine.mjs", "utf8")]);
+  assert.match(page, /simulation\.scenarios\.slice\(0, 3\)/);
+  assert.doesNotMatch(page, /runForecast/);
+  assert.match(engine, /play\(match\.team_a, match\.team_b, match\.winner\)/);
 });
 
 test("official pairing changes enqueue canonical scenario refresh jobs with deterministic live inputs", async () => {
@@ -888,79 +919,42 @@ test("forecast worker returns the same deterministic result as the engine", asyn
   assert.deepEqual(actual.convergence, expected.convergence);
 });
 
-test("forecast UI uses server jobs, polling, progress and authoritative snapshots", async () => {
-  const page = await readFile("app/page.tsx", "utf8");
+test("unified forecast UI reads authoritative snapshots without browser-triggered scenario jobs", async () => {
+  const [page, admin, api] = await Promise.all([readFile("app/combined/page.tsx", "utf8"), readFile("app/admin/page.tsx", "utf8"), readFile("server/api.mjs", "utf8")]);
   const styles = await readFile("app/globals.css", "utf8");
-  assert.match(page, /setAdaptiveRun\(true\)/);
-  assert.match(page, /500000, 1000000/);
   assert.doesNotMatch(page, /forecast-client-worker/);
   assert.doesNotMatch(page, /import\s+\{?\s*runForecast/);
-  assert.match(page, /fetch\("\/api\/forecast\/jobs",\s*\{[\s\S]*method: "POST"/);
-  assert.match(page, /fetch\(`\/api\/forecast\/jobs\/\$\{encodeURIComponent\(current\.id\)\}`/);
-  assert.match(page, /fetch\(`\/api\/forecast\/jobs\/\$\{encodeURIComponent\(jobId\)\}`,\s*\{ method: "DELETE"/);
-  assert.match(page, /kind: "scenario_refresh"/);
-  assert.match(page, /kind: "manual"/);
-  assert.match(page, /kind: "conditional"/);
-  assert.match(page, /while \(!\["ready", "error", "canceled"\]\.includes\(current\.status\)\)/);
-  assert.match(page, /window\.setTimeout\(resolve, 750\)/);
-  assert.match(page, /update\.progress\.current\.toLocaleString\("ru-RU"\).*update\.progress\.total\.toLocaleString\("ru-RU"\)/);
-  assert.match(page, /kind: update\.status === "queued" \? "queued" : update\.status === "running" \? \(result \? "stale" : "running"\)/);
-  assert.match(page, /Показан предыдущий результат; сервер обновляет сценарии/);
-  assert.match(page, /completed\.result\?\.result/);
-  assert.match(page, /сохранил неизменяемый snapshot/);
-  assert.match(page, /server mode является единственным source of truth/);
-  assert.match(page, /Прогон не выполнен:/);
-  assert.match(page, /Готово:.*simulation\.iterations/s);
-  assert.match(page, /simulation-status--\$\{simulationStatus\.kind\}/);
+  assert.match(page, /fetch\(`\/api\/combined/);
+  assert.match(page, /document\.visibilityState === "visible"/);
+  assert.doesNotMatch(page, /browser_scenario_refresh/);
+  assert.match(admin, /kind: "manual"/);
+  assert.match(api, /queueAutomaticSnapshot/);
+  assert.match(api, /materializeCombinedForecast/);
   assert.match(page, /predictionCorrect/);
-  assert.match(page, /round-cell--correct/);
-  assert.match(page, /round-cell--wrong/);
-  assert.match(styles, /td\.round-cell--correct/);
-  assert.match(styles, /td\.round-cell--wrong/);
-  assert.match(page, /const scenarioSource = selectedRoot\?\.probabilities \?\? activeBaselineSnapshot\?\.probabilities \?\? forecastSource/);
-  assert.match(page, /buildLikelyBracket\(scenarioSource, liveMatches, stats, scenarioSnapshotCreatedAt, scenarioUsesOfficialPrematch\)/);
-  assert.match(page, /displayedResult = selectedRoot[\s\S]*selectedLatestSnapshotIsCurrent \? selectedLatest!\.result/);
-  assert.match(page, /resultHappenedAfter\(match, snapshotCreatedAt, useOfficialPrematch\)/);
-  assert.match(page, /useOfficialPrematch && Number\.isFinite\(match\.predicted_probability\)/);
-  assert.match(page, /selectedRoot\?\.forecast_mode === "stats" && selectedRoot\.trigger !== "manual_run"/);
-  assert.match(page, /ИСТОРИЧЕСКИЙ ПРОГНОЗ/);
-  assert.match(page, /ti26-official-baseline/);
-  assert.match(page, /latestOfficialBaseline\(snapshots\)/);
-  assert.match(page, /повторный прогон не нужен/);
-  assert.doesNotMatch(page, /setResult\(runSimulation\(parsed, 4000\)\)/);
-  assert.match(page, /latestOfficialSnapshotIsCurrent/);
-  assert.match(page, /selectedLatestSnapshotIsCurrent/);
-  assert.match(page, /selectedRoot\?\.probabilities \?\?/);
-  assert.match(page, /Сыгранные исходы зафиксированы/);
+  assert.match(styles, /\.fusion-result-square\.is-correct/);
+  assert.match(styles, /\.fusion-result-square\.is-wrong/);
 });
 
-test("conditional branches freeze ratings and compare probabilistic outcomes", async () => {
-  const page = await readFile("app/page.tsx", "utf8");
-  assert.doesNotMatch(page, /чемпион ветки/);
-  assert.match(page, /КАК РЕЗУЛЬТАТ ИЗМЕНИТ ТУРНИРНЫЕ ШАНСЫ/);
-  assert.match(page, /kind: "conditional"[\s\S]*conditionalMatchId: match\.id/);
-  assert.match(page, /const \{ aWins, bWins, iterations = 50_000 \} = completed\.result \?\? \{\}/);
-  assert.match(page, /Рейтинг команд заморожен/);
-  assert.match(page, /Существенного влияния на чемпионство не обнаружено/);
+test("conditional branches remain server-authoritative and admin-gated", async () => {
+  const [page, api] = await Promise.all([readFile("app/combined/page.tsx", "utf8"), readFile("server/api.mjs", "utf8")]);
+  assert.doesNotMatch(page, /kind: "conditional"/);
+  assert.match(api, /\(kind === "manual" \|\| kind === "conditional"\) && !isAdmin\(req\)/);
+  assert.match(api, /conditionalMatchId/);
+  assert.match(api, /FORECAST_CONDITIONAL_ITERATIONS/);
 });
 
 test("prediction audit keeps frozen and adaptive evaluations separate", async () => {
-  const page = await readFile("app/page.tsx", "utf8");
+  const [page, api] = await Promise.all([readFile("app/combined/page.tsx", "utf8"), readFile("server/api.mjs", "utf8")]);
   const styles = await readFile("app/globals.css", "utf8");
-  assert.match(page, /function initialGroupSnapshot/);
-  assert.match(page, /snapshot\.forecast_mode === "stats" && snapshot\.completed_match_count === 0/);
-  assert.match(page, /function adaptiveSnapshotProbability/);
-  assert.match(page, /function dualSnapshotEvaluation/);
-  assert.match(page, /variant\("STATIC", staticScore\)/);
-  assert.match(page, /variant\("ADAPTIVE", adaptiveScore\)/);
-  assert.match(page, /static: matchEvaluation/);
-  assert.match(page, /adaptive: matchEvaluation/);
-  assert.match(page, /staticGroupSnapshot\?\.probabilities \?\? statisticalAnswers\(stats\)/);
-  assert.match(page, /live-results-disclosure/);
-  assert.match(page, /СЫГРАННЫЕ МАТЧИ · STATIC \/ ADAPTIVE/);
-  assert.match(styles, /\.live-results-disclosure > summary/);
-  assert.match(styles, /prediction-variant--static/);
-  assert.match(styles, /history-chart__adaptive/);
+  assert.match(api, /function snapshotDecisionEvaluation/);
+  assert.match(api, /static: scoreDiagnosticMatch/);
+  assert.match(api, /adaptive: scoreDiagnosticMatch/);
+  assert.match(api, /timeline/);
+  assert.match(api, /stages/);
+  assert.match(page, /function AccuracyPanel/);
+  assert.match(page, /ЧЕСТНАЯ ИСТОРИЯ · STATIC \/ ADAPTIVE/);
+  assert.match(styles, /\.fusion-accuracy-chart/);
+  assert.match(styles, /polyline\.is-adaptive/);
 });
 
 test("intel artifact covers every team and complete tournament outcomes", async () => {
@@ -1025,10 +1019,10 @@ test("docker build keeps research data out of context and shares one app image",
 });
 
 test("cross-page navigation does not depend on broken Vinext Link prefetch", async () => {
-  for (const file of ["app/drafts/page.tsx", "app/intel/page.tsx"]) {
+  for (const file of ["app/drafts/page.tsx", "app/intel/page.tsx", "app/admin/page.tsx", "app/combined/page.tsx"]) {
     const page = await readFile(file, "utf8");
     assert.doesNotMatch(page, /from ["']next\/link["']/);
-    assert.match(page, /<a[^>]+href="\/"[^>]*>.*Турнир/s);
+    assert.match(page, /<a[^>]+href="\/(?:#live)?"[^>]*>/s);
   }
 });
 
@@ -1045,7 +1039,7 @@ test("prediction confidence separates probability from evidence and flags roulet
 });
 
 test("known results preserve the original pre-match confidence warning", async () => {
-  const page = await readFile("app/page.tsx", "utf8");
+  const page = await readFile("app/combined/page.tsx", "utf8");
   const confidence = await readFile("server/prediction-confidence.mjs", "utf8");
   assert.doesNotMatch(page, /pairConfidence\([^\n]+Boolean\((?:fixedWinner|actual\?\.winner)\)/);
   assert.doesNotMatch(confidence, /if \(fixed\).*roulette: false/);

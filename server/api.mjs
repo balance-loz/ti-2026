@@ -9,7 +9,7 @@ import { completedSeriesFromMaps, OPENDOTA_TEAMS } from "./live-series.mjs";
 import { scheduledSeriesFromCybersportHtml } from "./schedule-source.mjs";
 import { buildForecastSource, ROUND_ONE } from "./forecast-engine.mjs";
 import { predictTemporalDraft } from "./draft-inference.mjs";
-import { liveDraftsFromOpenDota } from "./live-drafts.mjs";
+import { liveDraftsFromOpenDota, mergeLiveDraftGames } from "./live-drafts.mjs";
 import { buildSnapshotCalculationTrace, probabilityFor as diagnosticProbabilityFor, scoreDiagnosticMatch } from "./forecast-diagnostics.mjs";
 import { combinedSeriesForecast, orientedProbability } from "./combined-forecast.mjs";
 import { estimateLiveMap } from "./live-map-prediction.mjs";
@@ -28,6 +28,7 @@ const TI_LEAGUE_ID = Number(process.env.TI_LEAGUE_ID || 19719);
 const LIVE_SYNC_ENABLED = process.env.LIVE_SYNC_ENABLED !== "false";
 const LIVE_SYNC_INTERVAL_MINUTES = Math.max(2, Number(process.env.LIVE_SYNC_INTERVAL_MINUTES || 10));
 const LIVE_DRAFT_INTERVAL_SECONDS = Math.max(5, Number(process.env.LIVE_DRAFT_INTERVAL_SECONDS || 10));
+const LIVE_DRAFT_GRACE_SECONDS = Math.max(30, Number(process.env.LIVE_DRAFT_GRACE_SECONDS || 120));
 const LIVE_DRAFT_SYNC_ENABLED = process.env.LIVE_DRAFT_SYNC_ENABLED !== "false";
 const MAP_DETAIL_SYNC_LIMIT = Math.max(0, Number(process.env.MAP_DETAIL_SYNC_LIMIT || 12));
 const DECISION_MIN_LEAD_MINUTES = Math.max(0, Number(process.env.DECISION_MIN_LEAD_MINUTES || 15));
@@ -139,6 +140,7 @@ db.exec(`
     picks_json TEXT NOT NULL,
     probability_radiant REAL NOT NULL CHECK(probability_radiant >= 0.01 AND probability_radiant <= 0.99),
     model_id TEXT,
+    evidence_json TEXT,
     captured_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS tournament_maps (
@@ -212,6 +214,8 @@ const snapshotColumns = new Set(db.prepare("PRAGMA table_info(prediction_snapsho
 for (const [name, definition] of Object.entries({ inputs_json: "TEXT", diagnostics_json: "TEXT", snapshot_kind: "TEXT NOT NULL DEFAULT 'original'", root_snapshot_id: "INTEGER", parent_snapshot_id: "INTEGER", profile_key: "TEXT" })) {
   if (!snapshotColumns.has(name)) db.exec(`ALTER TABLE prediction_snapshots ADD COLUMN ${name} ${definition}`);
 }
+const liveDraftPredictionColumns = new Set(db.prepare("PRAGMA table_info(live_draft_predictions)").all().map((row) => row.name));
+if (!liveDraftPredictionColumns.has("evidence_json")) db.exec("ALTER TABLE live_draft_predictions ADD COLUMN evidence_json TEXT");
 const materializedViewColumns = new Set(db.prepare("PRAGMA table_info(materialized_views)").all().map((row) => row.name));
 for (const [name, definition] of Object.entries({
   kind: "TEXT",
@@ -273,9 +277,23 @@ const now = () => new Date().toISOString();
 const tokenHash = (token) => createHash("sha256").update(token).digest("hex");
 const livePicksHash = (game) => createHash("sha256").update(JSON.stringify([game.radiantPicks ?? [], game.direPicks ?? []])).digest("hex").slice(0, 20);
 
-function liveSnapshotPayload(game) {
+function liveSnapshotPayload(game, draftPrediction = null) {
+  let liveEstimate = null;
+  if (draftPrediction?.probabilityRadiant !== null && draftPrediction?.probabilityRadiant !== undefined) {
+    try {
+      const estimate = estimateLiveMap(currentLiveMapModel(), { draftProbabilityRadiant: draftPrediction.probabilityRadiant, game });
+      liveEstimate = {
+        probabilityRadiant: estimate.liveProbabilityRadiant,
+        availability: estimate.availability,
+        modelId: estimate.modelId,
+        stateImpactPp: estimate.stateImpactPp,
+      };
+    } catch { liveEstimate = null; }
+  }
   return {
     matchId: String(game.matchId),
+    radiantTeam: game.radiantTeam,
+    direTeam: game.direTeam,
     phase: game.phase,
     gameTime: Number(game.gameTime || 0),
     radiantPicks: game.radiantPicks ?? [],
@@ -284,11 +302,17 @@ function liveSnapshotPayload(game) {
     direScore: Number(game.direScore || 0),
     radiantLead: Number.isFinite(Number(game.radiantLead)) ? Number(game.radiantLead) : null,
     lastUpdateAt: game.lastUpdateAt ?? null,
+    draftPrediction: draftPrediction ? {
+      probabilityRadiant: Number(draftPrediction.probabilityRadiant),
+      modelId: draftPrediction.modelId ?? null,
+      capturedAt: draftPrediction.capturedAt ?? null,
+    } : null,
+    liveEstimate,
   };
 }
 
-function persistLiveDraftSnapshot(game, observedAt) {
-  const payload = liveSnapshotPayload(game);
+function persistLiveDraftSnapshot(game, observedAt, draftPrediction = null) {
+  const payload = liveSnapshotPayload(game, draftPrediction);
   const signature = JSON.stringify({
     phase: payload.phase,
     timeBucket: Math.floor(payload.gameTime / 30),
@@ -297,6 +321,8 @@ function persistLiveDraftSnapshot(game, observedAt) {
     radiantScore: payload.radiantScore,
     direScore: payload.direScore,
     goldBucket: payload.radiantLead === null ? null : Math.round(payload.radiantLead / 250),
+    draftCapturedAt: payload.draftPrediction?.capturedAt ?? null,
+    liveAvailability: payload.liveEstimate?.availability ?? null,
   });
   const stateHash = createHash("sha256").update(signature).digest("hex").slice(0, 24);
   db.prepare("INSERT OR IGNORE INTO live_draft_snapshots(match_id,series_id,phase,state_hash,payload_json,observed_at) VALUES (?,?,?,?,?,?)")
@@ -317,12 +343,31 @@ function storedLiveDraftPrediction(matchId) {
     modelId: row.model_id || null,
     picksHash: row.picks_hash,
     capturedAt: row.captured_at,
+    evidence: row.evidence_json ? JSON.parse(row.evidence_json) : null,
   } : null;
 }
 
 function liveDraftHistory(matchId, limit = 120) {
+  const winner = db.prepare("SELECT winner FROM tournament_maps WHERE match_id=?").get(String(matchId))?.winner ?? null;
   return db.prepare("SELECT payload_json,observed_at FROM live_draft_snapshots WHERE match_id = ? ORDER BY observed_at DESC LIMIT ?")
-    .all(String(matchId), Number(limit)).reverse().map((row) => ({ ...JSON.parse(row.payload_json), observedAt: row.observed_at }));
+    .all(String(matchId), Number(limit)).reverse().map((row) => {
+      const payload = JSON.parse(row.payload_json);
+      const draftWinner = Number(payload.draftPrediction?.probabilityRadiant) >= .5 ? payload.radiantTeam : payload.direTeam;
+      const liveWinner = Number(payload.liveEstimate?.probabilityRadiant) >= .5 ? payload.radiantTeam : payload.direTeam;
+      return {
+        ...payload,
+        observedAt: row.observed_at,
+        evaluation: winner ? {
+          winner,
+          draftPredictionCorrect: payload.draftPrediction ? draftWinner === winner : null,
+          livePredictionCorrect: payload.liveEstimate?.probabilityRadiant !== null
+            && payload.liveEstimate?.probabilityRadiant !== undefined
+            && Number.isFinite(Number(payload.liveEstimate.probabilityRadiant))
+            ? liveWinner === winner
+            : null,
+        } : null,
+      };
+    });
 }
 
 function decorateLiveDraft(game) {
@@ -339,20 +384,24 @@ function observeStableDraft(game, observedAt) {
   if ((game.radiantPicks?.length ?? 0) !== 5 || (game.direPicks?.length ?? 0) !== 5) return null;
   const picksHash = livePicksHash(game);
   const existingPrediction = storedLiveDraftPrediction(game.matchId);
-  if (existingPrediction) return existingPrediction;
+  if (existingPrediction?.picksHash === picksHash) return existingPrediction;
   const candidate = db.prepare("SELECT * FROM live_draft_candidates WHERE match_id=?").get(String(game.matchId));
   const observations = candidate?.picks_hash === picksHash ? Number(candidate.observations) + 1 : 1;
   db.prepare(`INSERT INTO live_draft_candidates(match_id,picks_hash,observations,first_seen_at,last_seen_at)
     VALUES (?,?,?,?,?) ON CONFLICT(match_id) DO UPDATE SET picks_hash=excluded.picks_hash,
     observations=excluded.observations,first_seen_at=CASE WHEN live_draft_candidates.picks_hash=excluded.picks_hash THEN live_draft_candidates.first_seen_at ELSE excluded.first_seen_at END,
     last_seen_at=excluded.last_seen_at`).run(String(game.matchId), picksHash, observations, observedAt, observedAt);
-  if (observations < 2) return null;
+  if (observations < (game.phase === "game" ? 1 : 2)) return null;
   try {
     const prediction = calculateActiveDraftPrediction({ draftStats: loadJson("public/draft-stats.json"), teamStats: loadJson("public/team-stats.json"), game });
-    db.prepare(`INSERT OR IGNORE INTO live_draft_predictions(match_id,series_id,radiant_team,dire_team,picks_hash,picks_json,probability_radiant,model_id,captured_at)
-      VALUES (?,?,?,?,?,?,?,?,?)`).run(String(game.matchId), String(game.seriesId || ""), game.radiantTeam, game.direTeam, picksHash,
-      JSON.stringify({ radiant: game.radiantPicks, dire: game.direPicks }), prediction.probabilityRadiant, prediction.modelId, observedAt);
-    audit("server_draft_frozen", { matchId: String(game.matchId), seriesId: String(game.seriesId || ""), picksHash, modelId: prediction.modelId });
+    const evidence = JSON.stringify({ sourceTeamProbability: prediction.sourceTeamProbability, completeness: prediction.completeness, signals: prediction.signals, ...prediction.evidence });
+    db.prepare(`INSERT INTO live_draft_predictions(match_id,series_id,radiant_team,dire_team,picks_hash,picks_json,probability_radiant,model_id,evidence_json,captured_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(match_id) DO UPDATE SET series_id=excluded.series_id,radiant_team=excluded.radiant_team,
+      dire_team=excluded.dire_team,picks_hash=excluded.picks_hash,picks_json=excluded.picks_json,
+      probability_radiant=excluded.probability_radiant,model_id=excluded.model_id,evidence_json=excluded.evidence_json,captured_at=excluded.captured_at
+      WHERE live_draft_predictions.picks_hash<>excluded.picks_hash`).run(String(game.matchId), String(game.seriesId || ""), game.radiantTeam, game.direTeam, picksHash,
+      JSON.stringify({ radiant: game.radiantPicks, dire: game.direPicks }), prediction.probabilityRadiant, prediction.modelId, evidence, observedAt);
+    audit(existingPrediction ? "server_draft_refrozen" : "server_draft_frozen", { matchId: String(game.matchId), seriesId: String(game.seriesId || ""), picksHash, modelId: prediction.modelId });
     return storedLiveDraftPrediction(game.matchId);
   } catch (error) {
     console.error("Server draft calculation failed:", error);
@@ -570,13 +619,36 @@ function snapshotDecisionEvaluation(requestedId) {
     const adaptiveProbability = root.forecast_mode === "stats" && match.predicted_probability !== null && Number.isFinite(Number(match.predicted_probability))
       ? Number(match.predicted_probability)
       : adaptiveSnapshot ? diagnosticProbabilityFor(match.team_a, match.team_b, adaptiveSnapshot.probabilities) : null;
-    return { static: scoreDiagnosticMatch(match, staticProbability), adaptive: scoreDiagnosticMatch(match, adaptiveProbability) };
+    return { match, static: scoreDiagnosticMatch(match, staticProbability), adaptive: scoreDiagnosticMatch(match, adaptiveProbability) };
   });
   const staticScore = aggregateDiagnosticScores(evaluated, "static");
   const adaptiveScore = aggregateDiagnosticScores(evaluated, "adaptive");
   const gate = selectProductionVariant(staticScore, adaptiveScore);
+  const timeline = evaluated.map((row, index) => {
+    const prefix = evaluated.slice(0, index + 1);
+    return {
+      matchId: row.match.id,
+      stage: row.match.stage,
+      label: `${row.match.team_a} — ${row.match.team_b}`,
+      static: aggregateDiagnosticScores(prefix, "static"),
+      adaptive: aggregateDiagnosticScores(prefix, "adaptive"),
+    };
+  }).slice(-24);
+  const stages = ["swiss", "playin", "playoff"].map((stage) => {
+    const rowsForStage = evaluated.filter((row) => row.match.stage === stage);
+    return { stage, static: aggregateDiagnosticScores(rowsForStage, "static"), adaptive: aggregateDiagnosticScores(rowsForStage, "adaptive") };
+  });
+  const accepted = evaluated.filter((row) => row.adaptive && Math.max(row.adaptive.probabilityA, 100 - row.adaptive.probabilityA) >= 58);
   return {
     rootId, static: staticScore, adaptive: adaptiveScore,
+    timeline,
+    stages,
+    decision: {
+      total: evaluated.length,
+      accepted: accepted.length,
+      correct: accepted.filter((row) => row.adaptive.correct).length,
+      pass: evaluated.length - accepted.length,
+    },
     ...gate,
   };
 }
@@ -1190,7 +1262,7 @@ async function hydrateTournamentMapDetails(maps) {
 }
 
 function parsedTournamentMaps() {
-  return db.prepare(`SELECT map.*,prediction.probability_radiant,prediction.model_id,prediction.captured_at
+  return db.prepare(`SELECT map.*,prediction.probability_radiant,prediction.model_id,prediction.evidence_json,prediction.captured_at
     FROM tournament_maps map LEFT JOIN live_draft_predictions prediction ON prediction.match_id=map.match_id
     ORDER BY map.start_time,map.match_id`).all().map((row) => {
       const probabilityRadiant = row.probability_radiant === null ? null : Number(row.probability_radiant);
@@ -1204,6 +1276,7 @@ function parsedTournamentMaps() {
         draftPrediction: probabilityRadiant === null ? null : {
           probabilityRadiant, modelId: row.model_id, capturedAt: row.captured_at, predictedWinner, timeliness,
           predictionCorrect: row.winner ? predictedWinner === row.winner : null,
+          evidence: row.evidence_json ? JSON.parse(row.evidence_json) : null,
         },
       };
     });
@@ -1306,11 +1379,20 @@ async function refreshLiveDrafts({ force = false } = {}) {
       const fetchedAt = now();
       const games = liveDraftsFromOpenDota(rows, { leagueId: TI_LEAGUE_ID, nowSeconds: Date.parse(fetchedAt) / 1000, leagueMaps });
       for (const game of games) {
-        persistLiveDraftSnapshot(game, fetchedAt);
         linkActiveSeries(game, fetchedAt);
-        observeStableDraft(game, fetchedAt);
+        const draftPrediction = observeStableDraft(game, fetchedAt);
+        persistLiveDraftSnapshot(game, fetchedAt, draftPrediction);
       }
-      liveDraftCache = { games: games.map(decorateLiveDraft), fetchedAt, error: null };
+      const currentGames = games.map(decorateLiveDraft);
+      liveDraftCache = {
+        games: mergeLiveDraftGames(currentGames, liveDraftCache.games, leagueMaps, {
+          fetchedAt,
+          previousFetchedAt: liveDraftCache.fetchedAt,
+          graceSeconds: LIVE_DRAFT_GRACE_SECONDS,
+        }),
+        fetchedAt,
+        error: null,
+      };
     } catch (error) {
       liveDraftCache = { ...liveDraftCache, error: error instanceof Error ? error.message : String(error) };
     } finally { liveDraftPromise = null; }
@@ -1410,7 +1492,8 @@ async function combinedForecastState(opinionWeight = 10, requestedSnapshotId = n
   const series = matches.map((match) => {
     const seriesId = String(match.source_match_id || "").startsWith("opendota:") ? String(match.source_match_id).split(":").at(-1) : null;
     const game = live.games.find((item) => {
-      const isFresh = item.lastUpdateAt && Date.now() - Date.parse(item.lastUpdateAt) <= Math.max(30_000, LIVE_DRAFT_INTERVAL_SECONDS * 3_000);
+      const freshnessAnchor = item.serverSeenAt || item.lastUpdateAt;
+      const isFresh = freshnessAnchor && Date.now() - Date.parse(freshnessAnchor) <= LIVE_DRAFT_GRACE_SECONDS * 1_000;
       if (!isFresh) return false;
       return (seriesId && String(item.seriesId) === seriesId) || canonicalSeriesMatch(item.seriesId) === Number(match.id);
     });
@@ -1431,7 +1514,8 @@ async function combinedForecastState(opinionWeight = 10, requestedSnapshotId = n
     let liveEstimate = null; let currentMapProbabilityA = draftMapProbabilityA;
     if (game && draftProbabilityRadiant !== null && Number.isFinite(Number(draftProbabilityRadiant))) {
       try { liveEstimate = estimateLiveMap(currentLiveMapModel(), { draftProbabilityRadiant, game }); } catch { liveEstimate = null; }
-      const canApplyLiveEstimate = !liveEstimate?.assessment?.stale && Number.isFinite(Number(liveEstimate?.liveProbabilityRadiant));
+      const canApplyLiveEstimate = !game?.stale && !game?.retained && !liveEstimate?.assessment?.stale
+        && Number.isFinite(Number(liveEstimate?.liveProbabilityRadiant));
       const radiantProbability = canApplyLiveEstimate ? Number(liveEstimate.liveProbabilityRadiant) : Number(draftProbabilityRadiant);
       currentMapProbabilityA = game.radiantTeam === match.team_a ? radiantProbability : 1 - radiantProbability;
     }
@@ -1444,7 +1528,7 @@ async function combinedForecastState(opinionWeight = 10, requestedSnapshotId = n
         ? game?.radiantTeam === match.team_a ? Number(liveEstimate.liveProbabilityRadiant) : 1 - Number(liveEstimate.liveProbabilityRadiant)
         : null,
       source: "experimental_live_map_observation",
-      stale: Boolean(liveEstimate.assessment?.stale),
+      stale: Boolean(game?.stale || game?.retained || liveEstimate.assessment?.stale),
     } : null;
     const winsA = game ? (game.radiantTeam === match.team_a ? game.seriesScoreRadiant : game.seriesScoreDire) : 0;
     const winsB = game ? (game.radiantTeam === match.team_b ? game.seriesScoreRadiant : game.seriesScoreDire) : 0;
@@ -1532,7 +1616,63 @@ function combinedInputHash(opinionWeight = 10) {
   const matches = db.prepare("SELECT id,updated_at FROM matches ORDER BY id").all();
   const locks = db.prepare("SELECT id,created_at FROM bet_locks ORDER BY id").all();
   const drafts = db.prepare("SELECT match_id,picks_hash,captured_at FROM live_draft_predictions ORDER BY match_id").all();
-  return createHash("sha256").update(JSON.stringify({ opinionWeight: Number(opinionWeight), latestSnapshot, matches, locks, drafts, liveFetchedAt: liveDraftCache.fetchedAt })).digest("hex");
+  return createHash("sha256").update(JSON.stringify({ opinionWeight: Number(opinionWeight), latestSnapshot, matches, locks, drafts })).digest("hex");
+}
+
+function activeGameForSeries(row) {
+  return liveDraftCache.games.find((game) => {
+    const freshnessAnchor = game.serverSeenAt || game.lastUpdateAt;
+    if (!freshnessAnchor || Date.now() - Date.parse(freshnessAnchor) > LIVE_DRAFT_GRACE_SECONDS * 1_000) return false;
+    return (row.seriesId && String(game.seriesId) === String(row.seriesId))
+      || canonicalSeriesMatch(game.seriesId) === Number(row.match.id);
+  }) ?? null;
+}
+
+function liveOverlayForSeries(row) {
+  const game = activeGameForSeries(row);
+  if (!game) return { ...row, live: null, liveEstimate: null, sources: { ...row.sources, liveStateApplied: false } };
+  const draftProbabilityRadiant = game.draftPrediction?.probabilityRadiant ?? null;
+  const hasDraft = Number.isFinite(Number(draftProbabilityRadiant));
+  const draftMapProbabilityA = hasDraft
+    ? game.radiantTeam === row.match.team_a ? Number(draftProbabilityRadiant) : 1 - Number(draftProbabilityRadiant)
+    : null;
+  let liveEstimate = null; let currentMapProbabilityA = draftMapProbabilityA;
+  if (hasDraft) {
+    try { liveEstimate = estimateLiveMap(currentLiveMapModel(), { draftProbabilityRadiant, game }); } catch { liveEstimate = null; }
+    const canApplyLive = !game.stale && !game.retained && !liveEstimate?.assessment?.stale && Number.isFinite(Number(liveEstimate?.liveProbabilityRadiant));
+    const radiantProbability = canApplyLive ? Number(liveEstimate.liveProbabilityRadiant) : Number(draftProbabilityRadiant);
+    currentMapProbabilityA = game.radiantTeam === row.match.team_a ? radiantProbability : 1 - radiantProbability;
+  }
+  const winsA = game.radiantTeam === row.match.team_a ? game.seriesScoreRadiant : game.seriesScoreDire;
+  const winsB = game.radiantTeam === row.match.team_b ? game.seriesScoreRadiant : game.seriesScoreDire;
+  const bestOf = bestOfForMatch(row.match, game);
+  const forecast = combinedSeriesForecast({ teamA: row.match.team_a, teamB: row.match.team_b, seriesProbabilityA: row.latest.probabilityA, bestOf, winsA, winsB, currentMapProbabilityA });
+  const presented = liveEstimate ? {
+    ...liveEstimate,
+    frozenProbabilityA: game.radiantTeam === row.match.team_a ? liveEstimate.frozenDraftProbabilityRadiant : 1 - liveEstimate.frozenDraftProbabilityRadiant,
+    observedProbabilityA: Number.isFinite(Number(liveEstimate.liveProbabilityRadiant))
+      ? game.radiantTeam === row.match.team_a ? Number(liveEstimate.liveProbabilityRadiant) : 1 - Number(liveEstimate.liveProbabilityRadiant)
+      : null,
+    source: "experimental_live_map_observation",
+    stale: Boolean(game.stale || game.retained || liveEstimate.assessment?.stale),
+  } : null;
+  return {
+    ...row,
+    forecast,
+    live: { ...game, history: undefined },
+    liveEstimate: presented,
+    sources: { ...row.sources, draftApplied: hasDraft, liveStateApplied: !presented?.stale && Number.isFinite(Number(presented?.observedProbabilityA)) },
+  };
+}
+
+function overlayCombinedLive(state) {
+  return {
+    ...state,
+    generatedAt: now(),
+    series: state.series.map(liveOverlayForSeries),
+    maps: parsedTournamentMaps(),
+    live: { fetchedAt: liveDraftCache.fetchedAt, error: liveDraftCache.error },
+  };
 }
 
 async function materializeCombinedForecast(opinionWeight = 10) {
@@ -1597,6 +1737,14 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/draft/live/model") {
       try { return json(res, 200, currentLiveMapModel()); }
       catch { return json(res, 503, { error: "live_map_model_unavailable" }); }
+    }
+    const liveDraftHistoryMatch = req.method === "GET" ? url.pathname.match(/^\/api\/draft\/live\/history\/(\d+)$/) : null;
+    if (liveDraftHistoryMatch) {
+      const matchId = liveDraftHistoryMatch[1];
+      const map = parsedTournamentMaps().find((item) => String(item.matchId) === matchId) ?? null;
+      const history = liveDraftHistory(matchId, 500);
+      if (!map && !history.length) return json(res, 404, { error: "live_map_history_not_found" });
+      return json(res, 200, { matchId, map, history });
     }
     if (req.method === "GET" && url.pathname === "/api/draft/live") return json(res, 200, await refreshLiveDrafts());
     if (req.method === "POST" && url.pathname === "/api/forecast/jobs") {
@@ -1694,11 +1842,26 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/combined") {
       const opinionWeight = url.searchParams.get("opinionWeight") ?? 10;
       const requestedRun = url.searchParams.get("run");
-      const ready = requestedRun ? null : readyCombinedForecast(opinionWeight);
-      if (ready) return json(res, 200, { ...ready, isAdmin: isAdmin(req) });
+      let ready = requestedRun ? null : readyCombinedForecast(opinionWeight);
+      if (ready && ready.readModel?.inputHash !== combinedInputHash(opinionWeight)) {
+        try {
+          await materializeCombinedForecast(opinionWeight);
+          ready = readyCombinedForecast(opinionWeight) ?? ready;
+        } catch (error) {
+          ready = {
+            ...ready,
+            readModel: {
+              ...ready.readModel,
+              status: "stale",
+              error: error instanceof Error ? error.message : String(error),
+            },
+          };
+        }
+      }
+      if (ready) return json(res, 200, { ...overlayCombinedLive(ready), isAdmin: isAdmin(req) });
       void materializeCombinedForecast(opinionWeight).catch(() => {});
       const fallback = await combinedForecastState(opinionWeight, requestedRun, { refreshLive: false });
-      return json(res, 200, { ...fallback, readModel: { status: "fallback", version: 0 }, isAdmin: isAdmin(req) });
+      return json(res, 200, { ...overlayCombinedLive(fallback), readModel: { status: "fallback", version: 0 }, isAdmin: isAdmin(req) });
     }
     const liveDraftPredictionMatch = req.method === "POST" ? url.pathname.match(/^\/api\/draft\/live\/([^/]+)\/prediction$/) : null;
     if (liveDraftPredictionMatch) {
@@ -1715,8 +1878,9 @@ const server = createServer(async (req, res) => {
       if (!existing) {
         try {
           const calculated = calculateActiveDraftPrediction({ draftStats: loadJson("public/draft-stats.json"), teamStats: loadJson("public/team-stats.json"), game });
-          db.prepare("INSERT OR IGNORE INTO live_draft_predictions(match_id,series_id,radiant_team,dire_team,picks_hash,picks_json,probability_radiant,model_id,captured_at) VALUES (?,?,?,?,?,?,?,?,?)")
-            .run(String(matchId), String(game.seriesId || ""), game.radiantTeam, game.direTeam, picksHash, JSON.stringify({ radiant: game.radiantPicks, dire: game.direPicks }), calculated.probabilityRadiant, calculated.modelId, now());
+          const evidence = JSON.stringify({ sourceTeamProbability: calculated.sourceTeamProbability, completeness: calculated.completeness, signals: calculated.signals, ...calculated.evidence });
+          db.prepare("INSERT OR IGNORE INTO live_draft_predictions(match_id,series_id,radiant_team,dire_team,picks_hash,picks_json,probability_radiant,model_id,evidence_json,captured_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
+            .run(String(matchId), String(game.seriesId || ""), game.radiantTeam, game.direTeam, picksHash, JSON.stringify({ radiant: game.radiantPicks, dire: game.direPicks }), calculated.probabilityRadiant, calculated.modelId, evidence, now());
         } catch (error) {
           console.error("Authoritative draft prediction failed:", error);
           return json(res, 503, { error: "active_draft_model_unavailable" });
@@ -1950,14 +2114,12 @@ server.listen(PORT, "0.0.0.0", () => {
     setTimeout(() => void syncLiveMatches("startup").catch((error) => console.error("Initial live sync failed:", error.message)), 5_000).unref();
     setInterval(() => void syncLiveMatches("timer").catch((error) => console.error("Live sync failed:", error.message)), LIVE_SYNC_INTERVAL_MINUTES * 60_000).unref();
   }
-  const refreshDraftReadModel = () => void refreshLiveDrafts({ force: true })
-    .then(() => Promise.all([0, 10, 20, 30].map((weight) => materializeCombinedForecast(weight))))
-    .catch((error) => console.error("Live draft/read-model timer failed:", error.message));
+  const refreshLiveDraftCache = () => void refreshLiveDrafts({ force: true })
+    .catch((error) => console.error("Live draft timer failed:", error.message));
+  void Promise.all([0, 10, 20, 30].map((weight) => materializeCombinedForecast(weight)))
+    .catch((error) => console.error("Initial combined materialization failed:", error.message));
   if (LIVE_DRAFT_SYNC_ENABLED) {
-    setTimeout(refreshDraftReadModel, 2_000).unref();
-    setInterval(refreshDraftReadModel, LIVE_DRAFT_INTERVAL_SECONDS * 1_000).unref();
-  } else {
-    void Promise.all([0, 10, 20, 30].map((weight) => materializeCombinedForecast(weight)))
-      .catch((error) => console.error("Initial combined materialization failed:", error.message));
+    setTimeout(refreshLiveDraftCache, 2_000).unref();
+    setInterval(refreshLiveDraftCache, LIVE_DRAFT_INTERVAL_SECONDS * 1_000).unref();
   }
 });

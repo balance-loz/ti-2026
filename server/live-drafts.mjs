@@ -41,3 +41,23 @@ export function liveDraftsFromOpenDota(rows, { leagueId = 19719, nowSeconds = Da
     }];
   }).sort((a, b) => Date.parse(b.lastUpdateAt || "") - Date.parse(a.lastUpdateAt || ""));
 }
+
+export function mergeLiveDraftGames(currentGames, previousGames, leagueMaps, {
+  fetchedAt = new Date().toISOString(),
+  previousFetchedAt = null,
+  graceSeconds = 120,
+} = {}) {
+  const current = Array.isArray(currentGames) ? currentGames : [];
+  const previous = Array.isArray(previousGames) ? previousGames : [];
+  const currentIds = new Set(current.map((game) => String(game.matchId)));
+  const completedIds = new Set((leagueMaps || [])
+    .filter((map) => typeof map.radiant_win === "boolean")
+    .map((map) => String(map.match_id)));
+  const nowMs = Date.parse(fetchedAt);
+  const retained = previous.filter((game) => {
+    if (currentIds.has(String(game.matchId)) || completedIds.has(String(game.matchId))) return false;
+    const lastSeenAt = Date.parse(game.serverSeenAt || previousFetchedAt || "");
+    return Number.isFinite(nowMs) && Number.isFinite(lastSeenAt) && nowMs - lastSeenAt <= Math.max(30, Number(graceSeconds)) * 1000;
+  }).map((game) => ({ ...game, retained: true, stale: true }));
+  return [...current.map((game) => ({ ...game, serverSeenAt: fetchedAt, retained: false, stale: false })), ...retained];
+}

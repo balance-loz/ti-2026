@@ -3,6 +3,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import LiveMapStory, { type DraftEvidence } from "../components/live_map_story";
+
 type Timeliness = { status: "actionable" | "late" | "after_start" | "unverified"; leadMinutes: number | null; eligible: boolean };
 type Match = { id: number; stage: "swiss" | "playin" | "playoff"; round: number; team_a: string; team_b: string; winner: string | null; score_a: number | null; score_b: number | null; scheduled_at: string | null; predicted_probability: number | null };
 type ExactScore = { score: string; probability: number };
@@ -13,6 +15,9 @@ type LiveEstimate = {
   frozenProbabilityA?: number | null;
   draftProbabilityA?: number | null;
   observedProbabilityA?: number | null;
+  frozenDraftProbabilityRadiant?: number | null;
+  liveProbabilityRadiant?: number | null;
+  availability?: string | null;
   generatedAt?: string | null;
   source?: string | null;
   stale?: boolean;
@@ -28,7 +33,7 @@ type SeriesRow = {
   liveEstimate?: LiveEstimate | null;
   sources: { draftApplied: boolean; liveStateApplied: boolean };
 };
-type DraftPrediction = { probabilityRadiant: number; modelId: string | null; capturedAt: string; predictedWinner: string; timeliness: Timeliness; predictionCorrect: boolean | null };
+type DraftPrediction = { probabilityRadiant: number; modelId: string | null; capturedAt: string; predictedWinner: string; timeliness: Timeliness; predictionCorrect: boolean | null; evidence?: DraftEvidence | null };
 type MapRow = { matchId: string; seriesId: string; radiantTeam: string; direTeam: string; winner: string | null; startTime: number | null; duration: number | null; picks: null | { radiant: number[]; dire: number[] }; draftPrediction: DraftPrediction | null };
 type BracketNode = { label: string; lane: "upper" | "lower" | "final"; column: number; a: string; b: string; bestOf: number; winner: string; predictedWinner: string; actualWinner: string | null; latestProbabilityA: number; lockedProbabilityA: number | null; decisionProbabilityA: number; exactScore: string | null; exactScoreProbability: number | null; exactScores?: ExactScore[]; topExactScores?: ExactScore[]; actualScore: string | null; predictionCorrect: boolean | null; status: "completed" | "scheduled" | "projected"; matchId: number | null };
 type BetLock = { id: number; scope: "series" | "map"; subjectId: string; teamA: string; teamB: string; probabilityA: number; recommendedWinner: string; exactScore: string | null; source: string; opinionWeight: number; snapshotId: number | null; modelId: string | null; createdAt: string; winner: string | null; actualScore: string | null; predictionCorrect: boolean | null; exactScoreCorrect: boolean | null };
@@ -38,7 +43,9 @@ type ProjectionMatch = { id: string; stage: "swiss" | "playin"; round: number; t
 type SimulationTeam = { id: string; qualify: number; direct: number; playin: number; viaPlayin: number; playinLoss: number; swissOut: number; champion: number };
 type SimulationScenario = { rank: number; probability: number; occurrences: number; direct40: string[]; direct41: string[]; via: string[] };
 type SimulationState = { iterations: number; requestedIterations: number; uniqueSwissOutcomes: number; uniqueTournamentPaths: number; teams: SimulationTeam[]; scenarios: SimulationScenario[]; swissMatchups?: Array<{ round: number; a: string; b: string; probability: number; aWinProbability: number; occurrences: number }>; playinMatchups: Array<{ a: string; b: string; probability: number; aWinProbability: number }>; convergence?: { converged: boolean; stopReason: string; maxSamplingMarginPp: number } };
-type CombinedState = { generatedAt: string; opinionWeight: number; isAdmin: boolean; mainSnapshot: null | { id: number; baselineId: number; baselineCreatedAt: string; requested: boolean; createdAt: string; completedMatchCount: number; mode: string; opinionWeight: number }; modelComparison: null | { rootId: number; static: ModelScore; adaptive: ModelScore; selected: "static" | "adaptive"; reason: string }; simulation: SimulationState | null; projections: { swiss: ProjectionMatch[]; playins: ProjectionMatch[] }; series: SeriesRow[]; maps: MapRow[]; betLocks: BetLock[]; bracket: { qualifiers: string[]; nodes: BracketNode[]; champion: string | null }; live: { error: string | null } };
+type AccuracyPoint = { matchId: number; stage: string; label: string; static: ModelScore; adaptive: ModelScore };
+type ModelComparison = { rootId: number; static: ModelScore; adaptive: ModelScore; selected: "static" | "adaptive"; reason: string; timeline?: AccuracyPoint[]; stages?: Array<{ stage: string; static: ModelScore; adaptive: ModelScore }>; decision?: { total: number; accepted: number; correct: number; pass: number } };
+type CombinedState = { generatedAt: string; opinionWeight: number; isAdmin: boolean; mainSnapshot: null | { id: number; baselineId: number; baselineCreatedAt: string; requested: boolean; createdAt: string; completedMatchCount: number; mode: string; opinionWeight: number }; modelComparison: ModelComparison | null; simulation: SimulationState | null; projections: { swiss: ProjectionMatch[]; playins: ProjectionMatch[] }; series: SeriesRow[]; maps: MapRow[]; betLocks: BetLock[]; bracket: { qualifiers: string[]; nodes: BracketNode[]; champion: string | null }; live: { error: string | null } };
 type Hero = { id: number; name: string; image: string; icon?: string };
 type StandingRow = { teamId: string; group: "A" | "B"; wins: number; losses: number; liveOpponent: string | null };
 
@@ -78,7 +85,7 @@ function HeroPicks({ ids, heroes }: { ids: number[]; heroes: Map<number, Hero> }
   return <span className="fusion-heroes">{ids.map((id, index) => { const hero = heroes.get(id); return hero ? <img key={`${id}-${index}`} src={hero.image} alt={hero.name} title={hero.name} /> : <i key={`${id}-${index}`} title={`Hero ${id}`}>{id}</i>; })}</span>;
 }
 
-function MapStrip({ maps, heroes, locks, isAdmin, locking, currentMapId, currentMapNumber, onLock }: { maps: MapRow[]; heroes: Map<number, Hero>; locks: BetLock[]; isAdmin: boolean; locking: string | null; currentMapId: string | null; currentMapNumber: number; onLock: (request: LockRequest) => void }) {
+function MapStrip({ maps, heroes, locks, isAdmin, locking, currentMapId, currentMapNumber, liveEstimate, liveGameTime, onLock }: { maps: MapRow[]; heroes: Map<number, Hero>; locks: BetLock[]; isAdmin: boolean; locking: string | null; currentMapId: string | null; currentMapNumber: number; liveEstimate: LiveEstimate | null; liveGameTime: number; onLock: (request: LockRequest) => void }) {
   if (!maps.length) return <p className="fusion-no-maps">Карты и пики появятся здесь после начала драфта.</p>;
   const numberedMaps = maps.map((map, index) => ({
     map,
@@ -88,8 +95,16 @@ function MapStrip({ maps, heroes, locks, isAdmin, locking, currentMapId, current
   const displayMaps = activeMap ? [activeMap, ...numberedMaps.filter(({ map }) => map.winner).reverse()] : [...numberedMaps].reverse();
   return <div className="fusion-series-maps">{displayMaps.map(({ map, mapNumber }) => {
     const prediction = map.draftPrediction;
-    const predicted = prediction?.predictedWinner ?? null;
-    const predictedProbability = prediction ? (predicted === map.radiantTeam ? prediction.probabilityRadiant : 1 - prediction.probabilityRadiant) : null;
+    const isCurrentMap = !map.winner && currentMapId === map.matchId;
+    const draftProbabilityRadiant = prediction?.probabilityRadiant ?? (isCurrentMap ? liveEstimate?.frozenDraftProbabilityRadiant ?? null : null);
+    const predicted = draftProbabilityRadiant === null ? null : draftProbabilityRadiant >= .5 ? map.radiantTeam : map.direTeam;
+    const predictedProbability = draftProbabilityRadiant === null ? null : Math.max(draftProbabilityRadiant, 1 - draftProbabilityRadiant);
+    const liveProbabilityRadiant = isCurrentMap && liveGameTime >= 600 && !liveEstimate?.stale
+      && liveEstimate?.liveProbabilityRadiant !== null && liveEstimate?.liveProbabilityRadiant !== undefined
+      && Number.isFinite(Number(liveEstimate.liveProbabilityRadiant))
+      ? Number(liveEstimate?.liveProbabilityRadiant)
+      : null;
+    const liveWinner = liveProbabilityRadiant === null ? null : liveProbabilityRadiant >= .5 ? map.radiantTeam : map.direTeam;
     const betLock = locks.find((lock) => lock.scope === "map" && String(lock.subjectId) === String(map.matchId));
     const decisionWinner = betLock?.recommendedWinner ?? predicted;
     const decisionProbability = betLock ? (betLock.recommendedWinner === betLock.teamA ? betLock.probabilityA : 1 - betLock.probabilityA) : predictedProbability;
@@ -98,7 +113,8 @@ function MapStrip({ maps, heroes, locks, isAdmin, locking, currentMapId, current
       <header><b>{map.winner ? `КАРТА ${mapNumber} · ЗАВЕРШЕНА` : `ТЕКУЩАЯ КАРТА ${mapNumber}`}</b>{lowConfidence ? <RouletteRisk label /> : null}<span>{map.duration ? clock(map.duration) : map.winner ? "завершена" : "идёт сейчас"}</span></header>
       <div className={`fusion-map-side ${map.winner === map.radiantTeam ? "is-winner" : ""}`}><Team id={map.radiantTeam} /><HeroPicks ids={map.picks?.radiant ?? []} heroes={heroes} /><span className="fusion-map-risk-slot">{lowConfidence && decisionWinner === map.radiantTeam ? <RouletteRisk /> : null}</span><em>{map.winner === map.radiantTeam ? "W" : map.winner ? "L" : "R"}</em></div>
       <div className={`fusion-map-side ${map.winner === map.direTeam ? "is-winner" : ""}`}><Team id={map.direTeam} /><HeroPicks ids={map.picks?.dire ?? []} heroes={heroes} /><span className="fusion-map-risk-slot">{lowConfidence && decisionWinner === map.direTeam ? <RouletteRisk /> : null}</span><em>{map.winner === map.direTeam ? "W" : map.winner ? "L" : "D"}</em></div>
-      <footer>{betLock ? <><span><b>СТАВКА · {team(betLock.recommendedWinner).short} {percent(betLock.recommendedWinner === betLock.teamA ? betLock.probabilityA : 1 - betLock.probabilityA)}{lowConfidence ? <RouletteRisk /> : null}</b><small>зафиксирована {new Date(betLock.createdAt).toLocaleTimeString("ru-RU")}</small></span><Grade correct={betLock.predictionCorrect} /></> : prediction ? <><span><b>ПРОГНОЗ · {team(predicted!).short} {percent(predictedProbability!)}{lowConfidence ? <RouletteRisk /> : null}</b><small>{map.winner ? "заморожен до результата карты" : "draft-прогноз · ещё не ставка"}</small></span>{isAdmin && !map.winner ? <button className="fusion-bet-button" disabled={locking === `map:${map.matchId}`} onClick={() => onLock({ scope: "map", subjectId: map.matchId, probabilityA: prediction.probabilityRadiant, recommendedWinner: predicted!, evidence: { capturedAt: prediction.capturedAt, modelId: prediction.modelId } })}>{locking === `map:${map.matchId}` ? "Фиксирую…" : "Я поставил по рекомендации"}</button> : <Grade correct={prediction.predictionCorrect} />}</> : <span><b>Прогноза до старта не было</b><small>задним числом результат не оцениваем</small></span>}</footer>
+      <footer>{betLock ? <><span><b>СТАВКА · {team(betLock.recommendedWinner).short} {percent(betLock.recommendedWinner === betLock.teamA ? betLock.probabilityA : 1 - betLock.probabilityA)}{lowConfidence ? <RouletteRisk /> : null}</b><small>зафиксирована {new Date(betLock.createdAt).toLocaleTimeString("ru-RU")}</small></span><Grade correct={betLock.predictionCorrect} /></> : predicted ? <><span><b>ПО ПИКАМ · {team(predicted).short} {percent(predictedProbability!)}{lowConfidence ? <RouletteRisk /> : null}</b><small>{map.winner ? "автоматически сохранён до результата" : "frozen после полного драфта"}</small></span>{isCurrentMap ? <span className="fusion-map-live-estimate"><b>LIVE · {liveWinner ? `${team(liveWinner).short} ${percent(Math.max(liveProbabilityRadiant!, 1 - liveProbabilityRadiant!))}` : liveGameTime < 600 ? "после 10:00" : "нет валидной оценки"}</b><small>{liveWinner ? "онлайн-состояние карты · не меняет frozen прогноз" : liveEstimate?.availability ?? "ожидание телеметрии"}</small></span> : null}{isAdmin && !map.winner && prediction ? <button className="fusion-bet-button" disabled={locking === `map:${map.matchId}`} onClick={() => onLock({ scope: "map", subjectId: map.matchId, probabilityA: prediction.probabilityRadiant, recommendedWinner: predicted, evidence: { capturedAt: prediction.capturedAt, modelId: prediction.modelId } })}>{locking === `map:${map.matchId}` ? "Фиксирую…" : "Я поставил по рекомендации"}</button> : <Grade correct={prediction?.predictionCorrect ?? null} />}</> : <span><b>Draft-прогноз ещё не сохранён</b><small>{isCurrentMap ? "сервер зафиксирует его сразу после полного драфта" : "исторического frozen-прогноза нет"}</small></span>}</footer>
+      {draftProbabilityRadiant !== null ? <LiveMapStory matchId={map.matchId} frozenProbabilityRadiant={draftProbabilityRadiant} evidence={prediction?.evidence} autoLoad={isCurrentMap} /> : null}
     </article>;
   })}</div>;
 }
@@ -178,7 +194,7 @@ function SeriesDetail({ row, maps, heroes, locks, isAdmin, locking, onLock }: { 
       <article><small>{latestLabel}</small><strong>{team(view.latestWinner).short} {percent(view.latestWinner === row.match.team_a ? view.latestProbabilityA : 1 - view.latestProbabilityA)}</strong><em className={Math.abs(delta) >= 5 ? "fusion-delta is-large" : "fusion-delta"}>{view.betLock || view.source === "historical" ? `${delta >= 0 ? "+" : ""}${delta.toFixed(1)} п.п. для ${team(row.match.team_a).short}` : "текущая незамороженная оценка"} · {latestSource}</em></article>
       <article><small>ФАКТ</small>{row.match.winner ? <><strong>{row.match.score_a}:{row.match.score_b} · {team(row.match.winner).short}</strong>{view.betLock ? <Grade correct={view.betLock.predictionCorrect} /> : view.source === "historical" ? <Grade correct={row.decision.predictionCorrect} /> : <span className="fusion-grade fusion-grade--late">НЕ БЫЛО PRE-MATCH</span>}</> : row.live ? <><strong>{row.forecast.winsA}:{row.forecast.winsB} · {clock(row.live.gameTime)}</strong><span className="fusion-status fusion-status--live">LIVE</span></> : <span className="fusion-status fusion-status--next">до матча</span>}</article>
     </div>
-    <MapStrip maps={seriesMaps} heroes={heroes} locks={locks} isAdmin={isAdmin} locking={locking} currentMapId={row.live?.matchId ?? null} currentMapNumber={row.forecast.winsA + row.forecast.winsB + 1} onLock={onLock} />
+    <MapStrip maps={seriesMaps} heroes={heroes} locks={locks} isAdmin={isAdmin} locking={locking} currentMapId={row.live?.matchId ?? null} currentMapNumber={row.forecast.winsA + row.forecast.winsB + 1} liveEstimate={row.liveEstimate ?? row.live?.liveEstimate ?? null} liveGameTime={row.live?.gameTime ?? 0} onLock={onLock} />
   </div>;
 }
 
@@ -191,7 +207,7 @@ function DraftSlots({ ids, heroes }: { ids: number[]; heroes: Map<number, Hero> 
 
 function LiveDraftRail({ rows, maps, heroes }: { rows: SeriesRow[]; maps: MapRow[]; heroes: Map<number, Hero> }) {
   const liveRows = rows.filter((row) => row.live && !row.match.winner);
-  return <section className="fusion-panel fusion-live-rail" aria-labelledby="live-draft-title">
+  return <section className="fusion-panel fusion-live-rail" id="live" aria-labelledby="live-draft-title">
     <header><div><span>LIVE DRAFT RAIL</span><h2 id="live-draft-title">Текущие карты и серии</h2><p>Draft-прогноз заморожен после пиков; observation включается только после 10:00.</p></div><b>{liveRows.length}</b></header>
     {liveRows.length ? <div className="fusion-live-grid">{liveRows.map((row) => {
       const seriesMaps = mapsForSeries(row, maps);
@@ -217,6 +233,24 @@ function LiveDraftRail({ rows, maps, heroes }: { rows: SeriesRow[]; maps: MapRow
   </section>;
 }
 
+function MobileTeamHistory({ standings, rows, rounds, locks, expanded, onToggle }: { standings: StandingRow[]; rows: SeriesRow[]; rounds: number[]; locks: BetLock[]; expanded: Record<string, string>; onToggle: (matchId: number) => void }) {
+  return <div className="fusion-mobile-team-history">{standings.map((standing, index) => <article key={standing.teamId}>
+    <header><span><b>{index + 1}</b><Team id={standing.teamId} /></span><strong>{standing.wins}–{standing.losses}</strong></header>
+    <div>{rounds.map((round) => {
+      const row = rows.find((candidate) => candidate.match.round === round && (candidate.match.team_a === standing.teamId || candidate.match.team_b === standing.teamId));
+      if (!row) return <span className="fusion-mobile-empty" key={round}>R{round} · —</span>;
+      const opponent = row.match.team_a === standing.teamId ? row.match.team_b : row.match.team_a;
+      const view = seriesPresentation(row, locks);
+      const predictionCorrect = view.betLock?.predictionCorrect ?? row.decision.predictionCorrect;
+      const probability = view.displayWinner === row.match.team_a ? view.displayProbabilityA : 1 - view.displayProbabilityA;
+      return <button key={round} aria-expanded={Boolean(expanded[String(row.match.id)])} onClick={() => onToggle(row.match.id)}>
+        <small>Раунд {round}</small><Team id={opponent} /><span>Прогноз {team(view.displayWinner).short} {percent(probability)}</span>
+        <em className={predictionCorrect === true ? "is-correct" : predictionCorrect === false ? "is-wrong" : ""}>{row.live ? "LIVE" : predictionCorrect === true ? "СБЫЛСЯ" : predictionCorrect === false ? "НЕ СБЫЛСЯ" : "ЖДЁМ"}</em>
+      </button>;
+    })}</div>
+  </article>)}</div>;
+}
+
 function SwissMatrix({ rows, maps, heroes, locks, isAdmin, locking, onLock, expanded, onToggle }: { rows: SeriesRow[]; maps: MapRow[]; heroes: Map<number, Hero>; locks: BetLock[]; isAdmin: boolean; locking: string | null; onLock: (request: LockRequest) => void; expanded: Record<string, string>; onToggle: (matchId: number) => void }) {
   const standings = useMemo(() => buildMatchStandings(rows), [rows]);
   const [viewMode, setViewMode] = useState<"teams" | "rounds">("teams");
@@ -224,9 +258,9 @@ function SwissMatrix({ rows, maps, heroes, locks, isAdmin, locking, onLock, expa
   const rounds = Array.from({ length: roundCount }, (_, index) => index + 1);
   const completedCount = rows.filter((row) => row.match.winner).length;
   const openRows = rows.filter((row) => Boolean(expanded[String(row.match.id)]));
-  return <section className="fusion-panel fusion-matrix"><header><div><span>SWISS · ДВА ПОНЯТНЫХ СРЕЗА</span><h2>История команд и матчи по раундам</h2><p>«По командам» собирает весь путь и проверку прогнозов в одной строке. «По раундам» показывает каждую серию один раз.</p></div><div className="fusion-matrix-progress"><b>{completedCount}</b><span>завершено</span><small>из {rows.length} матчей</small></div></header>
+  return <section className="fusion-panel fusion-matrix" id="swiss"><header><div><span>SWISS · ДВА ПОНЯТНЫХ СРЕЗА</span><h2>История команд и матчи по раундам</h2><p>«По командам» собирает весь путь и проверку прогнозов в одной строке. «По раундам» показывает каждую серию один раз.</p></div><div className="fusion-matrix-progress"><b>{completedCount}</b><span>завершено</span><small>из {rows.length} матчей</small></div></header>
     <div className="fusion-view-switch" role="tablist" aria-label="Представление Swiss"><button role="tab" aria-selected={viewMode === "teams"} onClick={() => setViewMode("teams")}>По командам</button><button role="tab" aria-selected={viewMode === "rounds"} onClick={() => setViewMode("rounds")}>По раундам</button></div>
-    {viewMode === "teams" ? <><div className="fusion-table-wrap fusion-scroll-hint" role="region" aria-label="История матчей каждой команды; на узком экране прокручивается горизонтально"><table className="fusion-table fusion-history-table"><thead><tr><th>#</th><th>Команда</th><th>Группа</th><th>Счёт</th>{rounds.map((round) => <th key={round}>Раунд {round}</th>)}<th>Статус</th></tr></thead><tbody>{standings.map((standing, index) => <tr key={standing.teamId}><td><strong>{index + 1}</strong></td><td><Team id={standing.teamId} /></td><td><span className={`fusion-group fusion-group--${standing.group.toLowerCase()}`}>{standing.group}</span></td><td><strong>{standing.wins}–{standing.losses}</strong></td>{rounds.map((round) => {
+    {viewMode === "teams" ? <><MobileTeamHistory standings={standings} rows={rows} rounds={rounds} locks={locks} expanded={expanded} onToggle={onToggle} /><div className="fusion-table-wrap fusion-scroll-hint fusion-history-desktop" role="region" aria-label="История матчей каждой команды; на узком экране используется карточный вид"><table className="fusion-table fusion-history-table"><thead><tr><th>#</th><th>Команда</th><th>Группа</th><th>Счёт</th>{rounds.map((round) => <th key={round}>Раунд {round}</th>)}<th>Статус</th></tr></thead><tbody>{standings.map((standing, index) => <tr key={standing.teamId}><td><strong>{index + 1}</strong></td><td><Team id={standing.teamId} /></td><td><span className={`fusion-group fusion-group--${standing.group.toLowerCase()}`}>{standing.group}</span></td><td><strong>{standing.wins}–{standing.losses}</strong></td>{rounds.map((round) => {
       const row = rows.find((candidate) => candidate.match.round === round && (candidate.match.team_a === standing.teamId || candidate.match.team_b === standing.teamId));
       if (!row) return <td key={round} className="fusion-empty-round">—</td>;
       const view = seriesPresentation(row, locks);
@@ -293,7 +327,7 @@ function TournamentProjection({ state, actualPlayins, locking, onLock }: { state
   const simulation = state.simulation;
   if (!simulation) return <section className="fusion-panel fusion-simulation"><header><div><span>MONTE CARLO · ВЕСЬ ТУРНИР</span><h2>Готовим полный прогноз</h2></div></header></section>;
   const rounds = [...new Set(state.projections.swiss.map((match) => match.round))].sort((a, b) => a - b);
-  return <section className="fusion-panel fusion-simulation">
+  return <section className="fusion-panel fusion-simulation" id="tournament">
     <header><div><span>MONTE CARLO · SWISS → СТЫКИ → PLAYOFF</span><h2>Как турнир развивается дальше</h2><p>Тот же полный прогон, что на главной. После каждого результата создаётся новая ревизия; зафиксированные ставки не переписываются.</p></div><div className="fusion-run-count"><b>{simulation.iterations.toLocaleString("ru-RU")}</b><span>полных турниров</span><small>snapshot #{state.mainSnapshot?.id ?? "—"} · после {state.mainSnapshot?.completedMatchCount ?? 0} результатов</small></div></header>
     <div className="fusion-simulation-stats"><span><b>{simulation.uniqueSwissOutcomes.toLocaleString("ru-RU")}</b><small>вариантов исхода Swiss</small></span><span><b>{simulation.uniqueTournamentPaths.toLocaleString("ru-RU")}</b><small>уникальных путей турнира</small></span><span><b>±{simulation.convergence?.maxSamplingMarginPp?.toFixed(2) ?? "—"} п.п.</b><small>максимальная ошибка выборки</small></span></div>
     <details className="fusion-collapsible"><summary>Топ-3 сценария турнира <span>раскрыть</span></summary><div className="fusion-scenario-grid">{simulation.scenarios.slice(0, 3).map((scenario, index) => <article key={`${scenario.rank}-${index}`}><header><span>СЦЕНАРИЙ {index + 1}</span><b>{scenario.probability < .1 ? scenario.probability.toFixed(3) : scenario.probability.toFixed(1)}%</b></header><small>{scenario.occurrences.toLocaleString("ru-RU")} из {simulation.iterations.toLocaleString("ru-RU")} прогонов</small><div><b>НАПРЯМУЮ</b><span>{[...scenario.direct40, ...scenario.direct41].map((id) => <Team key={id} id={id} />)}</span></div><div><b>ЧЕРЕЗ СТЫК</b><span>{scenario.via.map((id) => <Team key={id} id={id} />)}</span></div></article>)}</div></details>
@@ -337,7 +371,32 @@ function PlayoffBracket({ state, locking, onLock }: { state: CombinedState; lock
     const headings = lane === "upper" ? ["Четвертьфиналы", "Полуфиналы", "Финал верхней", "Гранд-финал"] : ["Раунд 1", "Раунд 2", "Полуфинал нижней", "Финал нижней"];
     return <section className={`fusion-bracket-track-wrap fusion-bracket-track-wrap--${lane}`}><h3>{lane === "upper" ? "ВЕРХНЯЯ СЕТКА" : "НИЖНЯЯ СЕТКА"}</h3><div className="fusion-bracket-rounds">{headings.map((heading) => <span key={heading}>{heading}</span>)}</div><div className={`fusion-bracket-track fusion-bracket-track--${lane}`}>{nodes.map((node) => { const slot = placement[node.label]; return slot ? <div key={node.label} className="fusion-bracket-slot" style={{ gridColumn: slot.column, gridRow: slot.row }}><BracketCard node={node} series={state.series} locks={state.betLocks} isAdmin={state.isAdmin} locking={locking} onLock={onLock} /></div> : null; })}</div></section>;
   };
-  return <section className="fusion-panel fusion-bracket"><header><div><span>MAIN FORECAST · DOUBLE ELIMINATION</span><h2>Ровная сетка плей-офф</h2><p>Участники приходят из того же миллионного сценария Swiss и стыков. После каждого нового результата вся незамороженная ветка пересчитывается.</p></div><div className="fusion-bracket-champion"><span>MAIN-ЧЕМПИОН</span><b>{state.bracket.champion ? team(state.bracket.champion).name : "—"}</b></div></header>{state.bracket.nodes.length ? <div className="fusion-bracket-scroll fusion-scroll-hint" role="region" aria-label="Сетка плей-офф; на узком экране прокручивается горизонтально">{track("upper")}{track("lower")}</div> : <p className="fusion-empty">Сетка появится после сохранения основного Monte Carlo snapshot с восьмёркой участников.</p>}</section>;
+  return <section className="fusion-panel fusion-bracket" id="playoff"><header><div><span>MAIN FORECAST · DOUBLE ELIMINATION</span><h2>Ровная сетка плей-офф</h2><p>Участники приходят из того же миллионного сценария Swiss и стыков. После каждого нового результата вся незамороженная ветка пересчитывается.</p></div><div className="fusion-bracket-champion"><span>MAIN-ЧЕМПИОН</span><b>{state.bracket.champion ? team(state.bracket.champion).name : "—"}</b></div></header>{state.bracket.nodes.length ? <div className="fusion-bracket-scroll fusion-scroll-hint" role="region" aria-label="Сетка плей-офф; на узком экране прокручивается горизонтально">{track("upper")}{track("lower")}</div> : <p className="fusion-empty">Сетка появится после сохранения основного Monte Carlo snapshot с восьмёркой участников.</p>}</section>;
+}
+
+function ThemeToggle() {
+  const toggle = () => {
+    const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    window.localStorage.setItem("ti26-theme", next);
+  };
+  return <button className="fusion-theme-toggle" type="button" onClick={toggle} aria-label="Переключить светлую и тёмную тему">Сменить тему</button>;
+}
+
+function AccuracyPanel({ comparison }: { comparison: ModelComparison }) {
+  const timeline = comparison.timeline ?? [];
+  const maxCount = Math.max(1, ...timeline.map((point) => point.adaptive.count));
+  const chartPoints = (variant: "static" | "adaptive") => timeline.map((point, index) => {
+    const score = point[variant];
+    const accuracy = score.count ? score.correct / score.count : .5;
+    return `${timeline.length === 1 ? 50 : index / (timeline.length - 1) * 100},${100 - accuracy * 100}`;
+  }).join(" ");
+  const decision = comparison.decision;
+  return <section className="fusion-panel fusion-accuracy" id="accuracy">
+    <header><div><span>ЧЕСТНАЯ ИСТОРИЯ · STATIC / ADAPTIVE</span><h2>Как прогноз проходит проверку</h2><p>Каждая точка использует только информацию, доступную до матча. Frozen-прогнозы не переписываются задним числом.</p></div><b>{comparison.adaptive.correct}/{comparison.adaptive.count}</b></header>
+    {timeline.length ? <div className="fusion-accuracy-chart"><svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label={`Накопительная точность по ${maxCount} матчам`}><line x1="0" y1="50" x2="100" y2="50" /><polyline className="is-static" points={chartPoints("static")} /><polyline className="is-adaptive" points={chartPoints("adaptive")} /></svg><footer><span><i className="is-static" />STATIC</span><span><i className="is-adaptive" />ADAPTIVE</span><small>{maxCount} оценённых матчей</small></footer></div> : <p className="fusion-empty">График появится после первых завершённых матчей с сохранённым прогнозом.</p>}
+    <div className="fusion-accuracy-stages">{(comparison.stages ?? []).map((item) => <article key={item.stage}><span>{item.stage === "swiss" ? "SWISS" : item.stage === "playin" ? "СТЫКИ" : "PLAYOFF"}</span><b>{item.adaptive.count ? `${item.adaptive.correct}/${item.adaptive.count}` : "—"}</b><small>STATIC {item.static.correct}/{item.static.count} · Brier {item.adaptive.brier?.toFixed(3) ?? "—"}</small></article>)}{decision ? <article><span>SELECTIVE DECISION</span><b>{decision.accepted ? `${decision.correct}/${decision.accepted}` : "—"}</b><small>coverage {decision.total ? Math.round(decision.accepted / decision.total * 100) : 0}% · PASS {decision.pass}</small></article> : null}</div>
+  </section>;
 }
 
 export default function CombinedForecastPage() {
@@ -353,9 +412,9 @@ export default function CombinedForecastPage() {
   const [lockHasError, setLockHasError] = useState(false);
   const [isStale, setIsStale] = useState(false);
   const [expandedMatches, setExpandedMatches] = useState<Record<string, string>>({});
-  useEffect(() => { const timer = window.setTimeout(() => { const params = new URLSearchParams(window.location.search); const run = Number(params.get("run")); const weight = Number(params.get("opinionWeight")); if (Number.isInteger(run) && run > 0) setSnapshotId(run); if ([0, 10, 20, 30].includes(weight)) setOpinionWeight(weight); setQueryReady(true); }, 0); return () => window.clearTimeout(timer); }, []);
+  useEffect(() => { const timer = window.setTimeout(() => { const params = new URLSearchParams(window.location.search); const run = Number(params.get("run")); const weight = Number(params.get("opinionWeight")); if (Number.isInteger(run) && run > 0) setSnapshotId(run); if ([0, 10, 20, 30].includes(weight)) setOpinionWeight(weight); if (window.location.pathname === "/combined") window.history.replaceState({}, "", `/${window.location.search}${window.location.hash}`); setQueryReady(true); }, 0); return () => window.clearTimeout(timer); }, []);
   useEffect(() => { fetch("/draft-stats.json").then((response) => response.json()).then((data) => setHeroes(new Map((data.heroes as Hero[]).map((hero) => [hero.id, hero])))).catch(() => undefined); }, []);
-  useEffect(() => { if (!queryReady) return; let cancelled = false; const load = async () => { try { const run = snapshotId ? `&run=${snapshotId}` : ""; const response = await fetch(`/api/combined?opinionWeight=${opinionWeight}${run}`, { cache: "no-store" }); if (!response.ok) throw new Error(`API ${response.status}`); const data = await response.json(); if (!cancelled) { setState(data); setError(null); setIsStale(Date.now() - Date.parse(data.generatedAt) > 30_000); } } catch (reason) { if (!cancelled) { setError(reason instanceof Error ? reason.message : String(reason)); setIsStale(true); } } }; void load(); const timer = window.setInterval(() => void load(), 10_000); return () => { cancelled = true; window.clearInterval(timer); }; }, [opinionWeight, queryReady, refreshKey, snapshotId]);
+  useEffect(() => { if (!queryReady) return; let cancelled = false; const load = async () => { try { const run = snapshotId ? `&run=${snapshotId}` : ""; const response = await fetch(`/api/combined?opinionWeight=${opinionWeight}${run}`, { cache: "no-store" }); if (!response.ok) throw new Error(`API ${response.status}`); const data = await response.json(); if (!cancelled) { setState(data); setError(null); setIsStale(Date.now() - Date.parse(data.generatedAt) > 30_000); } } catch (reason) { if (!cancelled) { setError(reason instanceof Error ? reason.message : String(reason)); setIsStale(true); } } }; const loadWhenVisible = () => { if (document.visibilityState === "visible") void load(); }; void load(); const timer = window.setInterval(loadWhenVisible, 10_000); document.addEventListener("visibilitychange", loadWhenVisible); return () => { cancelled = true; window.clearInterval(timer); document.removeEventListener("visibilitychange", loadWhenVisible); }; }, [opinionWeight, queryReady, refreshKey, snapshotId]);
   const selectProfile = (weight: number) => { setOpinionWeight(weight); setSnapshotId(null); const url = new URL(window.location.href); url.searchParams.delete("run"); url.searchParams.set("opinionWeight", String(weight)); window.history.replaceState({}, "", url); };
   const lockBet = async (request: LockRequest) => {
     const seriesRow = request.scope === "series" ? state?.series.find((row) => String(row.match.id) === String(request.subjectId)) ?? null : null;
@@ -384,7 +443,7 @@ export default function CombinedForecastPage() {
   const draftCorrect = gradedMapBets.filter((lock) => lock.predictionCorrect).length;
   const comparison = state?.modelComparison ?? null;
   const toggleMatch = (matchId: number) => setExpandedMatches((current) => { const next = { ...current }; if (next[String(matchId)]) delete next[String(matchId)]; else next[String(matchId)] = "open"; return next; });
-  return <main className="fusion-page"><header className="fusion-topbar"><a href="/" className="brand"><span className="brand-glyph">T</span><span>TI / PREDICTOR</span></a><nav><a href="/">Турнир</a><a href="/drafts">Пики</a><a href="/intel">Разведка</a><a className="active" href="/combined">Общий прогноз</a></nav><span className="live-pill"><i /> LIVE FUSION</span></header>
+  return <main className="fusion-page"><header className="fusion-topbar"><a href="/" className="brand"><span className="brand-glyph">T</span><span>TI / PREDICTOR</span></a><nav aria-label="Разделы главной"><a href="#live">Live</a><a href="#swiss">Swiss</a><a href="#tournament">Турнир</a><a href="#playoff">Плей-офф</a><a href="#accuracy">Точность</a><a href="/intel">Разведка</a></nav><ThemeToggle /><span className="live-pill"><i /> LIVE</span></header>
     <section className="fusion-hero fusion-hero--compact"><div><p>TABLE · BRACKET · MAP DRAFT · RESULT</p><h1>Прогноз,<br /><em>который помнит.</em></h1><span>Пока ставки нет, рекомендация свободно обновляется после новых матчей, пиков и live-данных. Нажатие «Я поставил» создаёт неизменяемый снимок именно того прогноза, по которому принято решение.</span></div><aside><label><span>ОСНОВНОЙ ПРОФИЛЬ</span><select value={opinionWeight} onChange={(event) => selectProfile(Number(event.target.value))}><option value={0}>0% · только статистика</option><option value={10}>10% · рекомендуемая смесь</option><option value={20}>20% · заметное влияние</option><option value={30}>30% · агрессивно</option></select></label><div><span><b>СТАВКИ НЕТ</b>можно обновлять</span><i>→</i><span><b>Я ПОСТАВИЛ</b>заморозить</span></div><small>{state?.mainSnapshot?.requested ? `Открыт исторический snapshot #${state.mainSnapshot.baselineId} · значения синхронизированы с главной` : state?.isAdmin ? "Админский режим активен · кнопки фиксации доступны" : "Войдите в админский режим на главной странице, чтобы фиксировать ставки"}</small></aside></section>
     {error || state?.live.error || isStale ? <div className={`fusion-data-banner ${error || state?.live.error ? "is-error" : "is-stale"}`} role="alert"><b>{error ? "ОБНОВЛЕНИЕ НЕ УДАЛОСЬ" : state?.live.error ? "LIVE-FEED НЕДОСТУПЕН" : "ДАННЫЕ УСТАРЕЛИ"}</b><span>{error ?? state?.live.error ?? `Последнее обновление: ${state ? new Date(state.generatedAt).toLocaleTimeString("ru-RU") : "—"}. Показываем последний успешный snapshot.`}</span></div> : null}
     {lockMessage ? <p className={`fusion-lock-message ${lockHasError ? "is-error" : "is-success"}`} role="status">{lockMessage}</p> : null}
@@ -395,6 +454,7 @@ export default function CombinedForecastPage() {
     {state ? <><LiveDraftRail rows={swiss} maps={state.maps} heroes={heroes} /><SwissMatrix rows={swiss} maps={state.maps} heroes={heroes} locks={state.betLocks} isAdmin={state.isAdmin} locking={locking} onLock={lockBet} expanded={expandedMatches} onToggle={toggleMatch} /></> : null}
     {state ? <TournamentProjection state={state} actualPlayins={playins} locking={locking} onLock={lockBet} /> : null}
     {state ? <PlayoffBracket state={state} locking={locking} onLock={lockBet} /> : null}
-    <footer><div className="brand"><span className="brand-glyph">T</span><span>TI / PREDICTOR</span></div><p>LOCKED оценивает решение · LATEST объясняет новую информацию</p><a href="/drafts">Открыть Draft Lab →</a></footer>
+    {comparison ? <AccuracyPanel comparison={comparison} /> : null}
+    <footer><div className="brand"><span className="brand-glyph">T</span><span>TI / PREDICTOR</span></div><p>LOCKED оценивает решение · LATEST объясняет новую информацию</p><span><a href="/intel">Разведка</a> · <a href="/admin">Админ</a></span></footer>
   </main>;
 }

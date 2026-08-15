@@ -1,4 +1,5 @@
 ﻿"use client";
+/* eslint-disable @next/next/no-html-link-for-pages -- Vinext navigation uses native links. */
 
 import { useEffect, useMemo, useState } from "react";
 
@@ -119,7 +120,7 @@ export default function IntelPage() {
   const ranking = useMemo(() => TEAMS.map((team) => ({ team, ...(odds[team.id] ?? { qualify: 0, top3: 0, final: 0, champion: 0 }) })).sort((a, b) => b.champion - a.champion), [odds]);
   const pair = stats?.pairwise[pairKey(...selectedPair)];
   const pairOrientation = pairKey(...selectedPair).startsWith(`${selectedPair[0]}|`) ? 1 : -1;
-  const selectedH2h = stats ? headToHead(stats, intel, selectedPair[0], selectedPair[1], context) : null;
+  const selectedH2h = stats && intel ? headToHead(stats, intel, selectedPair[0], selectedPair[1], context) : null;
   const selected = intel?.teams[selectedTeam];
 
   if (error) return <main className="intel-loading"><b>INTEL ERROR</b><p>{error}</p><a href="/">← К прогнозу</a></main>;
@@ -128,7 +129,7 @@ export default function IntelPage() {
   return <main className="intel-page" id="top">
     <header className="topbar intel-topbar">
       <a className="brand" href="/" aria-label="Вернуться к прогнозу турнира"><span className="brand-glyph">T</span><span>TI / PREDICTOR</span></a>
-      <nav aria-label="Разделы"><a href="/">Турнир</a><a href="/drafts">Пики</a><a className="is-current" href="/intel">Разведка</a><a href="#sources">Данные</a></nav>
+      <nav aria-label="Разделы"><a href="/">Прогноз</a><a href="/#live">Live-карты</a><a className="is-current" href="/intel">Разведка</a><a href="#sources">Данные</a></nav>
     </header>
 
     <section className="intel-hero">
