@@ -146,7 +146,11 @@ test("combined page and API persist map truth and explain the no-double-count po
   assert.match(api, /decisionHistory/);
   assert.match(page, /Я поставил по рекомендации/);
   assert.match(page, /СТАВКА ЗАФИКСИРОВАНА/);
-  assert.match(page, /Standings и матчи по раундам/);
+  assert.match(page, /История команд и матчи по раундам/);
+  assert.match(page, /setViewMode\("teams"\)/);
+  assert.match(page, /setViewMode\("rounds"\)/);
+  assert.match(page, /ПРОГНОЗ СБЫЛСЯ/);
+  assert.match(page, /ПРОГНОЗ НЕ СБЫЛСЯ/);
   assert.match(page, /MAIN \/ СТАВКА/);
   assert.match(page, /buildMatchStandings/);
   assert.match(page, /function seriesPresentation/);
@@ -157,6 +161,7 @@ test("combined page and API persist map truth and explain the no-double-count po
   assert.match(api, /baselineProbabilities/);
   assert.match(api, /url\.searchParams\.get\("run"\)/);
   assert.match(api, /snapshotDecisionEvaluation/);
+  assert.match(api, /match\.winner && historicalProbabilityA !== null/);
   assert.match(api, /projectedMatchupState/);
   assert.match(api, /combined_matchup_distribution/);
   assert.match(api, /simulation,/);
@@ -170,7 +175,7 @@ test("combined page and API persist map truth and explain the no-double-count po
   assert.match(page, /MAIN = \{comparison\.selected\.toUpperCase\(\)\}/);
   assert.match(page, /const \[expandedMatches, setExpandedMatches\]/);
   assert.match(page, /fusion-series-row/);
-  assert.match(page, /ОДНА СЕРИЯ = ОДНА СТРОКА/);
+  assert.match(page, /ДВА ПОНЯТНЫХ СРЕЗА/);
   assert.match(page, /const isOpen = Boolean\(expanded\[String\(row\.match\.id\)\]\)/);
   assert.match(page, /fusion-matrix-progress/);
   assert.match(page, /из \{rows\.length\} матчей/);
@@ -183,7 +188,10 @@ test("combined page and API persist map truth and explain the no-double-count po
   assert.match(page, /UPPER_PLACEMENT/);
   assert.match(page, /LOWER_PLACEMENT/);
   assert.match(page, /Точный счёт/);
-  assert.match(page, /Нет draft-прогноза/);
+  assert.match(page, /ТЕКУЩАЯ КАРТА/);
+  assert.match(page, /Number\.POSITIVE_INFINITY/);
+  assert.match(page, /row\.forecast\.winsA \+ row\.forecast\.winsB \+ 1/);
+  assert.match(page, /Прогноза до старта не было/);
   assert.match(checkpoint, /Checkpoint refused/);
   assert.match(checkpoint, /backup\(source/);
 });

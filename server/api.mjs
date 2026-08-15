@@ -1468,7 +1468,9 @@ async function combinedForecastState(opinionWeight = 10, requestedSnapshotId = n
         predictedWinner,
         predictedExactScore: predictedExact?.score ?? null,
         predictedExactScoreProbability: predictedExact?.probability ?? null,
-        predictionCorrect: match.winner ? predictedWinner === match.winner : null,
+        predictionCorrect: match.winner && historicalProbabilityA !== null
+          ? (historicalProbabilityA >= 0.5 ? match.team_a : match.team_b) === match.winner
+          : null,
         exactScoreCorrect: match.winner && predictedExact ? predictedExact.score === `${match.score_a}:${match.score_b}` : null,
         historicalProbabilityA,
         historicalWinner: historicalProbabilityA === null ? null : historicalProbabilityA >= 0.5 ? match.team_a : match.team_b,
