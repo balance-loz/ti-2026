@@ -257,6 +257,8 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_automation_jobs_claim ON automation_jobs
 db.exec("PRAGMA optimize");
 
 let refreshProcess = null;
+let activeRefreshProgress = null;
+let refreshProgressWriteAt = 0;
 let liveSyncPromise = null;
 let liveDraftPromise = null;
 let liveDraftCache = { games: [], fetchedAt: null, error: null };
@@ -277,6 +279,83 @@ const json = (res, status, value) => {
   res.end(JSON.stringify(value));
 };
 const now = () => new Date().toISOString();
+const REFRESH_STEPS = Object.freeze([
+  { id: "update-stats", script: "scripts/update-stats.mjs", label: "Статистика команд" },
+  { id: "backtest-model", script: "scripts/backtest-model.mjs", label: "Бэктест модели команд" },
+  { id: "update-draft-stats", script: "scripts/update-draft-stats.mjs", label: "Пики, синергии и контры" },
+  { id: "build-draft-dataset", script: "scripts/build-draft-dataset.mjs", label: "Датасет драфтов" },
+  { id: "audit-draft-coverage", script: "scripts/audit-draft-coverage.mjs", label: "Покрытие драфтов" },
+  { id: "walkforward", script: "scripts/run-active-draft-walkforward.mjs", label: "Walk-forward пиков" },
+  { id: "update-intel-stats", script: "scripts/update-intel-stats.mjs", label: "Intel / разведка" },
+]);
+
+function defaultRefreshProgress(running = false) {
+  return {
+    running,
+    startedAt: running ? now() : null,
+    finishedAt: null,
+    ok: null,
+    code: null,
+    stepIndex: 0,
+    stepId: null,
+    stepLabel: null,
+    detail: running ? "Запуск пайплайна…" : null,
+    log: "",
+    heartbeatAt: now(),
+    steps: REFRESH_STEPS.map((step) => ({ id: step.id, label: step.label, status: "pending" })),
+  };
+}
+
+function parseStoredRefreshProgress() {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'refresh_progress'").get();
+  if (!row?.value) return defaultRefreshProgress(false);
+  try {
+    const parsed = JSON.parse(row.value);
+    return parsed && typeof parsed === "object" ? parsed : defaultRefreshProgress(false);
+  } catch {
+    return defaultRefreshProgress(false);
+  }
+}
+
+function persistRefreshProgress(progress, force = false) {
+  const stamp = Date.now();
+  if (!force && stamp - refreshProgressWriteAt < 400) return;
+  refreshProgressWriteAt = stamp;
+  db.prepare("INSERT INTO settings(key,value,updated_at) VALUES ('refresh_progress',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")
+    .run(JSON.stringify(progress), now());
+}
+
+function applyRefreshLine(progress, line) {
+  const trimmed = line.trim();
+  if (!trimmed) return;
+  progress.detail = trimmed.slice(0, 280);
+  progress.heartbeatAt = now();
+  const start = trimmed.match(/^\[refresh\]\s+(\d+)\/(\d+)\s+start\s+(\S+)/);
+  if (start) {
+    const index = Number(start[1]) - 1;
+    progress.steps = progress.steps.map((step, stepIndex) => ({
+      ...step,
+      status: stepIndex < index ? "done" : stepIndex === index ? "running" : "pending",
+    }));
+    const current = progress.steps[index];
+    if (current) {
+      progress.stepIndex = index + 1;
+      progress.stepId = current.id;
+      progress.stepLabel = current.label;
+    }
+    return;
+  }
+  const done = trimmed.match(/^\[refresh\]\s+(\d+)\/(\d+)\s+done\s+(\S+)/);
+  if (!done) return;
+  const index = Number(done[1]) - 1;
+  if (progress.steps[index]) progress.steps[index] = { ...progress.steps[index], status: "done" };
+}
+
+function publicRefreshProgress() {
+  const progress = activeRefreshProgress ? { ...activeRefreshProgress, steps: activeRefreshProgress.steps.map((step) => ({ ...step })) } : parseStoredRefreshProgress();
+  if (refreshProcess) progress.running = true;
+  return progress;
+}
 const tokenHash = (token) => createHash("sha256").update(token).digest("hex");
 function canonicalPicks(picks) {
   return [...(picks ?? [])].map(Number).filter((id) => Number.isInteger(id) && id > 0).sort((left, right) => left - right);
@@ -614,7 +693,7 @@ function publicState() {
   let lastSync = null;
   try { lastSync = liveSyncRow ? { ...JSON.parse(liveSyncRow.value), updatedAt: liveSyncRow.updated_at } : null; } catch { lastSync = null; }
   return {
-    answers, matches, snapshots, officialForecast: OFFICIAL_FORECAST_CONFIG, refresh, refreshRunning: Boolean(refreshProcess),
+    answers, matches, snapshots, officialForecast: OFFICIAL_FORECAST_CONFIG, refresh, refreshRunning: Boolean(refreshProcess), refreshProgress: publicRefreshProgress(),
     liveSync: { enabled: LIVE_SYNC_ENABLED, scheduleEnabled: SCHEDULE_SYNC_ENABLED, leagueId: TI_LEAGUE_ID, intervalMinutes: LIVE_SYNC_INTERVAL_MINUTES, running: Boolean(liveSyncPromise), lastSync, autoForecastRunning: Boolean(db.prepare("SELECT 1 FROM automation_jobs WHERE job_type='forecast' AND kind='scenario_refresh' AND status IN ('pending','leased') AND superseded_by IS NULL LIMIT 1").get()) },
   };
 }
@@ -2176,18 +2255,56 @@ const server = createServer(async (req, res) => {
       }
       if (req.method === "POST" && url.pathname === "/api/admin/refresh") {
         if (refreshProcess) return json(res, 409, { error: "refresh_running" });
+        const progress = defaultRefreshProgress(true);
+        activeRefreshProgress = progress;
+        persistRefreshProgress(progress, true);
         refreshProcess = spawn(process.execPath, ["scripts/update-all-stats.mjs"], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
         let output = "";
-        refreshProcess.stdout.on("data", (chunk) => { output = (output + chunk).slice(-12000); });
-        refreshProcess.stderr.on("data", (chunk) => { output = (output + chunk).slice(-12000); });
-        refreshProcess.on("close", (code) => {
-          const value = JSON.stringify({ ok: code === 0, code, output });
+        let lineBuffer = "";
+        let settled = false;
+        const onChunk = (chunk, stream = process.stdout) => {
+          const text = String(chunk);
+          stream.write(text);
+          output = (output + text).slice(-12000);
+          lineBuffer += text;
+          const parts = lineBuffer.split(/\n/);
+          lineBuffer = parts.pop() ?? "";
+          for (const line of parts) applyRefreshLine(progress, line);
+          progress.heartbeatAt = now();
+          progress.log = output.slice(-8000);
+          persistRefreshProgress(progress);
+        };
+        const finish = (code, errorMessage = "") => {
+          if (settled) return;
+          settled = true;
+          if (lineBuffer) applyRefreshLine(progress, lineBuffer);
+          lineBuffer = "";
+          const ok = code === 0;
+          progress.running = false;
+          progress.ok = ok;
+          progress.code = code;
+          progress.finishedAt = now();
+          progress.heartbeatAt = now();
+          if (errorMessage) progress.detail = errorMessage.slice(0, 280);
+          else if (ok) progress.detail = "Готово";
+          progress.steps = progress.steps.map((step) => ({
+            ...step,
+            status: ok ? "done" : step.status === "running" ? "error" : step.status,
+          }));
+          if (ok) { progress.stepIndex = REFRESH_STEPS.length; progress.stepLabel = null; }
+          persistRefreshProgress(progress, true);
+          const value = JSON.stringify({ ok, code, output: (output + (errorMessage ? `\n${errorMessage}` : "")).slice(-12000) });
           db.prepare("INSERT INTO settings(key,value,updated_at) VALUES ('last_refresh',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").run(value, now());
           refreshProcess = null;
-          if (code === 0) queueAutomaticSnapshot("auto_artifact_refresh", 100);
-        });
+          activeRefreshProgress = progress;
+          if (ok) queueAutomaticSnapshot("auto_artifact_refresh", 100);
+        };
+        refreshProcess.stdout.on("data", (chunk) => onChunk(chunk, process.stdout));
+        refreshProcess.stderr.on("data", (chunk) => onChunk(chunk, process.stderr));
+        refreshProcess.on("error", (error) => finish(1, error instanceof Error ? error.message : String(error)));
+        refreshProcess.on("close", (code) => finish(code ?? 1));
         audit("refresh_started", {});
-        return json(res, 202, { ok: true });
+        return json(res, 202, { ok: true, refreshProgress: publicRefreshProgress() });
       }
       if (req.method === "POST" && url.pathname === "/api/admin/live/sync") {
         if (liveSyncPromise) return json(res, 409, { error: "live_sync_running" });

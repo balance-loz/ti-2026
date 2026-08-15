@@ -173,6 +173,7 @@ const [stats, teamStats, teamModelArtifact, coverage] = await Promise.all([
 ]);
 const teamIdByOpenDota = new Map(Object.entries(teamStats.teams ?? {}).flatMap(([teamId, team]) => (team.openDotaIds ?? [team.openDotaId]).map((id) => [Number(id), teamId])));
 const matches = loadMatches(teamIdByOpenDota); const state = freshState(teamModelArtifact.selected);
+process.stdout.write(`Walk-forward: scoring ${matches.length} maps...\n`);
 let weights = [1, .25, .25, 0, .12, .12, .08, .08, .08]; const rows = [];
 let previousPatch = null; let seen = 0;
 for (const match of matches) {
@@ -190,8 +191,10 @@ for (const match of matches) {
   const error = probability - match.radiantWin; const rate = .045 / Math.sqrt(1 + seen / 350);
   weights = weights.map((weight, index) => clamp(weight - rate * (error * x[index] + .002 * weight), index === 0 || FEATURE_NAMES[index] !== "draftPriority" ? 0 : -.5, 2.5));
   observe(state, match); seen += 1;
+  if (seen === 1 || seen % 400 === 0 || seen === matches.length) process.stdout.write(`Walk-forward: ${seen}/${matches.length} maps\n`);
 }
 
+process.stdout.write("Walk-forward: fitting combiner and bootstrap...\n");
 const splitIndex = Math.max(1000, Math.floor(rows.length * .7)); const metaTrain = rows.slice(0, splitIndex); const metaTest = rows.slice(splitIndex);
 const frozenWeights = fitFrozenCombiner(metaTrain); const frozenTeamSideWeights = fitFrozenCombiner(metaTrain, [0, 1]);
 const priorityIndex = FEATURE_NAMES.indexOf("draftPriority");

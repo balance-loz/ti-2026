@@ -53,9 +53,13 @@ async function apiJson(endpoint) {
         signal: AbortSignal.timeout(20_000),
       });
       if (response.ok) return response.json();
+      process.stderr.write(`OpenDota ${response.status} ${endpoint} attempt ${attempt + 1}/5\n`);
       if (response.status !== 429 && response.status < 500) throw new Error(`${endpoint}: OpenDota returned ${response.status}`);
     } catch (error) {
-      if (attempt === 4) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`OpenDota error ${endpoint} attempt ${attempt + 1}/5: ${message}\n`);
+      const returned = Number((message.match(/returned (\d+)/) || [])[1] || 0);
+      if (attempt === 4 || (returned && returned !== 429 && returned < 500)) throw error;
     }
     await sleep(1000 * 2 ** attempt);
   }
@@ -119,7 +123,7 @@ async function downloadMissingMatches(matchIds) {
       failed += 1;
       process.stderr.write(`Match ${matchId} skipped: ${error.message}\n`);
     }
-    if ((downloaded + failed) % 25 === 0 || downloaded + failed === queue.length) {
+    if (downloaded + failed === 1 || (downloaded + failed) % 5 === 0 || downloaded + failed === queue.length) {
       process.stdout.write(`Draft details: ${downloaded + failed}/${queue.length} processed (${failed} failed)\n`);
     }
   }
@@ -288,9 +292,12 @@ async function main() {
   } catch (error) {
     process.stderr.write(`Live TI draft discovery skipped: ${error.message}\n`);
   }
+  process.stdout.write(`Draft details: ${eligible.all.size} eligible maps, ${liveTournamentMaps} live TI maps discovered\n`);
   const download = await downloadMissingMatches(eligible.all);
+  process.stdout.write(`Draft details: reading cached pro maps for patch ${currentPatch.id}...\n`);
   const teamMatches = await loadCachedMatches(eligible.all, Number(currentPatch.id));
   const matches = await loadAllCachedProMatches(Number(currentPatch.id));
+  process.stdout.write(`Draft details: ${matches.length} patch maps loaded, building artifact...\n`);
   const patchStats = summarizeCurrentPatch(matches);
   const teamHeroes = teamAndPlayerSamples(teamStats, teamMatches, eligible.byTeam, proPlayers);
   const rankedTotals = rawHeroes.reduce((sum, hero) => ({ picks: sum.picks + Number(hero["7_pick"] || 0), wins: sum.wins + Number(hero["7_win"] || 0) }), { picks: 0, wins: 0 });

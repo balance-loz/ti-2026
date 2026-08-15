@@ -619,6 +619,10 @@ test("draft lab contains current-patch heroes and regularized matchup evidence",
   assert.match(page, /Контрпики и синергии/);
   assert.match(page, /Игроки на героях/);
   assert.match(server, /scripts\/update-all-stats\.mjs/);
+  assert.match(server, /refresh_progress/);
+  assert.match(server, /publicRefreshProgress/);
+  assert.match(await readFile("scripts/update-all-stats.mjs", "utf8"), /\[refresh\] \$\{index\}\/\$\{total\} start/);
+  assert.match(await readFile("app/admin/page.tsx", "utf8"), /RefreshProgressPanel/);
   assert.match(server, /\/api\/draft\/predict/);
   assert.match(service, /score\(exact, observed \? "observed" : "inferred"\)/);
   assert.match(service, /score\(best\.rows, "inferred"\)/);
@@ -631,6 +635,8 @@ test("draft refresh discovers live TI league maps before training", async () => 
   assert.match(updater, /leagues\/\$\{TI_LEAGUE_ID\}\/matches/);
   assert.match(updater, /addLiveTournamentMaps/);
   assert.match(updater, /liveTournamentMapsAdded/);
+  assert.match(updater, /processed \(\$\{failed\} failed\)/);
+  assert.match(updater, /OpenDota \$\{response\.status\}/);
 });
 
 test("deployment files do not contain the administrator password", async () => {

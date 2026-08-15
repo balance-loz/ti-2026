@@ -49,8 +49,8 @@ function AssignmentList({ title, assignment }: { title: string; assignment?: Ass
   return <section><header><b>{title}</b><small>{sourceLabel(assignment.source)}</small></header>{assignment.rows.map((row) => <div key={`${row.accountId}-${row.heroId}`}><span>{row.heroIcon ? <img src={row.heroIcon} alt="" /> : null}<b>{row.player}</b><i>→</i><strong>{row.hero}</strong></span><small>позиция {row.position ?? "?"} · {row.games ? `${row.games} карт · ${row.winRate.toFixed(1)}%` : "нет выборки"}</small></div>)}</section>;
 }
 
-function PairList({ title, rows }: { title: string; rows: PairEvidence[] }) {
-  return <section><header><b>{title}</b><small>{rows.length ? `${rows.length} сочетаний` : "нет данных"}</small></header>{rows.slice(0, 8).map((row) => <div key={`${row.heroA.id}-${row.heroB.id}`}><span>{row.heroA.icon ? <img src={row.heroA.icon} alt="" /> : null}<b>{row.heroA.name}</b><i>vs</i>{row.heroB.icon ? <img src={row.heroB.icon} alt="" /> : null}<strong>{row.heroB.name}</strong></span><small>{row.games} карт · {row.winRate.toFixed(1)}%</small></div>)}</section>;
+function PairList({ title, rows, relation }: { title: string; rows: PairEvidence[]; relation: "vs" | "+" }) {
+  return <section><header><b>{title}</b><small>{rows.length ? `${rows.length} сочетаний` : "нет данных"}</small></header>{rows.slice(0, 8).map((row) => <div key={`${row.heroA.id}-${row.heroB.id}`}><span>{row.heroA.icon ? <img src={row.heroA.icon} alt="" /> : null}<b>{row.heroA.name}</b><i>{relation}</i>{row.heroB.icon ? <img src={row.heroB.icon} alt="" /> : null}<strong>{row.heroB.name}</strong></span><small>{row.games} карт · {row.winRate.toFixed(1)}%</small></div>)}</section>;
 }
 
 export default function LiveMapStory({ matchId, frozenProbabilityRadiant, evidence, autoLoad }: { matchId: string; frozenProbabilityRadiant: number | null; evidence?: DraftEvidence | null; autoLoad: boolean }) {
@@ -92,7 +92,7 @@ export default function LiveMapStory({ matchId, frozenProbabilityRadiant, eviden
       <header><div><small>SERVER-FROZEN EVIDENCE</small><h4>Что изменило прогноз после пиков</h4></div><strong>База {resolvedEvidence.sourceTeamProbability === undefined ? "—" : percentage(resolvedEvidence.sourceTeamProbability)}</strong></header>
       <div className="fusion-signal-list">{signals.map((signal) => <span key={signal.key}><b>{signal.label}</b><i className={signal.contribution >= 0 ? "is-positive" : "is-negative"}>{signal.contribution >= 0 ? "+" : ""}{signal.contribution.toFixed(2)} п.п.</i><small>выборка {signal.sample || "—"}</small></span>)}</div>
       <details><summary>Игроки на героях</summary><div className="fusion-evidence-columns"><AssignmentList title="Radiant" assignment={resolvedEvidence.assignments?.radiant} /><AssignmentList title="Dire" assignment={resolvedEvidence.assignments?.dire} /></div></details>
-      <details><summary>Контрпики и синергии</summary><div className="fusion-evidence-columns"><PairList title="Герой против героя" rows={resolvedEvidence.counters ?? []} /><PairList title="Синергии Radiant" rows={resolvedEvidence.synergies?.radiant ?? []} /><PairList title="Синергии Dire" rows={resolvedEvidence.synergies?.dire ?? []} /></div></details>
+      <details><summary>Контрпики и синергии</summary><div className="fusion-evidence-columns"><PairList title="Герой против героя" rows={resolvedEvidence.counters ?? []} relation="vs" /><PairList title="Синергии Radiant" rows={resolvedEvidence.synergies?.radiant ?? []} relation="+" /><PairList title="Синергии Dire" rows={resolvedEvidence.synergies?.dire ?? []} relation="+" /></div></details>
     </div> : data ? <p className="fusion-story-empty">Для этой старой карты подробное evidence ещё не сохранялось.</p> : null}
   </details>;
 }

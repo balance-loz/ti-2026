@@ -4,7 +4,22 @@
 import { useEffect, useState, type FormEvent } from "react";
 
 type Snapshot = { id: number; trigger: string; created_at: string; completed_match_count: number; iterations: number };
-type AdminState = { isAdmin: boolean; answers: Record<string, number>; snapshots: Snapshot[]; refreshRunning: boolean; liveSync?: { running?: boolean; lastSync?: { updatedAt?: string; ok?: boolean } | null } };
+type RefreshStep = { id: string; label: string; status: "pending" | "running" | "done" | "error" };
+type RefreshProgress = {
+  running: boolean;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  ok?: boolean | null;
+  code?: number | null;
+  stepIndex?: number;
+  stepLabel?: string | null;
+  detail?: string | null;
+  log?: string;
+  heartbeatAt?: string | null;
+  steps?: RefreshStep[];
+};
+type AdminState = { isAdmin: boolean; answers: Record<string, number>; snapshots: Snapshot[]; refreshRunning: boolean; refreshProgress?: RefreshProgress | null; liveSync?: { running?: boolean; lastSync?: { updatedAt?: string; ok?: boolean } | null } | null };
+type ForecastJob = { id: string; status: string; error?: string | null; snapshotId?: number | null; progress?: { current: number; total: number } };
 type ForecastJob = { id: string; status: string; error?: string | null; snapshotId?: number | null; progress?: { current: number; total: number } };
 
 const DEFAULT_OPINION_WEIGHT = 15;
@@ -23,6 +38,43 @@ async function requestJson(url: string, init?: RequestInit) {
   return payload;
 }
 
+function formatElapsed(startedAt?: string | null) {
+  if (!startedAt) return "";
+  const started = Date.parse(startedAt);
+  if (!Number.isFinite(started)) return "";
+  const totalSec = Math.max(0, Math.floor((Date.now() - started) / 1000));
+  const hours = Math.floor(totalSec / 3600);
+  const minutes = Math.floor((totalSec % 3600) / 60);
+  const seconds = totalSec % 60;
+  if (hours) return `${hours} ч ${minutes} мин`;
+  if (minutes) return `${minutes} мин ${seconds} с`;
+  return `${seconds} с`;
+}
+
+function stepMark(status: RefreshStep["status"]) {
+  if (status === "done") return "✓";
+  if (status === "running") return "●";
+  if (status === "error") return "✕";
+  return "○";
+}
+
+function RefreshProgressPanel({ progress, running }: { progress: RefreshProgress; running: boolean }) {
+  const heartbeatAge = progress.heartbeatAt ? Date.now() - Date.parse(progress.heartbeatAt) : 0;
+  const isStale = running && Number.isFinite(heartbeatAge) && heartbeatAge > 180_000;
+  const logTail = (progress.log ?? "").trim().split(/\n/).slice(-12).join("\n");
+  return <div className="admin-refresh-progress">
+    <p>
+      {running ? `Идёт шаг ${progress.stepIndex || "—"}/7` : progress.ok === false ? "Обновление упало" : progress.ok ? "Последнее обновление прошло" : "Последний прогон"}
+      {progress.stepLabel ? ` · ${progress.stepLabel}` : ""}
+      {progress.startedAt ? ` · ${formatElapsed(progress.startedAt)}` : ""}
+    </p>
+    {progress.detail ? <small>{progress.detail}</small> : null}
+    {isStale ? <small className="is-stale">Нет новых строк больше 3 минут — скорее ждёт OpenDota, чем считает на CPU. Смотрите docker compose logs -f api.</small> : null}
+    {progress.steps?.length ? <ol>{progress.steps.map((step) => <li key={step.id} className={`is-${step.status}`}><span>{stepMark(step.status)}</span><b>{step.label}</b></li>)}</ol> : null}
+    {logTail ? <pre>{logTail}</pre> : null}
+  </div>;
+}
+
 export default function AdminPage() {
   const [state, setState] = useState<AdminState | null>(null);
   const [username, setUsername] = useState("admin");
@@ -31,13 +83,19 @@ export default function AdminPage() {
   const [message, setMessage] = useState("");
   const [hasError, setHasError] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
-  const load = async () => {
+  const load = async (opts?: { silent?: boolean }) => {
     try {
       const next = await requestJson("/api/state", { cache: "no-store" }) as AdminState;
-      setState(next); setAnswers(JSON.stringify(next.answers, null, 2));
+      setState(next);
+      if (!opts?.silent) setAnswers(JSON.stringify(next.answers, null, 2));
     } catch (error) { setHasError(true); setMessage(error instanceof Error ? error.message : String(error)); }
   };
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer); }, []);
+  useEffect(() => {
+    if (!state?.refreshRunning && !state?.refreshProgress?.running) return;
+    const timer = window.setInterval(() => void load({ silent: true }), 2000);
+    return () => window.clearInterval(timer);
+  }, [state?.refreshRunning, state?.refreshProgress?.running]);
   const run = async (label: string, action: () => Promise<unknown>) => {
     setIsBusy(true); setHasError(false); setMessage("");
     try { await action(); setMessage(label); await load(); }
@@ -98,7 +156,9 @@ export default function AdminPage() {
     <section className="admin-hero"><span>PRIVATE OPERATIONS</span><h1>Управление прогнозом</h1><p>Мнения по командам, смесь и ручной пересчёт живут здесь. На главной автоматически считается только смесь {DEFAULT_OPINION_WEIGHT}%.</p></section>
     {message ? <p className={`admin-notice ${hasError ? "is-error" : ""}`}>{message}</p> : null}
     {!state?.isAdmin ? <form className="admin-login-card" onSubmit={login}><h2>Вход</h2><label>Логин<input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" /></label><label>Пароль<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" /></label><button disabled={isBusy}>Войти</button></form> : <>
-      <section className="admin-actions-panel"><header><div><span>SERVER JOBS</span><h2>Синхронизация и пересчёт</h2></div><b>{state.liveSync?.running ? "RUNNING" : "READY"}</b></header><div>
+      <section className="admin-actions-panel"><header><div><span>SERVER JOBS</span><h2>Синхронизация и пересчёт</h2></div><b className={state.refreshRunning || state.liveSync?.running ? "is-busy" : ""}>{state.refreshRunning ? "REFRESH" : state.liveSync?.running ? "SYNC" : "READY"}</b></header>
+        {state.refreshProgress ? <RefreshProgressPanel progress={state.refreshProgress} running={Boolean(state.refreshRunning || state.refreshProgress.running)} /> : null}
+        <div className="admin-actions-grid">
         <button disabled={isBusy || state.liveSync?.running} onClick={() => void run("Результаты и расписание синхронизированы.", () => requestJson("/api/admin/live/sync", { method: "POST" }))}>Синхронизировать матчи</button>
         <button disabled={isBusy || state.refreshRunning} onClick={() => void run("Обновление model artifacts запущено.", () => requestJson("/api/admin/refresh", { method: "POST" }))}>Обновить статистику</button>
         <button disabled={isBusy} onClick={() => void startForecast(DEFAULT_OPINION_WEIGHT)}>Monte Carlo 250K · 15%</button>
