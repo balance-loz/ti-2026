@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { mkdirSync, readFileSync, statSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { Worker } from "node:worker_threads";
 import path from "node:path";
@@ -402,6 +402,35 @@ function decorateLiveDraft(game) {
 }
 
 const jsonFileCache = new Map();
+function existingFile(candidates) {
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const fullPath = path.resolve(candidate);
+    try {
+      if (statSync(fullPath).isFile()) return fullPath;
+    } catch {}
+  }
+  return null;
+}
+
+function resolvePublicArtifact(fileName) {
+  const envPath = fileName === "draft-stats.json" ? process.env.DRAFT_STATS : fileName === "team-stats.json" ? process.env.TEAM_STATS : "";
+  const fullPath = existingFile([path.join("public", fileName), envPath, path.join("model", fileName)]);
+  if (!fullPath) throw new Error(`missing_artifact:${fileName}`);
+  return fullPath;
+}
+
+function seedPublicArtifacts() {
+  mkdirSync(path.resolve("public"), { recursive: true });
+  for (const fileName of ["draft-stats.json", "team-stats.json"]) {
+    const dest = path.resolve("public", fileName);
+    if (existingFile([dest])) continue;
+    const source = existingFile([fileName === "draft-stats.json" ? process.env.DRAFT_STATS : process.env.TEAM_STATS, path.join("model", fileName)]);
+    if (!source) continue;
+    copyFileSync(source, dest);
+  }
+}
+
 function loadJson(relativePath) {
   const fullPath = path.resolve(relativePath);
   const mtimeMs = statSync(fullPath).mtimeMs;
@@ -452,7 +481,7 @@ function observeStableDraft(game, observedAt) {
     observations=excluded.observations,first_seen_at=CASE WHEN live_draft_candidates.picks_hash=excluded.picks_hash THEN live_draft_candidates.first_seen_at ELSE excluded.first_seen_at END,
     last_seen_at=excluded.last_seen_at`).run(String(game.matchId), picksHash, observations, observedAt, observedAt);
   try {
-    const prediction = calculateActiveDraftPrediction({ draftStats: loadJson("public/draft-stats.json"), teamStats: loadJson("public/team-stats.json"), game });
+    const prediction = calculateActiveDraftPrediction({ draftStats: loadJson(resolvePublicArtifact("draft-stats.json")), teamStats: loadJson(resolvePublicArtifact("team-stats.json")), game });
     persistCalculatedDraft(game, prediction, observedAt, picksHash);
     audit(existingPrediction ? "server_draft_refrozen" : "server_draft_frozen", { matchId: String(game.matchId), seriesId: String(game.seriesId || ""), picksHash, modelId: prediction.modelId });
     liveDraftErrors.delete(String(game.matchId));
@@ -620,7 +649,7 @@ function currentForecast(config = OFFICIAL_FORECAST_CONFIG, profileAnswers = nul
   const answers = Object.fromEntries(db.prepare("SELECT pair_key, probability FROM answers").all().map((row) => [row.pair_key, row.probability]));
   const selectedAnswers = profileAnswers ?? answers;
   const matches = db.prepare("SELECT * FROM matches ORDER BY round, id").all();
-  const stats = JSON.parse(readFileSync(path.resolve("public/team-stats.json"), "utf8"));
+  const stats = loadJson(resolvePublicArtifact("team-stats.json"));
   const probabilities = buildForecastSource({ answers: selectedAnswers, stats, matches, mode: config.forecastMode, opinionWeight: config.opinionWeight });
   return { answers: selectedAnswers, matches, stats, config, probabilities };
 }
@@ -728,7 +757,7 @@ function snapshotExportBundle(requestedId) {
   const rows = db.prepare("SELECT * FROM prediction_snapshots WHERE root_snapshot_id=? OR id=? ORDER BY created_at,id").all(rootId, rootId).map(parsedSnapshotRow);
   const root = rows.find((row) => Number(row.id) === rootId) ?? requested;
   const allMatches = db.prepare("SELECT * FROM matches ORDER BY round,id").all();
-  const stats = JSON.parse(readFileSync(path.resolve("public/team-stats.json"), "utf8"));
+  const stats = loadJson(resolvePublicArtifact("team-stats.json"));
   const forecasts = rows.map((snapshot) => {
     const trace = snapshot.diagnostics ?? buildSnapshotCalculationTrace({
       snapshotId: snapshot.id,
@@ -852,7 +881,7 @@ function normalizedSimulationConfig(value = {}, kind = "manual") {
 }
 
 function forecastStatsState() {
-  const statsPath = path.resolve("public/team-stats.json");
+  const statsPath = resolvePublicArtifact("team-stats.json");
   const contents = readFileSync(statsPath);
   const stats = JSON.parse(contents.toString("utf8"));
   return {
@@ -1949,7 +1978,7 @@ const server = createServer(async (req, res) => {
       if (existing && existing.picksHash !== picksHash) return json(res, 409, { error: "frozen_draft_mismatch" });
       if (!existing) {
         try {
-          const calculated = calculateActiveDraftPrediction({ draftStats: loadJson("public/draft-stats.json"), teamStats: loadJson("public/team-stats.json"), game });
+          const calculated = calculateActiveDraftPrediction({ draftStats: loadJson(resolvePublicArtifact("draft-stats.json")), teamStats: loadJson(resolvePublicArtifact("team-stats.json")), game });
           persistCalculatedDraft(game, calculated, now(), picksHash);
         } catch (error) {
           console.error("Authoritative draft prediction failed:", error);
@@ -2175,6 +2204,7 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`TI Predictor API listening on ${PORT}; database ${DB_PATH}`);
+  seedPublicArtifacts();
   db.prepare(`UPDATE automation_jobs SET status='pending',lease_until=NULL,lease_token=NULL,updated_at=?
     WHERE job_type='forecast' AND status='leased' AND (lease_until IS NULL OR lease_until < ?) AND superseded_by IS NULL AND cancel_requested_at IS NULL`)
     .run(now(), now());

@@ -254,7 +254,8 @@ test("active draft prediction is server-calculated, validates picks and preserve
   assert.ok(Number.isFinite(nanSafe.probabilityRadiant) && nanSafe.probabilityRadiant >= .01 && nanSafe.probabilityRadiant <= .99);
 
   const api = await readFile("server/api.mjs", "utf8");
-  assert.match(api, /calculateActiveDraftPrediction\(\{ draftStats: loadJson\("public\/draft-stats\.json"\), teamStats: loadJson\("public\/team-stats\.json"\), game \}\)/);
+  assert.match(api, /calculateActiveDraftPrediction\(\{ draftStats: loadJson\(resolvePublicArtifact\("draft-stats\.json"\)\), teamStats: loadJson\(resolvePublicArtifact\("team-stats\.json"\)\), game \}\)/);
+  assert.match(api, /function seedPublicArtifacts/);
   assert.match(api, /function persistCalculatedDraft/);
   assert.match(api, /finiteDraftProbability/);
   assert.match(api, /existing && existing\.picksHash !== picksHash/);
@@ -1060,7 +1061,9 @@ test("production image exposes next-generation artifacts without activating shad
   const dockerfile = await readFile("Dockerfile", "utf8");
   const compose = await readFile("docker-compose.yml", "utf8");
   const api = await readFile("server/api.mjs", "utf8");
-  for (const file of ["all-pro-team-model.json", "draft-nextgen-model.json", "nextgen-series-calibration.json", "live-map-model.json"]) assert.match(dockerfile, new RegExp(file.replaceAll(".", "\\.")));
+  for (const file of ["all-pro-team-model.json", "draft-nextgen-model.json", "nextgen-series-calibration.json", "live-map-model.json", "draft-stats.json", "team-stats.json"]) assert.match(dockerfile, new RegExp(file.replaceAll(".", "\\.")));
+  assert.match(compose, /DRAFT_STATS: \/app\/model\/draft-stats\.json/);
+  assert.match(compose, /TEAM_STATS: \/app\/model\/team-stats\.json/);
   assert.match(compose, /ALL_PRO_TEAM_MODEL: \/app\/model\/all-pro-team-model\.json/);
   assert.match(compose, /LIVE_MAP_MODEL: \/app\/model\/live-map-model\.json/);
   assert.match(api, /\/api\/models\/nextgen/);
