@@ -1,5 +1,16 @@
 # Полный аудит моделей и математических решений — 12 августа 2026
 
+## Повторная chronological validation — 15 августа 2026
+
+Первый этап повторён после устранения evaluator/runtime drift.
+
+- **Online tournament update:** evaluator теперь вызывает тот же регуляризованный Bradley–Terry updater, что production, и делает прогноз строго до добавления результата серии. Выбор сделан на первых 20 турнирах / 273 сериях, gate — на последних 6 турнирах / 144 сериях. Candidate `liveGlobal=0.4` улучшил log loss `0.671205 → 0.655942` и Brier `0.239194 → 0.231656`; tournament-cluster CI дельты LL `[-0.028245; -0.005913]`, но series-cluster CI `[-0.041539; +0.011502]`. Полный gate не пройден: MAIN `liveGlobal=0`, candidate остаётся shadow. Неиспользуемый `liveRematch` удалён из схемы.
+- **Tournament form uncertainty:** SD оценивался непосредственно в logit space как один латентный team shock на турнир, с Gauss–Hermite интегрированием marginal probability; probability residual не переводился в logit и safety cap не использовался как optimum. Inner grid выбрал `formLogitSd=0`; holdout delta LL/Brier равна нулю, обе upper95 равны нулю. MAIN `formLogitSd=0`; сетка чувствительности сохранена.
+- **Live-map:** rich dataset пересобран с leakage-safe active-formula prequential OOF prior, совпадающим с serving prior настолько, насколько позволяют исторические данные. Split строго хронологический и grouped by series: 612/141/189 series, 3299/831/1109 snapshots. На test log loss `0.655074 → 0.527295`, Brier `0.231204 → 0.179156`; map-cluster CI `[-0.163658; -0.092118]`, series-cluster CI `[-0.162425; -0.092141]`. Gates также пройдены отдельно на 10/15/20 минутах; upper95 соответственно `-0.036837`, `-0.071345`, `-0.162086`. Статус `ACTIVE`: между контрольными точками 10–20 минут используется только интерполяция непрерывной формулы и она отдельно помечается в runtime metadata. После 20:00 validation claim отсутствует, runtime не экстраполирует validated probability.
+- Все входные OOF/model artifacts снабжены SHA-256 provenance. Temporal и nextgen остаются inactive/shadow: этот этап не менял их gates и не активировал их.
+
+Ограничение online gate: tournament bootstrap на holdout содержит только 6 кластеров. Поэтому отрицательный tournament CI не отменяет положительную series upper95; безопасный итог — shadow.
+
 ## Итог
 
 Система технически воспроизводима, но не все показанные числа имеют одинаковый статус.

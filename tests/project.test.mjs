@@ -8,7 +8,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { completedSeriesFromMaps } from "../server/live-series.mjs";
 import { liveDraftsFromOpenDota } from "../server/live-drafts.mjs";
 import { scheduledSeriesFromCybersportHtml } from "../server/schedule-source.mjs";
-import { buildForecastSource, ROUND_ONE, runForecast, SWISS_GROUPS, SWISS_GROUP_BY_TEAM, swissBucketKey, topGroupScenarios } from "../server/forecast-engine.mjs";
+import { buildForecastSource, resolveTournamentCalibration, ROUND_ONE, runForecast, SWISS_GROUPS, SWISS_GROUP_BY_TEAM, swissBucketKey, topGroupScenarios } from "../server/forecast-engine.mjs";
 import { calculateActiveDraftPrediction } from "../server/active-draft-service.mjs";
 import { combineDraftSignals } from "../server/draft-combiner.mjs";
 import { predictTemporalDraft } from "../server/draft-inference.mjs";
@@ -18,7 +18,7 @@ import { externalFeatureDecision, pearsonCorrelation } from "../server/external-
 import { normalizeDatdotaPayload } from "../scripts/sync-datdota-source.mjs";
 import { predictionDecision, sharpenProbability } from "../server/prediction-decision.mjs";
 import { latestOfficialBaseline, latestSnapshotForHistoryRow, visibleSnapshotHistory } from "../server/snapshot-history.mjs";
-import { seriesEvidenceWeight, updateProbabilitiesWithLiveSeries } from "../server/live-team-update.mjs";
+import { evaluateLiveSeriesChronologically, seriesEvidenceWeight, updateProbabilitiesWithLiveSeries } from "../server/live-team-update.mjs";
 import { buildSnapshotCalculationTrace } from "../server/forecast-diagnostics.mjs";
 import { assessLiveMap, estimateLiveMap } from "../server/live-map-prediction.mjs";
 import { combinedSeriesForecast, exactSeriesScores, orientedProbability } from "../server/combined-forecast.mjs";
@@ -49,6 +49,20 @@ async function waitForHealth(baseUrl, child) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error("API health check timed out");
+}
+
+async function waitForForecastJob(baseUrl, jobId, { cookie = "", timeoutMs = 15_000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const response = await fetch(`${baseUrl}/api/forecast/jobs/${encodeURIComponent(jobId)}`, {
+      headers: cookie ? { cookie } : {},
+    });
+    assert.equal(response.status, 200);
+    const { job } = await response.json();
+    if (["ready", "error", "canceled"].includes(job.status)) return job;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`forecast job ${jobId} did not finish within ${timeoutMs}ms`);
 }
 
 test("combined series forecast exposes exact map scores without leaking live state into future maps", () => {
@@ -314,6 +328,47 @@ test("online TI layer values 2-0 above 2-1 and propagates opponent strength", ()
   assert.ok(network["c|d"] < 50);
 });
 
+test("online evaluator emits production-identical predictions before update", () => {
+  const rows = [
+    { seriesId: "1", leagueId: 9, startTime: 1, targetLineup: "a", opponentLineup: "b", wins: 2, losses: 0, outcome: 1, frozen: .5 },
+    { seriesId: "2", leagueId: 9, startTime: 2, targetLineup: "a", opponentLineup: "c", wins: 1, losses: 2, outcome: 0, frozen: .5 },
+  ];
+  const evaluated = evaluateLiveSeriesChronologically(rows, { liveGlobal: .3, probabilityFor: (row) => row.frozen });
+  const production = updateProbabilitiesWithLiveSeries(
+    { "a|b": 50, "a|c": 50 },
+    [{ team_a: "a", team_b: "b", winner: "a", score_a: 2, score_b: 0 }],
+    { liveGlobal: .3 },
+  );
+  assert.equal(evaluated[0].probability, .5);
+  assert.ok(Math.abs(evaluated[1].probability - production["a|c"] / 100) < 1e-12);
+});
+
+test("tournament runtime activates only individually passed gates", () => {
+  const stats = {
+    tournamentCalibration: {
+      selected: { liveGlobal: .2, probabilityTemperature: 1, formLogitSd: .16, seriesNoiseLogitSd: 0 },
+      shadow: { liveGlobal: .3, formLogitSd: .28 },
+      validation: { gates: { onlineUpdate: { passed: false }, formUncertainty: { passed: false } } },
+    },
+  };
+  assert.deepEqual(resolveTournamentCalibration(stats), {
+    liveGlobal: 0,
+    probabilityTemperature: 1,
+    formLogitSd: 0,
+    seriesNoiseLogitSd: 0,
+    shadowLiveGlobal: .3,
+    shadowFormLogitSd: .28,
+  });
+});
+
+test("tournament calibration replays the production updater before every outcome", async () => {
+  const calibration = await readFile("scripts/calibrate-tournament-variance.mjs", "utf8");
+  assert.match(calibration, /import \{ evaluateLiveSeriesChronologically \} from "\.\.\/server\/live-team-update\.mjs"/);
+  assert.match(calibration, /evaluateLiveSeriesChronologically\(data,\s*\{[\s\S]*probabilityFor: \(row\) => row\[selectedModelId\]/);
+  assert.match(calibration, /predictionsStrictlyBeforeUpdate: true/);
+  assert.match(calibration, /evaluator: "server\/live-team-update\.mjs#evaluateLiveSeriesChronologically"/);
+});
+
 test("current TI results have one shared update path and appear in team history", async () => {
   const page = await readFile("app/page.tsx", "utf8");
   const engine = await readFile("server/forecast-engine.mjs", "utf8");
@@ -332,7 +387,11 @@ test("saved forecast diagnostics freeze coefficients, pair decomposition and liv
     periodStart: "2025-08-10T00:00:00.000Z",
     totals: { uniqueAcceptedGames: 500 },
     methodology: { recencyHalfLifeDays: 45, seriesInformation: { multiMapBase: .72, decisiveBonus: .28 } },
-    tournamentCalibration: { selected: { liveGlobal: .3 } },
+    tournamentCalibration: {
+      selected: { liveGlobal: .3, probabilityTemperature: 1, formLogitSd: 0, seriesNoiseLogitSd: 0 },
+      shadow: { liveGlobal: .3, formLogitSd: 0 },
+      validation: { gates: { onlineUpdate: { passed: true }, formUncertainty: { passed: false } } },
+    },
     pairwise: { "aurora|gamerlegion": { probabilityA: 61, directEffectiveGames: 2, modelEffectiveGames: 18, source: "head_to_head_and_indirect", confidence: "medium", uncertainty: .2, featureContributions: { commonOpponentsPp: 7, headToHeadPp: 3, rosterPp: 1 } } },
   };
   const matches = [{ id: 7, stage: "swiss", round: 1, team_a: "aurora", team_b: "gamerlegion", winner: "aurora", score_a: 2, score_b: 0, created_at: "2026-08-13T00:00:00.000Z", updated_at: "2026-08-13T01:00:00.000Z" }];
@@ -435,7 +494,10 @@ test("statistics contain every TI matchup and calibrated methodology", async () 
   assert.equal(stats.validation.status, "experimental");
   assert.ok(stats.validation.selected.logLoss < stats.validation.neutral.logLoss);
   assert.equal(stats.methodology.teamPrior.artifact, "/team-model.json");
-  assert.equal(stats.tournamentCalibration.validation.validated, stats.tournamentCalibration.holdout.bootstrap.upper95 < 0);
+  assert.equal(stats.tournamentCalibration.schemaVersion, 3);
+  assert.equal(stats.tournamentCalibration.selected.liveGlobal > 0, stats.tournamentCalibration.validation.gates.onlineUpdate.passed);
+  assert.equal(stats.tournamentCalibration.selected.formLogitSd > 0, stats.tournamentCalibration.validation.gates.formUncertainty.passed);
+  assert.equal("liveRematch" in stats.tournamentCalibration.selected, false);
   assert.equal(stats.tournamentCalibration.selected.seriesNoiseLogitSd, 0);
   assert.deepEqual(stats.methodology.rosterWeights, { 3: 0.07, 4: 0.25, 5: 1 });
   assert.equal(stats.methodology.directMatchPriorSeries, 6);
@@ -533,7 +595,7 @@ test("OpenDota live feed becomes a partial TI draft and rejects stale games", ()
   assert.deepEqual(liveDraftsFromOpenDota(rows, { nowSeconds: 1_301 }), []);
 });
 
-test("live map model is side-symmetric, waits for 10:00 and raises the leading side", async () => {
+test("live map model distinguishes validated checkpoints from interpolation and never extrapolates after 20", async () => {
   const model = JSON.parse(await readFile("public/live-map-model.json", "utf8"));
   const baseGame = { phase: "game", gameTime: 15 * 60, radiantLead: 5_000, radiantScore: 14, direScore: 8, radiantTeam: "falcons", direTeam: "parivision", lastUpdateAt: new Date().toISOString() };
   const radiant = estimateLiveMap(model, { draftProbabilityRadiant: 0.55, game: baseGame });
@@ -541,8 +603,23 @@ test("live map model is side-symmetric, waits for 10:00 and raises the leading s
   assert.ok(radiant.liveProbabilityRadiant > 0.55);
   assert.ok(Math.abs(radiant.liveProbabilityRadiant + flipped.liveProbabilityRadiant - 1) < 1e-12);
   assert.equal(estimateLiveMap(model, { draftProbabilityRadiant: 0.55, game: { ...baseGame, gameTime: 599 } }).liveProbabilityRadiant, null);
+  assert.deepEqual(Object.keys(model.validation.minuteGates).map(Number), [10, 15, 20]);
+  for (const minute of [10, 15, 20]) {
+    const estimate = estimateLiveMap(model, { draftProbabilityRadiant: 0.55, game: { ...baseGame, gameTime: minute * 60 } });
+    assert.equal(model.validation.minuteGates[String(minute)], true);
+    assert.equal(estimate.availability, "validated_fixed_window");
+    assert.ok(Number.isFinite(estimate.liveProbabilityRadiant));
+  }
+  const interpolatedMinute = estimateLiveMap(model, { draftProbabilityRadiant: 0.55, game: { ...baseGame, gameTime: 12 * 60 } });
+  assert.equal(interpolatedMinute.availability, "validated_window_interpolation");
+  assert.ok(Number.isFinite(interpolatedMinute.liveProbabilityRadiant));
+  const afterValidatedRange = estimateLiveMap(model, { draftProbabilityRadiant: 0.55, game: { ...baseGame, gameTime: 21 * 60 } });
+  assert.equal(afterValidatedRange.availability, "outside_validated_range_after_20");
+  assert.equal(afterValidatedRange.liveProbabilityRadiant, null);
   assert.equal(assessLiveMap({ ...baseGame, gameTime: 20 * 60, radiantLead: 16_000 }).guard, "state_already_decided");
   assert.ok(model.test.model.logLoss < model.test.frozenPrior.logLoss);
+  assert.equal(model.validation.gatePassed, true);
+  assert.equal(model.provenance.servingPriorParity, true);
 });
 
 test("Draft Lab polls and binds the selected live draft", async () => {
@@ -682,11 +759,7 @@ test("server forecast can create an automatic snapshot payload", async () => {
   assert.equal(result.formatVersion, "hidden-groups-r1-r3-playoff-v7-partial-official-playins");
   assert.equal(result.convergence.stopReason, "fixed_budget");
   assert.equal(result.convergence.checkpoints.at(-1).iterations, 100);
-  assert.deepEqual(result.calibration, {
-    ...stats.tournamentCalibration.selected,
-    formLogitSd: 0,
-    shadowFormLogitSd: stats.tournamentCalibration.selected.formLogitSd,
-  });
+  assert.deepEqual(result.calibration, resolveTournamentCalibration(stats));
   assert.ok(Math.abs(result.teams.reduce((sum, team) => sum + team.champion, 0) - 100) < 1e-9);
   assert.ok(Math.abs(result.teams.reduce((sum, team) => sum + team.final, 0) - 200) < 1e-9);
   assert.ok(Math.abs(result.teams.reduce((sum, team) => sum + team.top3, 0) - 300) < 1e-9);
@@ -743,14 +816,16 @@ test("scenario UI never renders outcomes contradicted by known Swiss records", a
   assert.match(page, /старых вариантов отброшено как невозможные/);
 });
 
-test("official pairing changes are part of automatic snapshot deduplication", async () => {
+test("official pairing changes enqueue canonical scenario refresh jobs with deterministic live inputs", async () => {
   const api = await readFile("server/api.mjs", "utf8");
-  assert.match(api, /snapshot_kind=\? AND trigger=\?/);
   assert.match(api, /queueAutomaticSnapshot\(officialPairingTrigger\(\)\)/);
   assert.match(api, /auto_pairing_/);
   assert.match(api, /pendingAutomaticSnapshotTrigger/);
-  assert.match(api, /if \(autoForecastRunning\) \{[\s\S]*queueAutomaticSnapshot/);
-  assert.match(api, /liveConstraintSignature: liveConstraintSignature\(matches\)/);
+  assert.match(api, /for \(const weight of FORECAST_CANONICAL_WEIGHTS\) \{[\s\S]*enqueueForecastJob\(\{[\s\S]*kind: "scenario_refresh"/);
+  assert.match(api, /profile: \{ forecastMode: weight \? "mixed" : "stats", opinionWeight: weight, answers: weight \? canonicalAnswers : \{\} \}/);
+  assert.match(api, /matchesLiveSignature: liveConstraintSignature\(matches\)/);
+  assert.match(api, /const inputHash = createHash\("sha256"\)\.update\(stableJson\(seedMaterial\)\)\.digest\("hex"\)/);
+  assert.match(api, /const jobKey = `forecast:\$\{kind\}:\$\{input\.inputHash\}`/);
   assert.match(api, /officialSnapshotNeedsRefresh\(persistedMatches\)/);
   assert.match(api, /auto_reconcile/);
 });
@@ -787,21 +862,45 @@ test("forecast worker returns the same deterministic result as the engine", asyn
   const stats = JSON.parse(await readFile("public/team-stats.json", "utf8"));
   const probabilities = buildForecastSource({ answers: {}, stats, matches: [], mode: "stats", opinionWeight: 0 });
   const expected = runForecast(probabilities, 100, 987, { stats, matches: [] });
-  const actual = await new Promise((resolve, reject) => {
+  const { actual, progress } = await new Promise((resolve, reject) => {
     const worker = new Worker(new URL("../server/forecast-worker.mjs", import.meta.url), { workerData: { probabilities, minimum: 100, seed: 987, matches: [], stats, adaptive: null } });
-    worker.once("message", (message) => message.ok ? resolve(message.result) : reject(new Error(message.error)));
+    const progress = [];
+    worker.on("message", (message) => {
+      if (message?.progress) {
+        progress.push(message.progress);
+        return;
+      }
+      if (message?.ok === true) resolve({ actual: message.result, progress });
+      else reject(new Error(message?.error || "forecast_worker_failed"));
+    });
     worker.once("error", reject);
   });
+  assert.deepEqual(progress, [{ current: 0, total: 100 }, { current: 100, total: 100 }]);
   assert.deepEqual(actual.teams, expected.teams);
   assert.deepEqual(actual.convergence, expected.convergence);
 });
 
-test("manual Monte Carlo UI exposes adaptive, 500K and 1M budgets", async () => {
+test("forecast UI uses server jobs, polling, progress and authoritative snapshots", async () => {
   const page = await readFile("app/page.tsx", "utf8");
   const styles = await readFile("app/globals.css", "utf8");
   assert.match(page, /setAdaptiveRun\(true\)/);
   assert.match(page, /500000, 1000000/);
-  assert.match(page, /forecast-client-worker\.ts\?worker/);
+  assert.doesNotMatch(page, /forecast-client-worker/);
+  assert.doesNotMatch(page, /import\s+\{?\s*runForecast/);
+  assert.match(page, /fetch\("\/api\/forecast\/jobs",\s*\{[\s\S]*method: "POST"/);
+  assert.match(page, /fetch\(`\/api\/forecast\/jobs\/\$\{encodeURIComponent\(current\.id\)\}`/);
+  assert.match(page, /fetch\(`\/api\/forecast\/jobs\/\$\{encodeURIComponent\(jobId\)\}`,\s*\{ method: "DELETE"/);
+  assert.match(page, /kind: "scenario_refresh"/);
+  assert.match(page, /kind: "manual"/);
+  assert.match(page, /kind: "conditional"/);
+  assert.match(page, /while \(!\["ready", "error", "canceled"\]\.includes\(current\.status\)\)/);
+  assert.match(page, /window\.setTimeout\(resolve, 750\)/);
+  assert.match(page, /update\.progress\.current\.toLocaleString\("ru-RU"\).*update\.progress\.total\.toLocaleString\("ru-RU"\)/);
+  assert.match(page, /kind: update\.status === "queued" \? "queued" : update\.status === "running" \? \(result \? "stale" : "running"\)/);
+  assert.match(page, /Показан предыдущий результат; сервер обновляет сценарии/);
+  assert.match(page, /completed\.result\?\.result/);
+  assert.match(page, /сохранил неизменяемый snapshot/);
+  assert.match(page, /server mode является единственным source of truth/);
   assert.match(page, /Прогон не выполнен:/);
   assert.match(page, /Готово:.*simulation\.iterations/s);
   assert.match(page, /simulation-status--\$\{simulationStatus\.kind\}/);
@@ -824,7 +923,6 @@ test("manual Monte Carlo UI exposes adaptive, 500K and 1M budgets", async () => 
   assert.match(page, /latestOfficialSnapshotIsCurrent/);
   assert.match(page, /selectedLatestSnapshotIsCurrent/);
   assert.match(page, /selectedRoot\?\.probabilities \?\?/);
-  assert.match(page, /runSimulationInWorker\(source, Math\.min\(iterationCount, 250_000\)/);
   assert.match(page, /Сыгранные исходы зафиксированы/);
 });
 
@@ -832,7 +930,8 @@ test("conditional branches freeze ratings and compare probabilistic outcomes", a
   const page = await readFile("app/page.tsx", "utf8");
   assert.doesNotMatch(page, /чемпион ветки/);
   assert.match(page, /КАК РЕЗУЛЬТАТ ИЗМЕНИТ ТУРНИРНЫЕ ШАНСЫ/);
-  assert.match(page, /runSimulationInWorker\(forecastSource, iterations, seed/);
+  assert.match(page, /kind: "conditional"[\s\S]*conditionalMatchId: match\.id/);
+  assert.match(page, /const \{ aWins, bWins, iterations = 50_000 \} = completed\.result \?\? \{\}/);
   assert.match(page, /Рейтинг команд заморожен/);
   assert.match(page, /Существенного влияния на чемпионство не обнаружено/);
 });
@@ -1023,6 +1122,146 @@ test("admin API rejects a series bet lock after its scheduled start", async () =
     });
     assert.equal(lock.status, 409);
     assert.deepEqual(await lock.json(), { error: "bet_subject_started" });
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\nAPI output:\n${output}`);
+  } finally {
+    child.kill();
+    if (child.exitCode === null) await new Promise((resolve) => child.once("exit", resolve));
+    await rm(dataDirectory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  }
+});
+
+test("forecast jobs enforce authorization, idempotency, read models, cancellation and server authority", { timeout: 45_000 }, async () => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), "ti2026-forecast-jobs-"));
+  const port = await availablePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const child = spawn(process.execPath, ["server/api.mjs"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      API_PORT: String(port),
+      DATA_DIR: dataDirectory,
+      ADMIN_USERNAME: "forecast-admin",
+      ADMIN_PASSWORD: "forecast-password",
+      LIVE_SYNC_ENABLED: "false",
+      LIVE_DRAFT_SYNC_ENABLED: "false",
+      SCHEDULE_SYNC_ENABLED: "false",
+      AUTO_SNAPSHOT_ITERATIONS: "10000",
+      AUTO_SNAPSHOT_MAX_ITERATIONS: "10000",
+      AUTO_SNAPSHOT_BATCH_SIZE: "10000",
+      FORECAST_JOB_MIN_ITERATIONS: "10000",
+      FORECAST_JOB_MAX_ITERATIONS: "10000",
+      FORECAST_JOB_POLL_MS: "100",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.on("data", (chunk) => { output += chunk; });
+  child.stderr.on("data", (chunk) => { output += chunk; });
+
+  const postJob = (payload, cookie = "") => fetch(`${baseUrl}/api/forecast/jobs`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}) },
+    body: JSON.stringify(payload),
+  });
+
+  try {
+    await waitForHealth(baseUrl, child);
+
+    for (const kind of ["manual", "conditional"]) {
+      const response = await postJob({ kind, conditionalMatchId: 1, simulation: { iterations: 10_000 } });
+      assert.equal(response.status, 401);
+      assert.deepEqual(await response.json(), { error: "admin_required" });
+    }
+
+    const login = await fetch(`${baseUrl}/api/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "forecast-admin", password: "forecast-password" }),
+    });
+    assert.equal(login.status, 200);
+    const cookie = login.headers.get("set-cookie")?.split(";")[0];
+    assert.ok(cookie);
+
+    const scenarioPayload = {
+      kind: "scenario_refresh",
+      profile: { forecastMode: "stats", opinionWeight: 0, answers: {} },
+      simulation: { iterations: 10_000, adaptive: false },
+      trigger: "integration_scenario_refresh",
+    };
+    const firstScenarioResponse = await postJob(scenarioPayload, cookie);
+    assert.ok([200, 202].includes(firstScenarioResponse.status));
+    const { job: firstScenario } = await firstScenarioResponse.json();
+    const duplicateScenarioResponse = await postJob(scenarioPayload, cookie);
+    assert.ok([200, 202].includes(duplicateScenarioResponse.status));
+    const { job: duplicateScenario } = await duplicateScenarioResponse.json();
+    assert.equal(duplicateScenario.id, firstScenario.id);
+    assert.equal(duplicateScenario.inputHash, firstScenario.inputHash);
+    assert.match(firstScenario.id, /^forecast:scenario_refresh:[a-f0-9]{64}$/);
+    assert.match(firstScenario.inputHash, /^[a-f0-9]{64}$/);
+
+    const scenarioStatusResponse = await fetch(`${baseUrl}/api/forecast/jobs/${encodeURIComponent(firstScenario.id)}`);
+    assert.equal(scenarioStatusResponse.status, 200);
+    const { job: scenarioStatus } = await scenarioStatusResponse.json();
+    assert.equal(scenarioStatus.kind, "scenario_refresh");
+    assert.ok(["queued", "running", "ready"].includes(scenarioStatus.status));
+    assert.deepEqual(Object.keys(scenarioStatus.progress).sort(), ["current", "total"]);
+
+    const buildingReadModelResponse = await fetch(`${baseUrl}/api/forecast/read-model?opinionWeight=0`);
+    assert.equal(buildingReadModelResponse.status, 200);
+    const { readModel: buildingReadModel } = await buildingReadModelResponse.json();
+    assert.equal(buildingReadModel.jobId, firstScenario.id);
+    assert.equal(buildingReadModel.buildingInputHash ?? buildingReadModel.inputHash, firstScenario.inputHash);
+    assert.ok(["running", "ready"].includes(buildingReadModel.status));
+
+    const completedScenario = await waitForForecastJob(baseUrl, firstScenario.id);
+    assert.equal(completedScenario.status, "ready");
+    assert.equal(completedScenario.progress.current, completedScenario.progress.total);
+    assert.equal(completedScenario.result.kind, "scenario_refresh");
+    assert.equal(completedScenario.result.result.iterations, 10_000);
+
+    const readyReadModelResponse = await fetch(`${baseUrl}/api/forecast/read-model?opinionWeight=0`);
+    assert.equal(readyReadModelResponse.status, 200);
+    const { readModel: readyReadModel } = await readyReadModelResponse.json();
+    assert.equal(readyReadModel.status, "ready");
+    assert.equal(readyReadModel.stale, false);
+    assert.equal(readyReadModel.inputHash, firstScenario.inputHash);
+    assert.equal(readyReadModel.payload.kind, "scenario_refresh");
+    assert.equal(readyReadModel.payload.result.iterations, 10_000);
+
+    const forgedClientResult = { forged: true, teams: [{ id: "client-owned" }] };
+    const manualResponse = await postJob({
+      kind: "manual",
+      profile: { forecastMode: "mixed", opinionWeight: 10, answers: {} },
+      simulation: { iterations: 10_000, adaptive: false },
+      result: forgedClientResult,
+      trigger: "integration_manual",
+    }, cookie);
+    assert.equal(manualResponse.status, 202);
+    const { job: manualJob } = await manualResponse.json();
+    const completedManual = await waitForForecastJob(baseUrl, manualJob.id, { cookie });
+    assert.equal(completedManual.status, "ready");
+    assert.equal(completedManual.result.kind, "manual");
+    assert.equal(completedManual.result.result.teams.length, 16);
+    assert.notDeepEqual(completedManual.result.result, forgedClientResult);
+    assert.equal("forged" in completedManual.result.result, false);
+
+    const cancelResponse = await postJob({
+      kind: "manual",
+      profile: { forecastMode: "personal", opinionWeight: 100, answers: { "1w|aurora": 61 } },
+      simulation: { iterations: 10_000, adaptive: false },
+      trigger: "integration_cancel",
+    }, cookie);
+    assert.equal(cancelResponse.status, 202);
+    const { job: cancelJob } = await cancelResponse.json();
+    const deleteResponse = await fetch(`${baseUrl}/api/forecast/jobs/${encodeURIComponent(cancelJob.id)}`, {
+      method: "DELETE",
+      headers: { cookie },
+    });
+    assert.equal(deleteResponse.status, 202);
+    const canceledJob = await waitForForecastJob(baseUrl, cancelJob.id, { cookie });
+    assert.equal(canceledJob.status, "canceled");
+    assert.equal(canceledJob.error, "canceled");
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.message : String(error)}\nAPI output:\n${output}`);
   } finally {

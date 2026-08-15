@@ -1,8 +1,6 @@
 ﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import ForecastClientWorker from "./forecast-client-worker.ts?worker";
-import { runForecast } from "../server/forecast-engine.mjs";
 import { assessPredictionConfidence } from "../server/prediction-confidence.mjs";
 import { predictionDecision } from "../server/prediction-decision.mjs";
 import { latestOfficialBaseline, latestSnapshotForHistoryRow, visibleSnapshotHistory } from "../server/snapshot-history.mjs";
@@ -160,11 +158,30 @@ type SimulationResult = {
 
 type ConditionalBranchAnalysis = {
   loading: boolean;
+  status?: ForecastJobStatus;
+  jobId?: string;
   error?: string;
   iterations?: number;
   noisePp?: number;
   aWins?: SimulationResult;
   bWins?: SimulationResult;
+};
+
+type ForecastJobStatus = "queued" | "running" | "ready" | "error" | "canceled";
+type ForecastJob = {
+  id: string;
+  kind: "scenario_refresh" | "manual" | "conditional";
+  status: ForecastJobStatus;
+  progress: { current: number; total: number };
+  snapshotId: number | null;
+  error: string | null;
+  result: null | {
+    result?: SimulationResult;
+    iterations?: number;
+    seed?: number;
+    aWins?: SimulationResult;
+    bWins?: SimulationResult;
+  };
 };
 
 type PredictionConfidence = ReturnType<typeof assessPredictionConfidence>;
@@ -548,11 +565,6 @@ function matchupProbability(
   return Math.min(0.9, Math.max(0.1, estimated));
 }
 
-function logit(p: number) {
-  const safe = Math.min(0.97, Math.max(0.03, p));
-  return Math.log(safe / (1 - safe));
-}
-
 function deterministicPairs(ids: string[], records: Record<string, { wins: number; losses: number; opponents: Set<string> }>, scores: Record<string, number>) {
   const ordered = [...ids].sort((a, b) => scores[b] - scores[a] || a.localeCompare(b));
   const solve = (remaining: string[]): { pairs: [string, string][]; cost: number } => {
@@ -668,33 +680,33 @@ function buildLikelyPlayoff(swiss: LikelyBracket, answers: AnswerMap, liveMatche
   return { qualifiers, stages: [{ name: "Верхняя сетка · 1/4", matches: uq }, { name: "Верхняя 1/2 · Нижняя R1", matches: [...us, ...lr1] }, { name: "Финалы сеток", matches: [...lr2, uf, ls, lf] }, { name: "Гранд-финал", matches: [gf] }] };
 }
 
-function runSimulation(
-  answers: AnswerMap,
-  iterations = 10000,
-  seed = Math.floor(Math.random() * 0xffffffff),
-  options: { liveMatches?: LiveMatch[]; statisticalModel?: StatisticalModel | null } = {},
-): SimulationResult {
-  return runForecast(answers, iterations, seed, { matches: options.liveMatches ?? [], stats: options.statisticalModel });
+async function enqueueForecastJob(payload: object, signal?: AbortSignal): Promise<ForecastJob> {
+  const response = await fetch("/api/forecast/jobs", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  const data = await response.json() as { job?: ForecastJob; error?: string };
+  if (!response.ok || !data.job) throw new Error(data.error || `forecast_enqueue_${response.status}`);
+  return data.job;
 }
 
-function runSimulationInWorker(
-  answers: AnswerMap,
-  iterations: number,
-  seed: number,
-  options: { liveMatches?: LiveMatch[]; statisticalModel?: StatisticalModel | null; adaptive?: boolean } = {},
-): Promise<SimulationResult> {
-  return new Promise((resolve, reject) => {
-    const worker = new ForecastClientWorker();
-    const cleanup = () => worker.terminate();
-    worker.onmessage = (event) => {
-      cleanup();
-      if (event.data?.ok) resolve(event.data.result as SimulationResult);
-      else reject(new Error(event.data?.error || "simulation_worker_failed"));
-    };
-    worker.onerror = (event) => { cleanup(); reject(new Error(event.message || "simulation_worker_failed")); };
-    const adaptive = options.adaptive ? { enabled: true, minIterations: 250_000, maxIterations: 1_000_000, batchSize: 250_000, tolerancePp: .1, stableChecksRequired: 2 } : null;
-    worker.postMessage({ answers, iterations, seed, matches: options.liveMatches ?? [], stats: options.statisticalModel, adaptive });
-  });
+async function waitForForecastJob(job: ForecastJob, onUpdate: (value: ForecastJob) => void, signal: AbortSignal): Promise<ForecastJob> {
+  let current = job;
+  onUpdate(current);
+  while (!["ready", "error", "canceled"].includes(current.status)) {
+    await new Promise<void>((resolve, reject) => {
+      const timer = window.setTimeout(resolve, 750);
+      signal.addEventListener("abort", () => { window.clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); }, { once: true });
+    });
+    const response = await fetch(`/api/forecast/jobs/${encodeURIComponent(current.id)}`, { cache: "no-store", signal });
+    if (!response.ok) throw new Error(`forecast_status_${response.status}`);
+    current = (await response.json() as { job: ForecastJob }).job;
+    onUpdate(current);
+  }
+  if (current.status !== "ready") throw new Error(current.error || current.status);
+  return current;
 }
 
 function iterationLabel(iterations: number) {
@@ -761,7 +773,7 @@ export default function Home() {
   const [result, setResult] = useState<SimulationResult | null>(null);
   const [activeBaselineSnapshot, setActiveBaselineSnapshot] = useState<PredictionSnapshot | null>(null);
   const [isCalculating, setIsCalculating] = useState(false);
-  const [simulationStatus, setSimulationStatus] = useState<{ kind: "idle" | "running" | "success" | "error"; message: string }>({ kind: "idle", message: "" });
+  const [simulationStatus, setSimulationStatus] = useState<{ kind: "idle" | "queued" | "running" | "ready" | "error" | "stale"; message: string }>({ kind: "idle", message: "" });
   const [view, setView] = useState<"all" | ForecastOutcome>("all");
   const [answersLoaded, setAnswersLoaded] = useState(false);
   const [backupMessage, setBackupMessage] = useState("");
@@ -786,6 +798,7 @@ export default function Home() {
   const [matchWinner, setMatchWinner] = useState("");
   const [matchStage, setMatchStage] = useState<"swiss" | "playin" | "playoff">("swiss");
   const previousLiveSignature = useRef<string | null>(null);
+  const activeJobControllers = useRef(new Map<string, AbortController>());
 
   const currentPair = ALL_PAIRS[questionIndex];
   const teamA = getTeam(currentPair[0]);
@@ -799,7 +812,7 @@ export default function Home() {
     : null;
   const selectedTeam = selectedTeamId ? getTeam(selectedTeamId) : null;
   const selectedTeamStats = selectedTeamId ? stats?.teams[selectedTeamId] : null;
-  const canEdit = !serverAvailable || Boolean(serverState?.isAdmin);
+  const canEdit = Boolean(serverAvailable && serverState?.isAdmin);
   const liveMatches = useMemo(() => serverState?.matches ?? [], [serverState?.matches]);
   const completedLiveMatches = useMemo(() => liveMatches.filter((match) => match.winner), [liveMatches]);
   const selectedTeamLiveMatches = useMemo(() => selectedTeamId ? completedLiveMatches.filter((match) => match.team_a === selectedTeamId || match.team_b === selectedTeamId).sort((a, b) => a.round - b.round || a.id - b.id) : [], [completedLiveMatches, selectedTeamId]);
@@ -908,8 +921,6 @@ export default function Home() {
         const backup = JSON.parse(fallback) as AnswerMap;
         if (Object.keys(backup).length > 0) parsed = backup;
       }
-      // Initial hydration from browser storage is intentionally performed once.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAnswers(parsed);
       const firstUnanswered = ALL_PAIRS.findIndex(([a, b]) => parsed[pairKey(a, b)] === undefined);
       const initialIndex = firstUnanswered === -1 ? 0 : firstUnanswered;
@@ -935,7 +946,7 @@ export default function Home() {
     setActiveBaselineSnapshot(latestOfficialSnapshot);
     setResult(latestOfficialSnapshot.result);
     try { window.localStorage.setItem("ti26-official-baseline", JSON.stringify(latestOfficialSnapshot)); } catch { /* storage may be unavailable */ }
-  }, [latestOfficialSnapshot?.id, selectedRunId]);
+  }, [latestOfficialSnapshot, selectedRunId]);
 
   const loadServerState = async () => {
     try {
@@ -951,11 +962,17 @@ export default function Home() {
   };
 
   useEffect(() => {
-    // The first request and subsequent interval synchronize an external API state.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadServerState();
     const timer = window.setInterval(() => void loadServerState(), 60_000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => () => {
+    for (const [jobId, controller] of activeJobControllers.current) {
+      controller.abort();
+      void fetch(`/api/forecast/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE", keepalive: true });
+    }
+    activeJobControllers.current.clear();
   }, []);
 
   useEffect(() => {
@@ -983,21 +1000,36 @@ export default function Home() {
     previousLiveSignature.current = scenarioRefreshSignature;
     if (!liveConstraintSignature) return;
     if (selectedRoot ? selectedLatestSnapshotIsCurrent : forecastMode === "stats" && latestOfficialSnapshotIsCurrent) return;
-    const baseSource = selectedRoot?.probabilities ?? (forecastMode === "stats" ? statisticalAnswers(stats) : forecastMode === "mixed" ? mixedAnswers(answers, stats, opinionWeight) : answers);
-    const source = applyLiveEvidence(baseSource, completedLiveMatches, stats);
-    let cancelled = false;
-    setSimulationStatus({ kind: "running", message: "Появились новые пары или результаты — обновляю сценарии…" });
-    void runSimulationInWorker(source, Math.min(iterationCount, 250_000), Math.floor(Math.random() * 0xffffffff), { liveMatches, statisticalModel: stats })
-      .then((simulation) => {
-        if (cancelled) return;
-        setResult(simulation);
-        setSimulationStatus({ kind: "success", message: `Сценарии обновлены по ${completedLiveMatches.length} завершённым сериям. Сыгранные исходы зафиксированы.` });
-      })
-      .catch(() => {
-        if (!cancelled) setSimulationStatus({ kind: "error", message: "Не удалось обновить сценарии в браузере; ожидаю автоматический серверный прогон." });
-      });
-    return () => { cancelled = true; };
-  }, [answers, answersLoaded, completedLiveMatches, forecastMode, iterationCount, latestOfficialSnapshotIsCurrent, liveConstraintSignature, liveMatches, opinionWeight, selectedLatestSnapshotIsCurrent, selectedRoot, stats]);
+    const controller = new AbortController();
+    let jobId: string | null = null;
+    setSimulationStatus({ kind: result ? "stale" : "queued", message: result ? "Показан предыдущий результат; сервер обновляет сценарии…" : "Сервер поставил обновление сценариев в очередь…" });
+    void enqueueForecastJob({
+      kind: "scenario_refresh",
+      profile: { forecastMode, opinionWeight, answers },
+      rootSnapshotId: selectedRoot?.id ?? null,
+      simulation: { iterations: Math.min(iterationCount, 250_000), adaptive: false },
+      trigger: "browser_scenario_refresh",
+    }, controller.signal).then(async (job) => {
+      jobId = job.id;
+      activeJobControllers.current.set(job.id, controller);
+      const completed = await waitForForecastJob(job, (update) => {
+        setSimulationStatus({
+          kind: update.status === "queued" ? "queued" : update.status === "running" ? (result ? "stale" : "running") : update.status === "ready" ? "ready" : "error",
+          message: update.status === "queued" ? "Обновление ожидает серверный worker…" : update.status === "running" ? `Сервер считает сценарии: ${update.progress.current.toLocaleString("ru-RU")} / ${update.progress.total.toLocaleString("ru-RU")}` : update.status === "ready" ? "Серверный прогноз готов." : update.error || "Не удалось обновить сценарии.",
+        });
+      }, controller.signal);
+      if (completed.result?.result) setResult(completed.result.result);
+      await loadServerState();
+      setSimulationStatus({ kind: "ready", message: `Сценарии обновлены по ${completedLiveMatches.length} завершённым сериям. Сыгранные исходы зафиксированы сервером.` });
+    }).catch((error) => {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setSimulationStatus({ kind: "error", message: `Серверный прогон не выполнен: ${error instanceof Error ? error.message : String(error)}.` });
+    }).finally(() => { if (jobId) activeJobControllers.current.delete(jobId); });
+    return () => {
+      controller.abort();
+      if (jobId) void fetch(`/api/forecast/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE", keepalive: true });
+    };
+  }, [answers, answersLoaded, completedLiveMatches, forecastMode, iterationCount, latestOfficialSnapshotIsCurrent, liveConstraintSignature, liveMatches, opinionWeight, result, selectedLatestSnapshotIsCurrent, selectedRoot, stats]);
 
   useEffect(() => {
     if (!selectedTeamId) return;
@@ -1039,61 +1071,77 @@ export default function Home() {
     if (nextUnanswered !== null) moveToQuestion(nextUnanswered);
   };
 
-  const calculate = () => {
+  const calculate = async () => {
     setActiveBaselineSnapshot(null);
     const requestedIterations = adaptiveRun ? 250_000 : iterationCount;
-    const startedAt = performance.now();
     setIsCalculating(true);
     setSimulationStatus({
-      kind: "running",
+      kind: "queued",
       message: adaptiveRun
-        ? "Запущен адаптивный расчёт: первая проверка после 250 000 турниров. Не закрывайте вкладку."
-        : `Запущен расчёт ${requestedIterations.toLocaleString("ru-RU")} турниров. На телефоне 1M может занять больше минуты.`,
+        ? "Адаптивный расчёт поставлен в серверную очередь."
+        : `Расчёт ${requestedIterations.toLocaleString("ru-RU")} турниров поставлен в серверную очередь.`,
     });
-    window.setTimeout(async () => {
-      const baseSource = forecastMode === "stats"
-        ? statisticalAnswers(stats)
-        : forecastMode === "mixed"
-          ? mixedAnswers(answers, stats, opinionWeight)
-          : completePersonalAnswers(answers);
-      const source = applyLiveEvidence(baseSource, completedLiveMatches, stats);
-      const seed = Math.floor(Math.random() * 0xffffffff);
-      try {
-        const simulation = await runSimulationInWorker(source, adaptiveRun ? 250_000 : iterationCount, seed, { liveMatches, statisticalModel: stats, adaptive: adaptiveRun });
-        setResult(simulation);
-        const elapsedSeconds = Math.max(.1, (performance.now() - startedAt) / 1000);
-        setSimulationStatus({ kind: "success", message: `Готово: ${simulation.iterations.toLocaleString("ru-RU")} турниров за ${elapsedSeconds.toFixed(1)} сек. Результат обновлён ниже.` });
-        if (serverAvailable && serverState?.isAdmin) {
-          void fetch("/api/admin/snapshots", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ trigger: "manual_run", forecastMode, opinionWeight, answers, iterations: simulation.iterations, seed: simulation.seed, completedMatchCount: completedLiveMatches.length, modelGeneratedAt: stats?.generatedAt ?? null, probabilities: source, result: simulation }),
-          }).then((response) => response.ok ? loadServerState() : Promise.reject(new Error("snapshot")))
-            .catch(() => setAdminMessage("Прогон рассчитан, но не удалось сохранить его в историю."));
-        }
-        document.getElementById("forecast")?.scrollIntoView({ behavior: "smooth", block: "start" });
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        setSimulationStatus({ kind: "error", message: `Прогон не выполнен: ${detail}. Попробуйте AUTO или 250K; эта ошибка не изменила предыдущий результат.` });
-      } finally {
-        setIsCalculating(false);
-      }
-    }, 40);
+    const controller = new AbortController();
+    let jobId: string | null = null;
+    try {
+      const job = await enqueueForecastJob({
+        kind: "manual",
+        profile: { forecastMode, opinionWeight, answers },
+        simulation: {
+          iterations: requestedIterations,
+          adaptive: adaptiveRun,
+          maxIterations: adaptiveRun ? 1_000_000 : requestedIterations,
+          batchSize: adaptiveRun ? 250_000 : requestedIterations,
+          tolerancePp: .1,
+        },
+        trigger: "manual_run",
+      }, controller.signal);
+      jobId = job.id;
+      activeJobControllers.current.set(job.id, controller);
+      const completed = await waitForForecastJob(job, (update) => {
+        setSimulationStatus({
+          kind: update.status === "queued" ? "queued" : update.status === "running" ? "running" : update.status === "ready" ? "ready" : "error",
+          message: update.status === "queued" ? "Прогон ожидает свободный server worker…" : update.status === "running" ? `Сервер считает: ${update.progress.current.toLocaleString("ru-RU")} / ${update.progress.total.toLocaleString("ru-RU")}` : update.status === "ready" ? "Серверный snapshot готов." : update.error || "Ошибка серверного расчёта.",
+        });
+      }, controller.signal);
+      const simulation = completed.result?.result;
+      if (!simulation) throw new Error("forecast_result_missing");
+      setResult(simulation);
+      setSimulationStatus({ kind: "ready", message: `Готово: сервер рассчитал ${simulation.iterations.toLocaleString("ru-RU")} турниров и сохранил неизменяемый snapshot.` });
+      await loadServerState();
+      document.getElementById("forecast")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setSimulationStatus({ kind: "error", message: `Прогон не выполнен: ${detail}. Предыдущий результат не изменён.` });
+    } finally {
+      if (jobId) activeJobControllers.current.delete(jobId);
+      setIsCalculating(false);
+    }
   };
 
   const calculateConditionalBranches = async (match: LiveMatch) => {
-    setConditionalBranches((current) => ({ ...current, [match.id]: { loading: true } }));
-    const iterations = 50_000;
-    const seed = Math.floor(Math.random() * 0xffffffff);
-    const branchMatches = (winner: string) => liveMatches.map((item) => item.id === match.id ? { ...item, winner } : item);
+    setConditionalBranches((current) => ({ ...current, [match.id]: { loading: true, status: "queued" } }));
+    const controller = new AbortController();
+    let jobId: string | null = null;
     try {
-      const [aWins, bWins] = await Promise.all([
-        runSimulationInWorker(forecastSource, iterations, seed, { liveMatches: branchMatches(match.team_a), statisticalModel: stats }),
-        runSimulationInWorker(forecastSource, iterations, seed, { liveMatches: branchMatches(match.team_b), statisticalModel: stats }),
-      ]);
-      setConditionalBranches((current) => ({ ...current, [match.id]: { loading: false, iterations, noisePp: 2 * samplingMargin(iterations), aWins, bWins } }));
-    } catch {
-      setConditionalBranches((current) => ({ ...current, [match.id]: { loading: false, error: "Не удалось рассчитать условные ветки." } }));
+      const job = await enqueueForecastJob({
+        kind: "conditional",
+        profile: { forecastMode, opinionWeight, answers },
+        conditionalMatchId: match.id,
+        simulation: { iterations: 50_000 },
+      }, controller.signal);
+      jobId = job.id;
+      activeJobControllers.current.set(job.id, controller);
+      const completed = await waitForForecastJob(job, (update) => {
+        setConditionalBranches((current) => ({ ...current, [match.id]: { ...current[match.id], loading: true, status: update.status, jobId: update.id } }));
+      }, controller.signal);
+      const { aWins, bWins, iterations = 50_000 } = completed.result ?? {};
+      if (!aWins || !bWins) throw new Error("conditional_result_missing");
+      setConditionalBranches((current) => ({ ...current, [match.id]: { loading: false, status: "ready", jobId: completed.id, iterations, noisePp: 2 * samplingMargin(iterations), aWins, bWins } }));
+    } catch (error) {
+      setConditionalBranches((current) => ({ ...current, [match.id]: { loading: false, status: "error", error: `Не удалось рассчитать условные ветки: ${error instanceof Error ? error.message : String(error)}.` } }));
+    } finally {
+      if (jobId) activeJobControllers.current.delete(jobId);
     }
   };
 
@@ -1178,13 +1226,47 @@ export default function Home() {
     await loadServerState();
   };
 
+  const refreshPreviewAfterAnswers = async (nextAnswers: AnswerMap, trigger: string) => {
+    const saveResponse = await fetch("/api/admin/answers", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ answers: nextAnswers, replace: true }),
+    });
+    if (!saveResponse.ok) throw new Error("answers_save_failed");
+    const controller = new AbortController();
+    let jobId: string | null = null;
+    try {
+      const job = await enqueueForecastJob({
+        kind: "scenario_refresh",
+        profile: { forecastMode, opinionWeight, answers: nextAnswers },
+        simulation: { iterations: Math.min(iterationCount, 250_000), adaptive: false },
+        trigger,
+      }, controller.signal);
+      jobId = job.id;
+      activeJobControllers.current.set(job.id, controller);
+      const completed = await waitForForecastJob(job, (update) => {
+        setSimulationStatus({
+          kind: update.status === "queued" ? "queued" : update.status === "running" ? "running" : update.status === "ready" ? "ready" : "error",
+          message: update.status === "queued" ? "Server preview ожидает worker…" : update.status === "running" ? "Сервер пересчитывает preview…" : update.status === "ready" ? "Server preview готов." : update.error || "Ошибка server preview.",
+        });
+      }, controller.signal);
+      if (completed.result?.result) setResult(completed.result.result);
+      await loadServerState();
+    } finally {
+      if (jobId) activeJobControllers.current.delete(jobId);
+    }
+  };
+
   const resetAnswers = () => {
     if (!window.confirm("Сбросить все ваши оценки матчапов?")) return;
     setAnswers({});
     setQuestionIndex(0);
     setSlider(50);
     setActiveBaselineSnapshot(null);
-    setResult(runSimulation({}, 4000));
+    setSimulationStatus({ kind: "queued", message: "Ответы сброшены; запрашиваю server preview…" });
+    void refreshPreviewAfterAnswers({}, "answers_reset")
+      .then(() => setBackupMessage("Ответы сброшены, server preview обновлён"))
+      .catch((error) => setSimulationStatus({ kind: "error", message: `Не удалось обновить server preview: ${error instanceof Error ? error.message : String(error)}.` }));
   };
 
   const exportAnswers = () => {
@@ -1228,8 +1310,13 @@ export default function Home() {
     setAnswers(nextAnswers);
     const firstUnanswered = ALL_PAIRS.findIndex(([a, b]) => nextAnswers[pairKey(a, b)] === undefined);
     moveToQuestion(firstUnanswered === -1 ? 0 : firstUnanswered, nextAnswers);
-    setResult(runSimulation(nextAnswers, 4000));
-    setBackupMessage(`Загружено из CSV: ${Object.keys(imported).length} ответов`);
+    setSimulationStatus({ kind: "queued", message: "CSV загружен; запрашиваю server preview…" });
+    try {
+      await refreshPreviewAfterAnswers(nextAnswers, "answers_import");
+      setBackupMessage(`Загружено из CSV: ${Object.keys(imported).length} ответов; server preview готов`);
+    } catch (error) {
+      setSimulationStatus({ kind: "error", message: `CSV применён локально, но server preview не обновлён: ${error instanceof Error ? error.message : String(error)}.` });
+    }
     event.target.value = "";
   };
 
@@ -1301,7 +1388,7 @@ export default function Home() {
           ) : (
             <form className="admin-login" onSubmit={login}><input type="text" value={adminUsername} onChange={(event) => setAdminUsername(event.target.value)} placeholder="Логин" autoComplete="username" /><input type="password" value={adminPassword} onChange={(event) => setAdminPassword(event.target.value)} placeholder="Пароль администратора" autoComplete="current-password" /><button type="submit">Войти для редактирования</button><span>Просмотр доступен всем; изменения защищены.</span></form>
           )
-        ) : <p className="local-mode">Локальный режим: серверное API не запущено, редактирование и автосохранение работают только в этом браузере.</p>}
+        ) : <p className="local-mode">Серверное API недоступно. Прогнозы и редактирование приостановлены: server mode является единственным source of truth.</p>}
         {adminMessage && <p className="admin-message">{adminMessage}</p>}
         {scheduledLiveMatches.length > 0 && <div className="scheduled-results"><b>ОФИЦИАЛЬНО ОБЪЯВЛЕННЫЕ ПАРЫ</b>{scheduledLiveMatches.map((match) => <span key={match.id}>{match.stage === "swiss" ? "SW" : match.stage === "playin" ? "PI" : "PO"} R{match.round} · {getTeam(match.team_a).name} — {getTeam(match.team_b).name} · {match.predicted_probability === null ? "прогноз ещё не сохранён" : `зафиксировано ${getTeam(match.team_a).short} ${match.predicted_probability.toFixed(1)}%`}{match.scheduled_at ? ` · ${new Date(match.scheduled_at).toLocaleString("ru-RU")}` : ""}</span>)}</div>}
         {scheduledLiveMatches.length > 0 && <div className="hypothesis-grid"><div className="hypothesis-grid__head"><b>КАК РЕЗУЛЬТАТ ИЗМЕНИТ ТУРНИРНЫЕ ШАНСЫ</b><span>Рейтинг команд заморожен. Гипотеза меняет только победителя матча и дальнейшую сетку; вымышленный результат не попадает в данные или обучение.</span></div>{scheduledLiveMatches.slice(0, 8).map((match) => {
@@ -1314,7 +1401,7 @@ export default function Home() {
             return { id: team.id, a: team.champion, b: other.champion, delta: team.champion - other.champion };
           }).sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta)).slice(0, 3) : [];
           const meaningful = championChanges.some((item) => Math.abs(item.delta) > (analysis?.noisePp ?? Infinity));
-          return <article key={match.id}><header><strong>{getTeam(match.team_a).name} — {getTeam(match.team_b).name}</strong><small>{match.stage === "swiss" ? `SW R${match.round}` : match.stage === "playin" ? "СТЫК" : "ПЛЕЙ-ОФФ"}</small></header>{!analysis ? <button type="button" onClick={() => void calculateConditionalBranches(match)}>Сравнить две ветки</button> : analysis.loading ? <span>Считаю две ветки по 50 000…</span> : analysis.error ? <span>{analysis.error}</span> : <>
+          return <article key={match.id}><header><strong>{getTeam(match.team_a).name} — {getTeam(match.team_b).name}</strong><small>{match.stage === "swiss" ? `SW R${match.round}` : match.stage === "playin" ? "СТЫК" : "ПЛЕЙ-ОФФ"}</small></header>{!analysis ? <button type="button" disabled={!canEdit} onClick={() => void calculateConditionalBranches(match)}>{canEdit ? "Сравнить две ветки" : "Требуется администратор"}</button> : analysis.loading ? <span>{analysis.status === "queued" ? "Две ветки стоят в серверной очереди…" : "Сервер считает две ветки по 50 000…"}</span> : analysis.error ? <span>{analysis.error}</span> : <>
             <div className="branch-table"><b>ЕСЛИ ПОБЕДИТ</b><b>{getTeam(match.team_a).short}</b><b>{getTeam(match.team_b).short}</b><span>Проход {getTeam(match.team_a).short}</span><em>{aInA?.qualify.toFixed(1)}%</em><em>{aInB?.qualify.toFixed(1)}%</em><span>Проход {getTeam(match.team_b).short}</span><em>{bInA?.qualify.toFixed(1)}%</em><em>{bInB?.qualify.toFixed(1)}%</em></div>
             <div className="branch-impact"><b>ИЗМЕНЕНИЕ ШАНСА НА ЧЕМПИОНСТВО · {getTeam(match.team_a).short} ПОБЕДИЛА ПРОТИВ {getTeam(match.team_b).short} ПОБЕДИЛА</b>{meaningful ? championChanges.map((item) => <span key={item.id}><strong>{getTeam(item.id).name}</strong><em>{item.a.toFixed(2)}% → {item.b.toFixed(2)}%</em><i className={item.delta >= 0 ? "is-positive" : "is-negative"}>{item.delta >= 0 ? "+" : ""}{item.delta.toFixed(2)} п.п.</i></span>) : <span className="branch-no-effect">Существенного влияния на чемпионство не обнаружено: различия не превышают консервативный порог шума ±{analysis.noisePp?.toFixed(2)} п.п.</span>}</div>
             <small className="branch-method">{analysis.iterations?.toLocaleString("ru-RU")} прогонов на ветку · одинаковый seed · никаких изменений рейтинга или обучения</small>
@@ -1488,12 +1575,12 @@ export default function Home() {
                 {[10000, 50000, 100000, 250000, 500000, 1000000].map((count) => <button key={count} className={!adaptiveRun && iterationCount === count ? "active" : ""} onClick={() => { setAdaptiveRun(false); setIterationCount(count); }}>{iterationLabel(count)}</button>)}
               </div>
             </div>
-            <button className="calculate-button" onClick={calculate} disabled={isCalculating || (forecastMode !== "personal" && !stats)}>
+            <button className="calculate-button" onClick={() => void calculate()} disabled={!canEdit || isCalculating || (forecastMode !== "personal" && !stats)}>
               {isCalculating ? (adaptiveRun ? "Считаю до сходимости…" : `Считаю ${iterationCount.toLocaleString("ru-RU")} сеток…`) : "Запустить новый прогон"}
               <span>{isCalculating ? "···" : "↗"}</span>
             </button>
             {simulationStatus.kind !== "idle" && <p className={`simulation-status simulation-status--${simulationStatus.kind}`} role={simulationStatus.kind === "error" ? "alert" : "status"}>{simulationStatus.message}</p>}
-            <small>{adaptiveRun ? "AUTO: от 250 000 до 1 000 000; остановка после двух стабильных проверок с изменением ≤0,10 п.п." : `Фиксированный бюджет: ${iterationCount.toLocaleString("ru-RU")} полных турниров.`} Расчёт идёт в фоновом потоке и не должен блокировать интерфейс.</small>
+            <small>{adaptiveRun ? "AUTO: от 250 000 до 1 000 000; остановка после двух стабильных проверок с изменением ≤0,10 п.п." : `Фиксированный бюджет: ${iterationCount.toLocaleString("ru-RU")} полных турниров.`} Расчёт выполняет серверный worker; браузер только отслеживает состояние.</small>
             {displayedResult && <small className="stats-meta">Итоговых восьмёрок Swiss: {displayedResult.uniqueSwissOutcomes?.toLocaleString("ru-RU") ?? "—"}; вариантов подиума: {displayedResult.uniquePlayoffPodiums?.toLocaleString("ru-RU") ?? "—"}; полных итогов «восьмёрка + подиум»: {displayedResult.uniqueFinalOutcomes?.toLocaleString("ru-RU") ?? "—"}. Детальных путей всего турнира: {(displayedResult.uniqueTournamentPaths ?? displayedResult.uniqueBrackets).toLocaleString("ru-RU")} из {(displayedResult.pathSampleIterations ?? displayedResult.iterations).toLocaleString("ru-RU")} проверенных для уникальности ({(100 - (displayedResult.tournamentDuplicateRate ?? displayedResult.duplicateRate)).toFixed(3)}%). Это разные метрики: один итог может быть достигнут множеством разных жеребьёвок и результатов по раундам.</small>}
             {stats && <small className="stats-meta">{stats.totals.uniqueAcceptedGames} карт · одна контрольная карта на турнир · половина веса за {stats.methodology.recencyHalfLifeDays} дней</small>}
           </aside>

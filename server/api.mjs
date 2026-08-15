@@ -40,6 +40,14 @@ const AUTO_SNAPSHOT_MAX_ITERATIONS = Math.max(AUTO_SNAPSHOT_ITERATIONS, Number(p
 const AUTO_SNAPSHOT_BATCH_SIZE = Math.max(10_000, Number(process.env.AUTO_SNAPSHOT_BATCH_SIZE || AUTO_SNAPSHOT_ITERATIONS));
 const AUTO_SNAPSHOT_TOLERANCE_PP = Math.max(.01, Number(process.env.AUTO_SNAPSHOT_TOLERANCE_PP || .1));
 const OFFICIAL_FORECAST_CONFIG = Object.freeze({ forecastMode: "stats", opinionWeight: 0, iterations: AUTO_SNAPSHOT_ITERATIONS, adaptive: true, maxIterations: AUTO_SNAPSHOT_MAX_ITERATIONS, batchSize: AUTO_SNAPSHOT_BATCH_SIZE, tolerancePp: AUTO_SNAPSHOT_TOLERANCE_PP });
+const FORECAST_JOB_MIN_ITERATIONS = Math.max(10_000, Number(process.env.FORECAST_JOB_MIN_ITERATIONS || 10_000));
+const FORECAST_JOB_MAX_ITERATIONS = Math.max(FORECAST_JOB_MIN_ITERATIONS, Number(process.env.FORECAST_JOB_MAX_ITERATIONS || 1_000_000));
+const FORECAST_CONDITIONAL_ITERATIONS = Math.min(50_000, FORECAST_JOB_MAX_ITERATIONS);
+const FORECAST_JOB_LEASE_SECONDS = Math.max(30, Number(process.env.FORECAST_JOB_LEASE_SECONDS || 300));
+const FORECAST_JOB_POLL_MS = Math.max(100, Number(process.env.FORECAST_JOB_POLL_MS || 500));
+const FORECAST_JOB_MAX_ATTEMPTS = Math.max(1, Number(process.env.FORECAST_JOB_MAX_ATTEMPTS || 3));
+const FORECAST_SCENARIO_RATE_LIMIT = Math.max(1, Number(process.env.FORECAST_SCENARIO_RATE_LIMIT || 30));
+const FORECAST_CANONICAL_WEIGHTS = new Set([0, 10, 20, 30]);
 const TI_PLAYIN_START = Date.parse(process.env.TI_PLAYIN_START || "2026-08-16T00:00:00+08:00") / 1000;
 const TI_PLAYOFF_START = Date.parse(process.env.TI_PLAYOFF_START || "2026-08-20T00:00:00+08:00") / 1000;
 const DRAFT_TEMPORAL_MODEL = path.resolve(process.env.DRAFT_TEMPORAL_MODEL || "public/draft-temporal-model.json");
@@ -204,9 +212,42 @@ const snapshotColumns = new Set(db.prepare("PRAGMA table_info(prediction_snapsho
 for (const [name, definition] of Object.entries({ inputs_json: "TEXT", diagnostics_json: "TEXT", snapshot_kind: "TEXT NOT NULL DEFAULT 'original'", root_snapshot_id: "INTEGER", parent_snapshot_id: "INTEGER", profile_key: "TEXT" })) {
   if (!snapshotColumns.has(name)) db.exec(`ALTER TABLE prediction_snapshots ADD COLUMN ${name} ${definition}`);
 }
+const materializedViewColumns = new Set(db.prepare("PRAGMA table_info(materialized_views)").all().map((row) => row.name));
+for (const [name, definition] of Object.entries({
+  kind: "TEXT",
+  profile_key: "TEXT",
+  job_key: "TEXT",
+  building_input_hash: "TEXT",
+  snapshot_id: "INTEGER",
+  stale_since: "TEXT",
+  ready_at: "TEXT",
+})) {
+  if (!materializedViewColumns.has(name)) db.exec(`ALTER TABLE materialized_views ADD COLUMN ${name} ${definition}`);
+}
+const automationJobColumns = new Set(db.prepare("PRAGMA table_info(automation_jobs)").all().map((row) => row.name));
+for (const [name, definition] of Object.entries({
+  kind: "TEXT",
+  profile_key: "TEXT",
+  input_json: "TEXT",
+  progress_current: "INTEGER NOT NULL DEFAULT 0",
+  progress_total: "INTEGER NOT NULL DEFAULT 0",
+  result_json: "TEXT",
+  snapshot_id: "INTEGER",
+  lease_token: "TEXT",
+  superseded_by: "TEXT",
+  cancel_requested_at: "TEXT",
+  canceled_at: "TEXT",
+  trigger: "TEXT",
+  created_at: "TEXT",
+  started_at: "TEXT",
+  completed_at: "TEXT",
+})) {
+  if (!automationJobColumns.has(name)) db.exec(`ALTER TABLE automation_jobs ADD COLUMN ${name} ${definition}`);
+}
 db.exec("CREATE INDEX IF NOT EXISTS idx_prediction_snapshots_root ON prediction_snapshots(root_snapshot_id, completed_match_count DESC); CREATE INDEX IF NOT EXISTS idx_prediction_snapshots_profile ON prediction_snapshots(profile_key, completed_match_count DESC); CREATE INDEX IF NOT EXISTS idx_live_draft_snapshots_match ON live_draft_snapshots(match_id, observed_at DESC)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_tournament_maps_series ON tournament_maps(series_id,start_time,match_id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_bet_locks_created ON bet_locks(created_at DESC)");
+db.exec("CREATE INDEX IF NOT EXISTS idx_automation_jobs_claim ON automation_jobs(status,lease_until,created_at); CREATE INDEX IF NOT EXISTS idx_automation_jobs_profile ON automation_jobs(profile_key,created_at DESC); CREATE INDEX IF NOT EXISTS idx_materialized_views_profile ON materialized_views(kind,profile_key)");
 db.exec("PRAGMA optimize");
 
 let refreshProcess = null;
@@ -214,10 +255,13 @@ let liveSyncPromise = null;
 let liveDraftPromise = null;
 let liveDraftCache = { games: [], fetchedAt: null, error: null };
 let liveLeagueMapsCache = { maps: [], fetchedAt: null };
-let autoForecastRunning = false;
 let autoSnapshotTimer = null;
 let pendingAutomaticSnapshotTrigger = null;
+let forecastJobTimer = null;
+let forecastJobRunning = false;
+const activeForecastWorkers = new Map();
 const loginAttempts = new Map();
+const scenarioRequests = new Map();
 let temporalModelCache = { mtimeMs: -1, value: null };
 let liveMapModelCache = { mtimeMs: -1, value: null };
 const combinedMaterializationPromises = new Map();
@@ -437,7 +481,7 @@ function publicState() {
   try { lastSync = liveSyncRow ? { ...JSON.parse(liveSyncRow.value), updatedAt: liveSyncRow.updated_at } : null; } catch { lastSync = null; }
   return {
     answers, matches, snapshots, officialForecast: OFFICIAL_FORECAST_CONFIG, refresh, refreshRunning: Boolean(refreshProcess),
-    liveSync: { enabled: LIVE_SYNC_ENABLED, scheduleEnabled: SCHEDULE_SYNC_ENABLED, leagueId: TI_LEAGUE_ID, intervalMinutes: LIVE_SYNC_INTERVAL_MINUTES, running: Boolean(liveSyncPromise), lastSync, autoForecastRunning },
+    liveSync: { enabled: LIVE_SYNC_ENABLED, scheduleEnabled: SCHEDULE_SYNC_ENABLED, leagueId: TI_LEAGUE_ID, intervalMinutes: LIVE_SYNC_INTERVAL_MINUTES, running: Boolean(liveSyncPromise), lastSync, autoForecastRunning: Boolean(db.prepare("SELECT 1 FROM automation_jobs WHERE job_type='forecast' AND kind='scenario_refresh' AND status IN ('pending','leased') AND superseded_by IS NULL LIMIT 1").get()) },
   };
 }
 
@@ -605,61 +649,372 @@ function snapshotExportBundle(requestedId) {
   };
 }
 
-function runForecastWorker(payload) {
+function runForecastWorker(payload, onProgress = () => {}, jobKey = null) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("./forecast-worker.mjs", import.meta.url), { workerData: payload });
-    worker.once("message", (message) => message?.ok ? resolve(message.result) : reject(new Error(message?.error || "forecast_worker_failed")));
-    worker.once("error", reject);
-    worker.once("exit", (code) => { if (code !== 0) reject(new Error(`forecast_worker_exit_${code}`)); });
+    if (jobKey) activeForecastWorkers.set(jobKey, worker);
+    const cleanup = () => {
+      if (jobKey && activeForecastWorkers.get(jobKey) === worker) activeForecastWorkers.delete(jobKey);
+    };
+    worker.on("message", (message) => {
+      if (message?.progress) {
+        onProgress(message.progress);
+        return;
+      }
+      cleanup();
+      if (message?.ok) resolve(message.result);
+      else reject(new Error(message?.error || "forecast_worker_failed"));
+    });
+    worker.once("error", (error) => { cleanup(); reject(error); });
+    worker.once("exit", (code) => { cleanup(); if (code !== 0) reject(new Error(`forecast_worker_exit_${code}`)); });
   });
 }
 
-async function saveProfileSnapshot(trigger, config, profileAnswers, { kind = "original", rootId = null, parentId = null } = {}) {
-    const { matches, stats, probabilities } = currentForecast(config, profileAnswers);
-    const completedMatchCount = matches.filter((match) => match.winner).length;
-    const key = profileKey(config.forecastMode, config.opinionWeight, profileAnswers);
-    // A newly published pairing changes the forecast constraints without
-    // changing completed_match_count. Pairing triggers include a hash of all
-    // official scheduled series, so include the trigger in deduplication and
-    // do not accidentally reuse the pre-draw baseline.
-    const existing = db.prepare("SELECT id FROM prediction_snapshots WHERE profile_key=? AND completed_match_count=? AND snapshot_kind=? AND trigger=? ORDER BY id DESC LIMIT 1").get(key, completedMatchCount, kind, trigger);
-    if (existing) return Number(existing.id);
-    const seed = Math.floor(Date.now() % 0xffffffff);
-    const minimum = Number(config.iterations || AUTO_SNAPSHOT_ITERATIONS);
-    const adaptive = config.adaptive ? { enabled: true, minIterations: minimum, maxIterations: Number(config.maxIterations || AUTO_SNAPSHOT_MAX_ITERATIONS), batchSize: Number(config.batchSize || AUTO_SNAPSHOT_BATCH_SIZE), tolerancePp: Number(config.tolerancePp || AUTO_SNAPSHOT_TOLERANCE_PP), stableChecksRequired: 2 } : null;
-    const result = await runForecastWorker({ probabilities, minimum, seed, matches, stats, adaptive });
-    const id = insertSnapshot({ trigger, config, probabilities, result, stats, matches, inputs: { answers: profileAnswers, cutoffCompletedMatches: completedMatchCount, liveConstraintSignature: liveConstraintSignature(matches) }, kind, rootId, parentId, key });
-    audit("snapshot_saved", { id, trigger, completedMatchCount, kind, rootId, profileKey: key });
-    return id;
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+  return JSON.stringify(value);
 }
 
-async function saveAutomaticSnapshots(trigger) {
-  if (autoForecastRunning) return null;
-  autoForecastRunning = true;
+function validateForecastAnswers(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const entries = Object.entries(value);
+  if (entries.length > 120) throw new Error("too_many_answers");
+  if (entries.some(([key, probability]) => !/^[a-z0-9]+\|[a-z0-9]+$/.test(key) || !Number.isFinite(probability) || probability < 0 || probability > 100)) {
+    throw new Error("invalid_answers");
+  }
+  return Object.fromEntries(entries.sort(([left], [right]) => left.localeCompare(right)).map(([key, probability]) => [key, Number(probability)]));
+}
+
+function normalizedForecastProfile(value = {}) {
+  const forecastMode = ["personal", "mixed", "stats"].includes(value.forecastMode) ? value.forecastMode : "stats";
+  const opinionWeight = forecastMode === "stats" ? 0 : Math.round(Number(value.opinionWeight ?? (forecastMode === "personal" ? 100 : 10)));
+  if (!Number.isInteger(opinionWeight) || opinionWeight < 0 || opinionWeight > 100) throw new Error("invalid_opinion_weight");
+  return { forecastMode, opinionWeight, answers: validateForecastAnswers(value.answers) };
+}
+
+function normalizedSimulationConfig(value = {}, kind = "manual") {
+  const adaptive = kind !== "conditional" && Boolean(value.adaptive);
+  const iterations = kind === "conditional" ? FORECAST_CONDITIONAL_ITERATIONS : Number(value.iterations || (adaptive ? Math.min(250_000, FORECAST_JOB_MAX_ITERATIONS) : AUTO_SNAPSHOT_ITERATIONS));
+  if (!Number.isInteger(iterations) || iterations < FORECAST_JOB_MIN_ITERATIONS || iterations > FORECAST_JOB_MAX_ITERATIONS) throw new Error("invalid_iterations");
+  const maxIterations = adaptive ? Math.min(FORECAST_JOB_MAX_ITERATIONS, Number(value.maxIterations || AUTO_SNAPSHOT_MAX_ITERATIONS)) : iterations;
+  const batchSize = adaptive ? Math.min(maxIterations, Math.max(FORECAST_JOB_MIN_ITERATIONS, Number(value.batchSize || AUTO_SNAPSHOT_BATCH_SIZE))) : iterations;
+  const tolerancePp = adaptive ? Number(value.tolerancePp || AUTO_SNAPSHOT_TOLERANCE_PP) : null;
+  if (!Number.isInteger(maxIterations) || maxIterations < iterations || !Number.isInteger(batchSize) || !Number.isFinite(tolerancePp ?? 0) || (tolerancePp !== null && (tolerancePp < .01 || tolerancePp > 5))) throw new Error("invalid_simulation_config");
+  return { iterations, adaptive, maxIterations, batchSize, tolerancePp };
+}
+
+function forecastStatsState() {
+  const statsPath = path.resolve("public/team-stats.json");
+  const contents = readFileSync(statsPath);
+  const stats = JSON.parse(contents.toString("utf8"));
+  return {
+    stats,
+    version: {
+      generatedAt: stats.generatedAt ?? null,
+      sha256: createHash("sha256").update(contents).digest("hex"),
+    },
+  };
+}
+
+function forecastReadModelKey(profile, rootSnapshotId = null) {
+  const key = profileKey(profile.forecastMode, profile.opinionWeight, profile.answers);
+  return { profileKey: key, viewKey: `forecast:v1:${key}:root:${rootSnapshotId || "current"}` };
+}
+
+function buildForecastJobInput({ kind, profile, simulation, rootSnapshotId = null, conditionalMatchId = null, trigger = null }) {
+  const matches = db.prepare("SELECT * FROM matches ORDER BY round,id").all();
+  const { stats, version: statsVersion } = forecastStatsState();
+  let probabilities;
+  let root = null;
+  if (rootSnapshotId) {
+    root = parsedSnapshotRow(db.prepare("SELECT * FROM prediction_snapshots WHERE id=?").get(rootSnapshotId));
+    if (!root) throw new Error("snapshot_not_found");
+    probabilities = root.probabilities;
+  } else {
+    probabilities = buildForecastSource({ answers: profile.answers, stats, matches, mode: profile.forecastMode, opinionWeight: profile.opinionWeight });
+  }
+  const conditionalMatch = conditionalMatchId === null ? null : matches.find((match) => Number(match.id) === Number(conditionalMatchId));
+  if (kind === "conditional" && (!conditionalMatch || conditionalMatch.winner)) throw new Error("conditional_match_unavailable");
+  const seedMaterial = {
+    kind,
+    profile,
+    answers: profile.answers,
+    matchesLiveSignature: liveConstraintSignature(matches),
+    statsVersion,
+    simulation,
+    rootSnapshot: root ? {
+      id: Number(root.id),
+      createdAt: root.created_at,
+      probabilitiesHash: createHash("sha256").update(stableJson(root.probabilities)).digest("hex"),
+    } : null,
+    conditionalMatch: conditionalMatch ? { id: conditionalMatch.id, teamA: conditionalMatch.team_a, teamB: conditionalMatch.team_b } : null,
+  };
+  const inputHash = createHash("sha256").update(stableJson(seedMaterial)).digest("hex");
+  const seed = Number.parseInt(inputHash.slice(0, 8), 16);
+  return { inputHash, seed, matches, stats, statsVersion, probabilities, root, conditionalMatch, trigger, seedMaterial };
+}
+
+function publicForecastJob(row, { includeResult = true } = {}) {
+  if (!row) return null;
+  let result = null;
+  if (includeResult && row.result_json) {
+    try { result = JSON.parse(row.result_json); } catch { result = null; }
+  }
+  const status = row.canceled_at ? "canceled" : row.status === "pending" ? "queued" : row.status === "leased" ? "running" : row.status === "failed" ? "error" : "ready";
+  return {
+    id: row.job_key,
+    kind: row.kind || row.job_type,
+    profileKey: row.profile_key,
+    inputHash: row.input_hash,
+    status,
+    progress: { current: Number(row.progress_current || 0), total: Number(row.progress_total || 0) },
+    snapshotId: row.snapshot_id === null ? null : Number(row.snapshot_id),
+    supersededBy: row.superseded_by,
+    error: row.error,
+    createdAt: row.created_at || row.updated_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    result,
+  };
+}
+
+function markForecastReadModelBuilding(viewKey, kind, profileKeyValue, jobKey, inputHash) {
+  const stamp = now();
+  const existing = db.prepare("SELECT payload_json FROM materialized_views WHERE view_key=?").get(viewKey);
+  db.prepare(`INSERT INTO materialized_views(view_key,version,input_hash,status,payload_json,error,updated_at,kind,profile_key,job_key,building_input_hash,stale_since)
+    VALUES (?,0,'','building',NULL,NULL,?,?,?,?,?,?)
+    ON CONFLICT(view_key) DO UPDATE SET status='building',error=NULL,updated_at=excluded.updated_at,kind=excluded.kind,
+    profile_key=excluded.profile_key,job_key=excluded.job_key,building_input_hash=excluded.building_input_hash,
+    stale_since=CASE WHEN materialized_views.payload_json IS NOT NULL THEN excluded.stale_since ELSE NULL END`)
+    .run(viewKey, stamp, kind, profileKeyValue, jobKey, inputHash, existing?.payload_json ? stamp : null);
+}
+
+function enqueueForecastJob({ kind, profile, simulation, rootSnapshotId = null, conditionalMatchId = null, trigger = null }) {
+  const input = buildForecastJobInput({ kind, profile, simulation, rootSnapshotId, conditionalMatchId, trigger });
+  const readModelIdentity = forecastReadModelKey(profile, rootSnapshotId);
+  const profileKeyValue = readModelIdentity.profileKey;
+  const viewKey = conditionalMatchId ? `${readModelIdentity.viewKey}:match:${conditionalMatchId}` : readModelIdentity.viewKey;
+  const jobProfileKey = `${profileKeyValue}:${rootSnapshotId || "current"}:${conditionalMatchId || "main"}`;
+  const jobKey = `forecast:${kind}:${input.inputHash}`;
+  const existing = db.prepare("SELECT * FROM automation_jobs WHERE job_key=?").get(jobKey);
+  if (existing) return publicForecastJob(existing);
+  const payload = {
+    kind, profile, simulation, rootSnapshotId, conditionalMatchId, viewKey, snapshotProfileKey: profileKeyValue,
+    probabilities: input.probabilities, matches: input.matches, stats: input.stats,
+    statsVersion: input.statsVersion, seed: input.seed, trigger,
+  };
+  const stamp = now();
+  db.exec("BEGIN IMMEDIATE");
   try {
-    const officialId = await saveProfileSnapshot(trigger, OFFICIAL_FORECAST_CONFIG, {}, { kind: "original" });
-    const roots = db.prepare("SELECT * FROM prediction_snapshots WHERE snapshot_kind='original' AND id=root_snapshot_id AND forecast_mode!='stats' GROUP BY profile_key ORDER BY id").all();
-    for (const root of roots) {
-      let inputs = {}; try { inputs = root.inputs_json ? JSON.parse(root.inputs_json) : {}; } catch { inputs = {}; }
-      const parent = db.prepare("SELECT id FROM prediction_snapshots WHERE root_snapshot_id=? ORDER BY completed_match_count DESC,id DESC LIMIT 1").get(root.id);
-      await saveProfileSnapshot(`revision_${trigger}`, { ...OFFICIAL_FORECAST_CONFIG, forecastMode: root.forecast_mode, opinionWeight: root.opinion_weight }, inputs.answers ?? {}, { kind: "revision", rootId: root.id, parentId: parent?.id ?? root.id });
+    db.prepare(`UPDATE automation_jobs SET superseded_by=?,updated_at=?
+      WHERE profile_key=? AND kind=? AND status IN ('pending','leased') AND input_hash<>? AND superseded_by IS NULL`)
+      .run(jobKey, stamp, jobProfileKey, kind, input.inputHash);
+    db.prepare(`INSERT INTO automation_jobs(job_key,job_type,input_hash,status,attempts,updated_at,kind,profile_key,input_json,
+      progress_current,progress_total,trigger,created_at)
+      VALUES (?,?,?,'pending',0,?,?,?,?,0,?,?,?)`)
+      .run(jobKey, "forecast", input.inputHash, stamp, kind, jobProfileKey, JSON.stringify(payload), simulation.iterations, trigger, stamp);
+    markForecastReadModelBuilding(viewKey, kind, profileKeyValue, jobKey, input.inputHash);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  scheduleForecastJobs(0);
+  return publicForecastJob(db.prepare("SELECT * FROM automation_jobs WHERE job_key=?").get(jobKey));
+}
+
+function claimForecastJob() {
+  const stamp = now();
+  const candidate = db.prepare(`SELECT job_key FROM automation_jobs
+    WHERE job_type='forecast' AND superseded_by IS NULL AND cancel_requested_at IS NULL
+      AND ((status='pending' AND attempts < ?) OR (status='leased' AND lease_until < ? AND attempts < ?))
+    ORDER BY CASE kind WHEN 'manual' THEN 0 WHEN 'conditional' THEN 1 ELSE 2 END,created_at,updated_at LIMIT 1`)
+    .get(FORECAST_JOB_MAX_ATTEMPTS, stamp, FORECAST_JOB_MAX_ATTEMPTS);
+  if (!candidate) return null;
+  const leaseToken = randomBytes(18).toString("base64url");
+  const leaseUntil = new Date(Date.now() + FORECAST_JOB_LEASE_SECONDS * 1000).toISOString();
+  const claimed = db.prepare(`UPDATE automation_jobs SET status='leased',lease_until=?,lease_token=?,attempts=attempts+1,
+    started_at=COALESCE(started_at,?),error=NULL,updated_at=? WHERE job_key=? AND superseded_by IS NULL
+    AND cancel_requested_at IS NULL AND (status='pending' OR (status='leased' AND lease_until < ?))`)
+    .run(leaseUntil, leaseToken, stamp, stamp, candidate.job_key, stamp);
+  return claimed.changes ? db.prepare("SELECT * FROM automation_jobs WHERE job_key=?").get(candidate.job_key) : null;
+}
+
+function publishForecastJob(row, payload, result) {
+  const current = db.prepare("SELECT * FROM automation_jobs WHERE job_key=?").get(row.job_key);
+  if (!current || current.lease_token !== row.lease_token || current.superseded_by || current.cancel_requested_at) return false;
+  let snapshotId = null;
+  if (payload.kind !== "conditional") {
+    const completedMatchCount = payload.matches.filter((match) => match.winner).length;
+    const rootId = payload.rootSnapshotId ? Number(payload.rootSnapshotId) : null;
+    const parentId = rootId ? db.prepare("SELECT id FROM prediction_snapshots WHERE root_snapshot_id=? OR id=? ORDER BY completed_match_count DESC,id DESC LIMIT 1").get(rootId, rootId)?.id ?? rootId : null;
+    const snapshotKind = rootId ? "revision" : "original";
+    const config = { forecastMode: payload.profile.forecastMode, opinionWeight: payload.profile.opinionWeight, iterations: result.iterations };
+    snapshotId = insertSnapshot({
+      trigger: payload.trigger || (payload.kind === "manual" ? "manual_run" : "scenario_refresh"),
+      config,
+      probabilities: payload.probabilities,
+      result,
+      stats: payload.stats,
+      matches: payload.matches,
+      inputs: { answers: payload.profile.answers, cutoffCompletedMatches: completedMatchCount, liveConstraintSignature: liveConstraintSignature(payload.matches), statsVersion: payload.statsVersion },
+      kind: snapshotKind,
+      rootId,
+      parentId,
+      key: payload.snapshotProfileKey,
+    });
+  }
+  const stamp = now();
+  const readPayload = payload.kind === "conditional"
+    ? { kind: payload.kind, matchId: payload.conditionalMatchId, ...result }
+    : { kind: payload.kind, snapshotId, profile: payload.profile, probabilities: payload.probabilities, result };
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const stillCurrent = db.prepare("SELECT lease_token,superseded_by,cancel_requested_at FROM automation_jobs WHERE job_key=?").get(row.job_key);
+    if (!stillCurrent || stillCurrent.lease_token !== row.lease_token || stillCurrent.superseded_by || stillCurrent.cancel_requested_at) {
+      db.exec("ROLLBACK");
+      if (snapshotId) db.prepare("DELETE FROM prediction_snapshots WHERE id=?").run(snapshotId);
+      return false;
     }
-    return officialId;
-  } finally { autoForecastRunning = false; }
+    const previous = db.prepare("SELECT version FROM materialized_views WHERE view_key=?").get(payload.viewKey);
+    db.prepare(`UPDATE materialized_views SET version=?,input_hash=?,status='ready',payload_json=?,error=NULL,updated_at=?,ready_at=?,
+      job_key=?,building_input_hash=NULL,snapshot_id=?,stale_since=NULL WHERE view_key=? AND job_key=?`)
+      .run(Number(previous?.version || 0) + 1, row.input_hash, JSON.stringify(readPayload), stamp, stamp, row.job_key, snapshotId, payload.viewKey, row.job_key);
+    db.prepare(`UPDATE automation_jobs SET status='ready',lease_until=NULL,lease_token=NULL,progress_current=progress_total,
+      result_json=?,snapshot_id=?,completed_at=?,updated_at=? WHERE job_key=? AND lease_token=?`)
+      .run(JSON.stringify(readPayload), snapshotId, stamp, stamp, row.job_key, row.lease_token);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  audit("forecast_job_ready", { jobKey: row.job_key, kind: payload.kind, snapshotId, inputHash: row.input_hash });
+  return true;
+}
+
+async function executeForecastJob(row) {
+  let payload;
+  try {
+    payload = JSON.parse(row.input_json);
+    const adaptive = payload.simulation.adaptive ? {
+      enabled: true,
+      minIterations: payload.simulation.iterations,
+      maxIterations: payload.simulation.maxIterations,
+      batchSize: payload.simulation.batchSize,
+      tolerancePp: payload.simulation.tolerancePp,
+      stableChecksRequired: 2,
+    } : null;
+    const result = await runForecastWorker({
+      kind: payload.kind,
+      probabilities: payload.probabilities,
+      minimum: payload.simulation.iterations,
+      seed: payload.seed,
+      matches: payload.matches,
+      stats: payload.stats,
+      adaptive,
+      conditionalMatchId: payload.conditionalMatchId,
+    }, ({ current, total }) => {
+      db.prepare("UPDATE automation_jobs SET progress_current=?,progress_total=?,updated_at=? WHERE job_key=? AND lease_token=?")
+        .run(current, total, now(), row.job_key, row.lease_token);
+    }, row.job_key);
+    const wasPublished = publishForecastJob(row, payload, result);
+    if (!wasPublished) {
+      const current = db.prepare("SELECT superseded_by,cancel_requested_at FROM automation_jobs WHERE job_key=?").get(row.job_key);
+      const stamp = now();
+      db.prepare(`UPDATE automation_jobs SET status='failed',lease_until=NULL,lease_token=NULL,error=?,canceled_at=?,
+        completed_at=?,updated_at=? WHERE job_key=? AND status='leased'`)
+        .run(current?.cancel_requested_at ? "canceled" : "superseded", current?.cancel_requested_at ? stamp : null, stamp, stamp, row.job_key);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const current = db.prepare("SELECT lease_token,superseded_by,cancel_requested_at FROM automation_jobs WHERE job_key=?").get(row.job_key);
+    if (current?.lease_token === row.lease_token) {
+      const canceledAt = current.cancel_requested_at ? now() : null;
+      db.prepare("UPDATE automation_jobs SET status='failed',lease_until=NULL,lease_token=NULL,error=?,canceled_at=?,completed_at=?,updated_at=? WHERE job_key=?")
+        .run(canceledAt ? "canceled" : message, canceledAt, now(), now(), row.job_key);
+      if (!current.superseded_by && payload?.viewKey) {
+        db.prepare("UPDATE materialized_views SET status=CASE WHEN payload_json IS NULL THEN 'failed' ELSE 'ready' END,error=?,updated_at=? WHERE view_key=? AND job_key=?")
+          .run(message, now(), payload.viewKey, row.job_key);
+      }
+    }
+    console.error("Forecast job failed:", row.job_key, error);
+  }
+}
+
+function scheduleForecastJobs(delay = FORECAST_JOB_POLL_MS) {
+  if (forecastJobTimer) return;
+  forecastJobTimer = setTimeout(async () => {
+    forecastJobTimer = null;
+    if (forecastJobRunning) return scheduleForecastJobs();
+    const row = claimForecastJob();
+    if (!row) return scheduleForecastJobs();
+    forecastJobRunning = true;
+    try { await executeForecastJob(row); } finally {
+      forecastJobRunning = false;
+      scheduleForecastJobs(0);
+    }
+  }, delay);
+  forecastJobTimer.unref();
+}
+
+function readyForecastReadModel(profile, rootSnapshotId = null) {
+  const { viewKey } = forecastReadModelKey(profile, rootSnapshotId);
+  const row = db.prepare("SELECT * FROM materialized_views WHERE view_key=?").get(viewKey);
+  if (!row) return null;
+  let payload = null;
+  try { payload = row.payload_json ? JSON.parse(row.payload_json) : null; } catch { payload = null; }
+  const isStale = Boolean(payload && row.building_input_hash && row.building_input_hash !== row.input_hash);
+  return {
+    key: viewKey,
+    version: Number(row.version),
+    status: row.status === "failed" && !payload ? "error" : row.status === "building" ? "running" : "ready",
+    inputHash: row.input_hash || null,
+    buildingInputHash: row.building_input_hash,
+    stale: isStale,
+    staleSince: isStale ? row.stale_since : null,
+    readyAt: payload ? row.ready_at || row.updated_at : null,
+    error: row.error,
+    jobId: row.job_key,
+    snapshotId: row.snapshot_id === null ? null : Number(row.snapshot_id),
+    payload,
+  };
 }
 
 function queueAutomaticSnapshot(trigger, delay = 100) {
   pendingAutomaticSnapshotTrigger = trigger;
   if (autoSnapshotTimer) clearTimeout(autoSnapshotTimer);
-  autoSnapshotTimer = setTimeout(async () => {
+  autoSnapshotTimer = setTimeout(() => {
     autoSnapshotTimer = null;
-    if (autoForecastRunning) {
-      queueAutomaticSnapshot(pendingAutomaticSnapshotTrigger ?? trigger, 1_000);
-      return;
-    }
     const queuedTrigger = pendingAutomaticSnapshotTrigger ?? trigger;
     pendingAutomaticSnapshotTrigger = null;
-    try { await saveAutomaticSnapshots(queuedTrigger); } catch (error) { console.error("Automatic forecast failed:", error); audit("automatic_snapshot_failed", { trigger: queuedTrigger, error: error instanceof Error ? error.message : String(error) }); }
+    try {
+      const canonicalAnswers = Object.fromEntries(db.prepare("SELECT pair_key,probability FROM answers ORDER BY pair_key").all().map((row) => [row.pair_key, Number(row.probability)]));
+      for (const weight of FORECAST_CANONICAL_WEIGHTS) {
+        enqueueForecastJob({
+          kind: "scenario_refresh",
+          profile: { forecastMode: weight ? "mixed" : "stats", opinionWeight: weight, answers: weight ? canonicalAnswers : {} },
+          simulation: normalizedSimulationConfig(OFFICIAL_FORECAST_CONFIG, "scenario_refresh"),
+          trigger: queuedTrigger,
+        });
+      }
+      const roots = db.prepare("SELECT * FROM prediction_snapshots WHERE snapshot_kind='original' AND id=root_snapshot_id AND forecast_mode!='stats' GROUP BY profile_key ORDER BY id").all();
+      for (const root of roots) {
+        let inputs = {};
+        try { inputs = root.inputs_json ? JSON.parse(root.inputs_json) : {}; } catch { inputs = {}; }
+        if (root.forecast_mode === "mixed" && FORECAST_CANONICAL_WEIGHTS.has(Number(root.opinion_weight))) continue;
+        enqueueForecastJob({
+          kind: "scenario_refresh",
+          profile: normalizedForecastProfile({ forecastMode: root.forecast_mode, opinionWeight: root.opinion_weight, answers: inputs.answers ?? {} }),
+          simulation: normalizedSimulationConfig(OFFICIAL_FORECAST_CONFIG, "scenario_refresh"),
+          rootSnapshotId: Number(root.id),
+          trigger: `revision_${queuedTrigger}`,
+        });
+      }
+    } catch (error) {
+      console.error("Automatic forecast enqueue failed:", error);
+      audit("automatic_snapshot_failed", { trigger: queuedTrigger, error: error instanceof Error ? error.message : String(error) });
+    }
     if (pendingAutomaticSnapshotTrigger) queueAutomaticSnapshot(pendingAutomaticSnapshotTrigger, 100);
   }, delay);
   autoSnapshotTimer.unref();
@@ -1242,6 +1597,98 @@ const server = createServer(async (req, res) => {
       catch { return json(res, 503, { error: "live_map_model_unavailable" }); }
     }
     if (req.method === "GET" && url.pathname === "/api/draft/live") return json(res, 200, await refreshLiveDrafts());
+    if (req.method === "POST" && url.pathname === "/api/forecast/jobs") {
+      if (!sameOrigin(req)) return json(res, 403, { error: "origin" });
+      const data = await body(req);
+      const kind = ["scenario_refresh", "manual", "conditional"].includes(data.kind) ? data.kind : null;
+      if (!kind) return json(res, 400, { error: "invalid_job_kind" });
+      if ((kind === "manual" || kind === "conditional") && !isAdmin(req)) return json(res, 401, { error: "admin_required" });
+      try {
+        const rootSnapshotId = data.rootSnapshotId === null || data.rootSnapshotId === undefined ? null : Number(data.rootSnapshotId);
+        const conditionalMatchId = data.conditionalMatchId === null || data.conditionalMatchId === undefined ? null : Number(data.conditionalMatchId);
+        if (rootSnapshotId !== null && (!Number.isInteger(rootSnapshotId) || rootSnapshotId < 1)) return json(res, 400, { error: "invalid_root_snapshot" });
+        if (kind === "conditional" && (!Number.isInteger(conditionalMatchId) || conditionalMatchId < 1)) return json(res, 400, { error: "invalid_conditional_match" });
+        let profile = normalizedForecastProfile(data.profile);
+        if (kind === "scenario_refresh" && !isAdmin(req)) {
+          const ip = req.socket.remoteAddress || "unknown";
+          const recent = (scenarioRequests.get(ip) || []).filter((stamp) => Date.now() - stamp < 60_000);
+          if (recent.length >= FORECAST_SCENARIO_RATE_LIMIT) return json(res, 429, { error: "forecast_rate_limit" });
+          recent.push(Date.now());
+          scenarioRequests.set(ip, recent);
+          if (rootSnapshotId) {
+            const root = parsedSnapshotRow(db.prepare("SELECT * FROM prediction_snapshots WHERE id=?").get(rootSnapshotId));
+            if (!root) return json(res, 404, { error: "snapshot_not_found" });
+            profile = normalizedForecastProfile({ forecastMode: root.forecast_mode, opinionWeight: root.opinion_weight, answers: root.inputs?.answers ?? {} });
+          } else {
+            const weight = profile.forecastMode === "stats" ? 0 : profile.opinionWeight;
+            if (!FORECAST_CANONICAL_WEIGHTS.has(weight)) return json(res, 403, { error: "canonical_profile_required" });
+            const canonicalAnswers = weight ? Object.fromEntries(db.prepare("SELECT pair_key,probability FROM answers ORDER BY pair_key").all().map((row) => [row.pair_key, Number(row.probability)])) : {};
+            profile = normalizedForecastProfile({ forecastMode: weight ? "mixed" : "stats", opinionWeight: weight, answers: canonicalAnswers });
+          }
+        }
+        const simulation = kind === "scenario_refresh" && !isAdmin(req)
+          ? normalizedSimulationConfig(OFFICIAL_FORECAST_CONFIG, kind)
+          : normalizedSimulationConfig(data.simulation, kind);
+        const job = enqueueForecastJob({ kind, profile, simulation, rootSnapshotId, conditionalMatchId, trigger: data.trigger || null });
+        return json(res, job.status === "ready" ? 200 : 202, { job });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        const status = reason === "snapshot_not_found" || reason === "conditional_match_unavailable" ? 404 : 400;
+        return json(res, status, { error: reason });
+      }
+    }
+    const forecastJobMatch = url.pathname.match(/^\/api\/forecast\/jobs\/([^/]+)$/);
+    if (req.method === "GET" && forecastJobMatch) {
+      const jobKey = decodeURIComponent(forecastJobMatch[1]);
+      const row = db.prepare("SELECT * FROM automation_jobs WHERE job_key=? AND job_type='forecast'").get(jobKey);
+      if (!row) return json(res, 404, { error: "forecast_job_not_found" });
+      if (row.kind !== "scenario_refresh" && !isAdmin(req)) return json(res, 401, { error: "admin_required" });
+      return json(res, 200, { job: publicForecastJob(row) });
+    }
+    if (req.method === "DELETE" && forecastJobMatch) {
+      if (!sameOrigin(req)) return json(res, 403, { error: "origin" });
+      if (!isAdmin(req)) return json(res, 401, { error: "admin_required" });
+      const jobKey = decodeURIComponent(forecastJobMatch[1]);
+      const row = db.prepare("SELECT * FROM automation_jobs WHERE job_key=? AND job_type='forecast'").get(jobKey);
+      if (!row) return json(res, 404, { error: "forecast_job_not_found" });
+      if (["ready", "failed"].includes(row.status)) return json(res, 200, { job: publicForecastJob(row) });
+      const stamp = now();
+      if (row.status === "pending") {
+        db.prepare("UPDATE automation_jobs SET status='failed',error='canceled',cancel_requested_at=?,canceled_at=?,completed_at=?,updated_at=? WHERE job_key=?")
+          .run(stamp, stamp, stamp, stamp, jobKey);
+      } else {
+        db.prepare("UPDATE automation_jobs SET cancel_requested_at=?,updated_at=? WHERE job_key=?").run(stamp, stamp, jobKey);
+        void activeForecastWorkers.get(jobKey)?.terminate();
+      }
+      try {
+        const payload = JSON.parse(row.input_json);
+        db.prepare(`UPDATE materialized_views SET status=CASE WHEN payload_json IS NULL THEN 'failed' ELSE 'ready' END,
+          error='canceled',building_input_hash=NULL,stale_since=NULL,updated_at=? WHERE view_key=? AND job_key=?`)
+          .run(stamp, payload.viewKey, jobKey);
+      } catch { /* malformed legacy job payload has no read-model to restore */ }
+      return json(res, 202, { job: publicForecastJob(db.prepare("SELECT * FROM automation_jobs WHERE job_key=?").get(jobKey)) });
+    }
+    if (req.method === "GET" && url.pathname === "/api/forecast/read-model") {
+      try {
+        const rootSnapshotId = url.searchParams.has("rootSnapshotId") ? Number(url.searchParams.get("rootSnapshotId")) : null;
+        let profile;
+        if (rootSnapshotId) {
+          const root = parsedSnapshotRow(db.prepare("SELECT * FROM prediction_snapshots WHERE id=?").get(rootSnapshotId));
+          if (!root) return json(res, 404, { error: "snapshot_not_found" });
+          profile = normalizedForecastProfile({ forecastMode: root.forecast_mode, opinionWeight: root.opinion_weight, answers: root.inputs?.answers ?? {} });
+        } else {
+          const opinionWeight = Number(url.searchParams.get("opinionWeight") || 0);
+          if (!FORECAST_CANONICAL_WEIGHTS.has(opinionWeight)) return json(res, 400, { error: "canonical_profile_required" });
+          const answers = opinionWeight ? Object.fromEntries(db.prepare("SELECT pair_key,probability FROM answers ORDER BY pair_key").all().map((row) => [row.pair_key, Number(row.probability)])) : {};
+          profile = normalizedForecastProfile({ forecastMode: opinionWeight ? "mixed" : "stats", opinionWeight, answers });
+        }
+        const readModel = readyForecastReadModel(profile, rootSnapshotId);
+        if (!readModel) return json(res, 404, { error: "forecast_read_model_not_found" });
+        return json(res, 200, { readModel });
+      } catch (error) {
+        return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
     if (req.method === "GET" && url.pathname === "/api/combined") {
       const opinionWeight = url.searchParams.get("opinionWeight") ?? 10;
       const requestedRun = url.searchParams.get("run");
@@ -1335,7 +1782,11 @@ const server = createServer(async (req, res) => {
         const entries = Object.entries(data.answers || {}).filter(([key, value]) => /^[a-z0-9]+\|[a-z0-9]+$/.test(key) && Number.isFinite(value) && value >= 0 && value <= 100);
         const save = db.prepare("INSERT INTO answers(pair_key, probability, updated_at) VALUES (?, ?, ?) ON CONFLICT(pair_key) DO UPDATE SET probability=excluded.probability, updated_at=excluded.updated_at");
         db.exec("BEGIN");
-        try { entries.forEach(([key, value]) => save.run(key, value, now())); db.exec("COMMIT"); } catch (error) { db.exec("ROLLBACK"); throw error; }
+        try {
+          if (data.replace === true) db.prepare("DELETE FROM answers").run();
+          entries.forEach(([key, value]) => save.run(key, value, now()));
+          db.exec("COMMIT");
+        } catch (error) { db.exec("ROLLBACK"); throw error; }
         audit("answers_saved", { count: entries.length });
         queueAutomaticSnapshot("auto_profile_change", 100);
         for (const weight of [0, 10, 20, 30]) void materializeCombinedForecast(weight).catch(() => {});
@@ -1409,15 +1860,14 @@ const server = createServer(async (req, res) => {
       }
       if (req.method === "POST" && url.pathname === "/api/admin/snapshots") {
         const data = await body(req);
-        if (!data.probabilities || !data.result || !Number.isInteger(data.iterations) || !Number.isInteger(data.seed)) return json(res, 400, { error: "invalid_snapshot" });
-        const config = { forecastMode: data.forecastMode || "mixed", opinionWeight: Number(data.opinionWeight || 0), iterations: data.iterations };
-        const profileAnswers = data.answers && typeof data.answers === "object" ? data.answers : {};
-        const matches = db.prepare("SELECT * FROM matches ORDER BY round,id").all();
-        const stats = JSON.parse(readFileSync(path.resolve("public/team-stats.json"), "utf8"));
-        const key = profileKey(config.forecastMode, config.opinionWeight, profileAnswers);
-        const id = insertSnapshot({ trigger: data.trigger || "manual_run", config, probabilities: data.probabilities, result: data.result, stats, matches, inputs: { answers: profileAnswers, cutoffCompletedMatches: Number(data.completedMatchCount || 0), liveConstraintSignature: liveConstraintSignature(matches) }, kind: "original", key });
-        audit("snapshot_saved", { id, trigger: data.trigger || "manual_run", profileKey: key });
-        return json(res, 201, { ok: true, id });
+        try {
+          const profile = normalizedForecastProfile({ forecastMode: data.forecastMode, opinionWeight: data.opinionWeight, answers: data.answers });
+          const simulation = normalizedSimulationConfig({ iterations: data.iterations, adaptive: data.adaptive, maxIterations: data.maxIterations, batchSize: data.batchSize, tolerancePp: data.tolerancePp }, "manual");
+          const job = enqueueForecastJob({ kind: "manual", profile, simulation, trigger: data.trigger || "manual_run" });
+          return json(res, job.status === "ready" ? 200 : 202, { ok: true, job });
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
       }
       if (req.method === "DELETE" && url.pathname.startsWith("/api/admin/snapshots/")) {
         const id = Number(url.pathname.split("/").at(-1));
@@ -1469,6 +1919,7 @@ const server = createServer(async (req, res) => {
           const value = JSON.stringify({ ok: code === 0, code, output });
           db.prepare("INSERT INTO settings(key,value,updated_at) VALUES ('last_refresh',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").run(value, now());
           refreshProcess = null;
+          if (code === 0) queueAutomaticSnapshot("auto_artifact_refresh", 100);
         });
         audit("refresh_started", {});
         return json(res, 202, { ok: true });
@@ -1488,6 +1939,11 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`TI Predictor API listening on ${PORT}; database ${DB_PATH}`);
+  db.prepare(`UPDATE automation_jobs SET status='pending',lease_until=NULL,lease_token=NULL,updated_at=?
+    WHERE job_type='forecast' AND status='leased' AND (lease_until IS NULL OR lease_until < ?) AND superseded_by IS NULL AND cancel_requested_at IS NULL`)
+    .run(now(), now());
+  scheduleForecastJobs(0);
+  queueAutomaticSnapshot("startup_reconcile", 1_000);
   if (LIVE_SYNC_ENABLED) {
     setTimeout(() => void syncLiveMatches("startup").catch((error) => console.error("Initial live sync failed:", error.message)), 5_000).unref();
     setInterval(() => void syncLiveMatches("timer").catch((error) => console.error("Live sync failed:", error.message)), LIVE_SYNC_INTERVAL_MINUTES * 60_000).unref();

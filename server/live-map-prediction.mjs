@@ -48,6 +48,10 @@ export function estimateLiveMap(model, { draftProbabilityRadiant, game } = {}) {
     const assessment = assessLiveMap(game);
     return { frozenDraftProbabilityRadiant, liveProbabilityRadiant: null, stateImpactPp: null, availability: "model_unavailable", assessment, modelId: null };
   }
+  if (model.validation?.gatePassed !== true) {
+    const assessment = assessLiveMap(game);
+    return { frozenDraftProbabilityRadiant, liveProbabilityRadiant: null, stateImpactPp: null, availability: "observation_only_failed_gate", assessment, modelId: model.modelId ?? null };
+  }
   const gameTime = Math.max(0, Number(game?.gameTime || 0));
   const goldLead = Number.isFinite(Number(game?.radiantLead)) ? Number(game.radiantLead) : null;
   if (game?.phase === "draft" || gameTime < 10 * 60 || goldLead === null) {
@@ -61,17 +65,29 @@ export function estimateLiveMap(model, { draftProbabilityRadiant, game } = {}) {
       modelId: model.modelId ?? null,
     };
   }
+  if (gameTime > Number(model.minuteRange?.[1] ?? 20) * 60) {
+    const assessment = assessLiveMap(game);
+    return {
+      frozenDraftProbabilityRadiant,
+      liveProbabilityRadiant: null,
+      stateImpactPp: null,
+      availability: "outside_validated_range_after_20",
+      assessment,
+      modelId: model.modelId ?? null,
+    };
+  }
   const minute = clamp(gameTime / 60, Number(model.minuteRange?.[0] ?? 10), Number(model.minuteRange?.[1] ?? 20));
   const goldThousands = goldLead / 1000;
   const features = [logit(frozenDraftProbabilityRadiant), goldThousands, goldThousands * ((minute - 10) / 10)];
   const rawLogitRadiant = features.reduce((sum, value, index) => sum + value * Number(model.coefficients[index] || 0), 0);
   const liveProbabilityRadiant = probabilityClamp(sigmoid(rawLogitRadiant));
   const assessment = assessLiveMap(game, liveProbabilityRadiant);
+  const isValidatedCheckpoint = model.validation?.minuteGates?.[String(minute)] === true;
   return {
     frozenDraftProbabilityRadiant,
     liveProbabilityRadiant,
     stateImpactPp: (liveProbabilityRadiant - frozenDraftProbabilityRadiant) * 100,
-    availability: gameTime > Number(model.minuteRange?.[1] ?? 20) * 60 ? "extrapolated_after_20" : "observed_range",
+    availability: isValidatedCheckpoint ? "validated_fixed_window" : "validated_window_interpolation",
     assessment,
     modelId: model.modelId ?? null,
     components: { frozenPriorLogit: features[0], goldLeadThousands: features[1], goldTimeInteraction: features[2], rawLogitRadiant },

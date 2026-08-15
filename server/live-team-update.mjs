@@ -76,3 +76,47 @@ export function updateProbabilitiesWithLiveSeries(probabilities, matches, option
   }
   return result;
 }
+
+/**
+ * Replays historical tournaments with the exact production updater. Every
+ * probability is emitted before the corresponding series is added to history.
+ */
+export function evaluateLiveSeriesChronologically(rows, {
+  liveGlobal = 0,
+  probabilityFor = (row) => row.probability,
+  seriesInformation: policy = {},
+} = {}) {
+  const tournaments = new Map();
+  return [...(rows || [])]
+    .sort((left, right) => Number(left.startTime) - Number(right.startTime)
+      || String(left.seriesId).localeCompare(String(right.seriesId)))
+    .map((row) => {
+      const tournamentId = String(row.leagueId);
+      const state = tournaments.get(tournamentId) ?? { probabilities: {}, matches: [] };
+      const key = pairKey(row.targetLineup, row.opponentLineup);
+      const baseProbability = clamp(probabilityFor(row), .001, .999);
+      state.probabilities[key] = 100 * (key.startsWith(`${row.targetLineup}|`) ? baseProbability : 1 - baseProbability);
+      const updated = updateProbabilitiesWithLiveSeries(state.probabilities, state.matches, {
+        liveGlobal,
+        seriesInformation: policy,
+      });
+      const adjusted = clamp((storedProbability(row.targetLineup, row.opponentLineup, updated) ?? 50) / 100, .001, .999);
+      const targetWon = Number(row.outcome) === 1;
+      state.matches.push({
+        team_a: row.targetLineup,
+        team_b: row.opponentLineup,
+        winner: targetWon ? row.targetLineup : row.opponentLineup,
+        score_a: Number(row.wins),
+        score_b: Number(row.losses),
+      });
+      tournaments.set(tournamentId, state);
+      return {
+        seriesId: String(row.seriesId),
+        leagueId: row.leagueId,
+        startTime: Number(row.startTime),
+        outcome: Number(row.outcome),
+        baseProbability,
+        probability: adjusted,
+      };
+    });
+}

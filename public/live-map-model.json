@@ -1,14 +1,27 @@
 {
-  "schemaVersion": 1,
-  "modelId": "415e134681dabb5c",
-  "status": "experimental",
-  "trainedAt": "2026-08-14T11:17:50.926Z",
+  "schemaVersion": 2,
+  "modelId": "d66b0a386c6dceda",
+  "status": "active",
+  "trainedAt": "2026-08-15T13:09:47.891Z",
+  "provenance": {
+    "input": "work/rich-draft-dataset.jsonl",
+    "inputSha256": "65cd31b23ed0b0d53fd83f955ae9ccf3542d75313facf88bfef2ae303e55bdb7",
+    "priorSources": [
+      "active_formula_prequential_oof"
+    ],
+    "servingPriorParity": true
+  },
   "training": {
     "maps": 1761,
+    "series": 942,
     "snapshots": 5239,
     "train": 3299,
     "validation": 831,
-    "test": 1109
+    "test": 1109,
+    "trainSeries": 612,
+    "validationSeries": 141,
+    "testSeries": 189,
+    "split": "first 65% / next 15% / final 20% series by first-map chronology"
   },
   "features": [
     "frozenPriorLogit",
@@ -16,9 +29,9 @@
     "radiantGoldLeadThousandsXTime"
   ],
   "coefficients": [
-    0.8183637193496706,
-    0.3291801599653894,
-    -0.06968928319902026
+    1.030186378518552,
+    0.33058854789870645,
+    -0.07031160612604594
   ],
   "minuteRange": [
     10,
@@ -27,65 +40,115 @@
   "test": {
     "model": {
       "samples": 1109,
-      "logLoss": 0.5108924986543548,
-      "brier": 0.17222382665261773,
-      "accuracy": 0.7366997294860235
+      "logLoss": 0.5272954594611202,
+      "brier": 0.17915647214743485,
+      "accuracy": 0.7249774571686204
     },
     "frozenPrior": {
       "samples": 1109,
-      "logLoss": 0.6267582054018296,
-      "brier": 0.21790775862069472,
-      "accuracy": 0.6402164111812444
+      "logLoss": 0.6550742512762371,
+      "brier": 0.23120440651489957,
+      "accuracy": 0.6330027051397655
+    },
+    "logLossDelta": -0.12777879181511687,
+    "brierDelta": -0.052047934367464715,
+    "bootstrap": {
+      "byMap": {
+        "cluster": "map_id",
+        "clusters": 374,
+        "iterations": 5000,
+        "lower95": -0.1636582365568504,
+        "upper95": -0.09211767321091101
+      },
+      "bySeries": {
+        "cluster": "series_id",
+        "clusters": 189,
+        "iterations": 5000,
+        "lower95": -0.1624253805959635,
+        "upper95": -0.09214122474926408
+      }
     },
     "byMinute": {
       "10": {
         "model": {
           "samples": 374,
-          "logLoss": 0.5670342638584744,
-          "brier": 0.19340909422350108,
-          "accuracy": 0.6951871657754011
+          "logLoss": 0.5844034817960108,
+          "brier": 0.20085033311847791,
+          "accuracy": 0.6764705882352942
         },
         "frozenPrior": {
           "samples": 374,
-          "logLoss": 0.6259408332491673,
-          "brier": 0.21749572444313744,
-          "accuracy": 0.6443850267379679
+          "logLoss": 0.6542620771804706,
+          "brier": 0.23081170445008858,
+          "accuracy": 0.6336898395721925
+        },
+        "bootstrap": {
+          "cluster": "series_id",
+          "clusters": 189,
+          "iterations": 5000,
+          "lower95": -0.1025236446416313,
+          "upper95": -0.036836513032300656
         }
       },
       "15": {
         "model": {
           "samples": 371,
-          "logLoss": 0.5224180340908371,
-          "brier": 0.17638257282157252,
-          "accuracy": 0.7358490566037735
+          "logLoss": 0.5391109421137869,
+          "brier": 0.18372037063163274,
+          "accuracy": 0.7196765498652291
         },
         "frozenPrior": {
           "samples": 371,
-          "logLoss": 0.6267150603810547,
-          "brier": 0.21788226722004714,
-          "accuracy": 0.6415094339622641
+          "logLoss": 0.6545027024507077,
+          "brier": 0.23093085067092092,
+          "accuracy": 0.633423180592992
+        },
+        "bootstrap": {
+          "cluster": "series_id",
+          "clusters": 188,
+          "iterations": 5000,
+          "lower95": -0.1574756858266256,
+          "upper95": -0.07134519546054129
         }
       },
       "20": {
         "model": {
           "samples": 364,
-          "logLoss": 0.4414611969145865,
-          "brier": 0.1462178241795612,
+          "logLoss": 0.4565758319408223,
+          "brier": 0.15221496022213954,
           "accuracy": 0.7802197802197802
         },
         "frozenPrior": {
           "samples": 364,
-          "logLoss": 0.627642007566124,
-          "brier": 0.2183570940384054,
-          "accuracy": 0.6346153846153846
+          "logLoss": 0.6564912779962593,
+          "brier": 0.23188671363126048,
+          "accuracy": 0.6318681318681318
+        },
+        "bootstrap": {
+          "cluster": "series_id",
+          "clusters": 187,
+          "iterations": 5000,
+          "lower95": -0.23691360404438302,
+          "upper95": -0.1620864010023736
         }
       }
     }
   },
+  "validation": {
+    "status": "active",
+    "gatePassed": true,
+    "minuteGates": {
+      "10": true,
+      "15": true,
+      "20": true
+    },
+    "gate": "active-draft prior parity; lower test log loss and Brier at aggregate and each fixed minute; map- and series-cluster bootstrap upper95 < 0; no validation claim after 20 minutes"
+  },
   "sideFlip": "exact by construction; no intercept or side-asymmetric feature",
   "limitations": [
     "gold only; kills are display/guard telemetry",
-    "trained at 10/15/20 minutes; inference clamps time to this range",
+    "10-20 minute serving uses continuous interpolation; validation checkpoints are fixed at 10/15/20 minutes",
+    "times after 20 minutes are outside the validated range",
     "not a betting recommendation"
   ]
 }

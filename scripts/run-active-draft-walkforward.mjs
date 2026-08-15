@@ -9,6 +9,7 @@ const STATS_PATH = path.join(ROOT, "public", "draft-stats.json");
 const TEAM_STATS_PATH = path.join(ROOT, "public", "team-stats.json");
 const TEAM_MODEL_PATH = path.join(ROOT, "public", "team-model.json");
 const REPORT_PATH = path.join(ROOT, "work", "active-draft-walkforward.json");
+const OOF_PATH = path.join(ROOT, "work", "active-draft-oof.jsonl");
 const COVERAGE_PATH = path.join(ROOT, "work", "draft-coverage.json");
 const FEATURE_NAMES = ["teamPrior", "side", "hero", "draftPriority", "synergy", "counter", "teamPool", "playerPool", "roles"];
 const PRIORS = { team: 12, side: 30, hero: 18, pair: 24, pool: 6, role: 12, priorityMaps: 24 };
@@ -122,7 +123,7 @@ function loadMatches(teamIdByOpenDota) {
     const sides = byMatch.get(Number(value.match_id));
     if (!sides || sides.radiant.length !== 5 || sides.dire.length !== 5) return [];
     const radiantOpenDotaId = Number(value.radiant_team_id); const direOpenDotaId = Number(value.dire_team_id);
-    return [{ matchId: Number(value.match_id), patchId: Number(value.patch_id), subpatchId: String(value.subpatch_id || value.patch_id), startTime: Number(value.start_time), seriesId: String(value.series_id || `match:${value.match_id}`), identityKnown: radiantOpenDotaId > 0 && direOpenDotaId > 0, radiantTeamId: teamIdByOpenDota.get(radiantOpenDotaId) ?? (radiantOpenDotaId > 0 ? `od:${radiantOpenDotaId}` : `unknown:${value.match_id}:radiant`), direTeamId: teamIdByOpenDota.get(direOpenDotaId) ?? (direOpenDotaId > 0 ? `od:${direOpenDotaId}` : `unknown:${value.match_id}:dire`), radiantWin: Number(value.radiant_win), events: eventsByMatch.get(Number(value.match_id)) ?? [], ...sides }];
+    return [{ matchId: Number(value.match_id), leagueId: Number(value.league_id), patchId: Number(value.patch_id), subpatchId: String(value.subpatch_id || value.patch_id), startTime: Number(value.start_time), seriesId: String(value.series_id || `match:${value.match_id}`), identityKnown: radiantOpenDotaId > 0 && direOpenDotaId > 0, radiantTeamId: teamIdByOpenDota.get(radiantOpenDotaId) ?? (radiantOpenDotaId > 0 ? `od:${radiantOpenDotaId}` : `unknown:${value.match_id}:radiant`), direTeamId: teamIdByOpenDota.get(direOpenDotaId) ?? (direOpenDotaId > 0 ? `od:${direOpenDotaId}` : `unknown:${value.match_id}:dire`), radiantWin: Number(value.radiant_win), events: eventsByMatch.get(Number(value.match_id)) ?? [], ...sides }];
   });
   db.close(); return matches;
 }
@@ -185,7 +186,7 @@ for (const match of matches) {
   const probability = sigmoid(contributions.reduce((sum, value) => sum + value, 0));
   const cumulative = Object.fromEntries(FEATURE_NAMES.map((name, index) => [`through_${name}`, sigmoid(contributions.slice(0, index + 1).reduce((sum, value) => sum + value, 0))]));
   const dropOne = Object.fromEntries(FEATURE_NAMES.map((name, index) => [`without_${name}`, sigmoid(contributions.reduce((sum, value, featureIndex) => sum + (featureIndex === index ? 0 : value), 0))]));
-  if (seen >= 100) rows.push({ matchId: match.matchId, patchId: match.patchId, subpatchId: match.subpatchId, seriesId: match.seriesId, identityKnown: match.identityKnown, y: match.radiantWin, model: probability, neutral: .5, teamSide: cumulative.through_side, ...cumulative, ...dropOne, x });
+  if (seen >= 100) rows.push({ matchId: match.matchId, leagueId: match.leagueId, startTime: match.startTime, patchId: match.patchId, subpatchId: match.subpatchId, seriesId: match.seriesId, identityKnown: match.identityKnown, y: match.radiantWin, model: probability, neutral: .5, teamSide: cumulative.through_side, ...cumulative, ...dropOne, x });
   const error = probability - match.radiantWin; const rate = .045 / Math.sqrt(1 + seen / 350);
   weights = weights.map((weight, index) => clamp(weight - rate * (error * x[index] + .002 * weight), index === 0 || FEATURE_NAMES[index] !== "draftPriority" ? 0 : -.5, 2.5));
   observe(state, match); seen += 1;
@@ -252,5 +253,18 @@ stats.activeSnapshot = {
 };
 stats.validation = { ...(stats.validation ?? {}), activeFormula: report };
 stats.combiner = { ...combiner, researchOnly: !validated };
-await Promise.all([writeFile(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`), writeFile(STATS_PATH, `${JSON.stringify(stats, null, 2)}\n`)]);
+const activeDraftOof = rows.map((value) => JSON.stringify({
+  matchId: value.matchId,
+  seriesId: value.seriesId,
+  leagueId: value.leagueId,
+  startTime: value.startTime,
+  probabilityRadiant: value.model,
+  outcomeObservedAfterPrediction: value.y,
+  priorContract: "active formula prequential OOF; features and weights precede this map",
+})).join("\n");
+await Promise.all([
+  writeFile(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`),
+  writeFile(OOF_PATH, `${activeDraftOof}\n`),
+  writeFile(STATS_PATH, `${JSON.stringify(stats, null, 2)}\n`),
+]);
 console.log(`Active draft walk-forward: ${rows.length} OOF maps, log loss ${modelMetrics.logLoss.toFixed(6)} vs team+side ${teamSideMetrics.logLoss.toFixed(6)} vs 50% ${neutralMetrics.logLoss.toFixed(6)}; ${report.deployment.status.toUpperCase()}`);

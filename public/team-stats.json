@@ -50494,49 +50494,223 @@
     }
   },
   "tournamentCalibration": {
-    "schemaVersion": 2,
-    "generatedAt": "2026-08-12T13:32:35.447Z",
+    "schemaVersion": 3,
+    "generatedAt": "2026-08-15T13:06:21.234Z",
     "sourceTeamModelId": "dynamic_lr0.2_h120",
-    "methodology": "nested tournament calibration: live coefficients and temperature selected on first 80% leagues; evaluated on untouched final 20%; persistent form SD estimated from regularized within-league team residuals; no extra per-series Gaussian shock because Bernoulli sampling already represents match-level aleatoric uncertainty",
+    "provenance": {
+      "evaluator": "server/live-team-update.mjs#evaluateLiveSeriesChronologically",
+      "teamModelOofSha256": "6a82b8ea258e48bd2a95d3cddc988032828507cb5e3fbec06de981c6e0b450a6",
+      "teamModelArtifactSha256": "e23c7912731f0407b5b2bc9d420d41dcc1a9b673dd2e06854994085461b37545",
+      "predictionsStrictlyBeforeUpdate": true
+    },
+    "methodology": "chronological tournament split; production-identical regularized online Bradley-Terry replay; form uncertainty selected and evaluated as a tournament-level Gaussian logit shock by quadrature; series- and tournament-cluster bootstrap gates",
     "selected": {
-      "liveGlobal": 0.3,
-      "liveRematch": 0.2,
+      "liveGlobal": 0,
       "probabilityTemperature": 1,
-      "formLogitSd": 0.35,
+      "formLogitSd": 0,
       "seriesNoiseLogitSd": 0
+    },
+    "shadow": {
+      "liveGlobal": 0.4,
+      "formLogitSd": 0,
+      "sensitivityGrid": {
+        "onlineUpdate": [
+          {
+            "liveGlobal": 0.4,
+            "samples": 273,
+            "logLoss": 0.6677377877239304,
+            "brier": 0.23741023932538263
+          },
+          {
+            "liveGlobal": 0.3,
+            "samples": 273,
+            "logLoss": 0.6682649141518022,
+            "brier": 0.23766876679099586
+          },
+          {
+            "liveGlobal": 0.2,
+            "samples": 273,
+            "logLoss": 0.6694245446636973,
+            "brier": 0.238226186680242
+          },
+          {
+            "liveGlobal": 0.1,
+            "samples": 273,
+            "logLoss": 0.6715407466901044,
+            "brier": 0.23924307459949
+          },
+          {
+            "liveGlobal": 0.05,
+            "samples": 273,
+            "logLoss": 0.6731279936450749,
+            "brier": 0.2400081273431522
+          },
+          {
+            "liveGlobal": 0,
+            "samples": 273,
+            "logLoss": 0.6752186751684957,
+            "brier": 0.241017706702067
+          }
+        ],
+        "formUncertainty": [
+          {
+            "formLogitSd": 0,
+            "samples": 273,
+            "logLoss": 0.6752186751684957,
+            "brier": 0.241017706702067
+          },
+          {
+            "formLogitSd": 0.04,
+            "samples": 273,
+            "logLoss": 0.675219594419336,
+            "brier": 0.2410184614731176
+          },
+          {
+            "formLogitSd": 0.08,
+            "samples": 273,
+            "logLoss": 0.6752224395817316,
+            "brier": 0.24102075866104147
+          },
+          {
+            "formLogitSd": 0.12,
+            "samples": 273,
+            "logLoss": 0.6752274658601036,
+            "brier": 0.2410246941532899
+          },
+          {
+            "formLogitSd": 0.16,
+            "samples": 273,
+            "logLoss": 0.6752350760800588,
+            "brier": 0.24103041900841835
+          },
+          {
+            "formLogitSd": 0.2,
+            "samples": 273,
+            "logLoss": 0.6752457897492072,
+            "brier": 0.2410381274264818
+          },
+          {
+            "formLogitSd": 0.28,
+            "samples": 273,
+            "logLoss": 0.6752789568387151,
+            "brier": 0.2410603972705148
+          },
+          {
+            "formLogitSd": 0.36,
+            "samples": 273,
+            "logLoss": 0.6753319599616643,
+            "brier": 0.2410933384607117
+          }
+        ]
+      }
     },
     "dataset": {
       "series": 417,
       "leagues": 26,
       "innerSeries": 273,
       "holdoutSeries": 144,
-      "formEffects": 91
+      "innerLeagues": 20,
+      "holdoutLeagues": 6,
+      "split": "first 80% tournaments by chronology for selection; final 20% untouched tournaments for gates"
+    },
+    "onlineUpdate": {
+      "baseline": {
+        "samples": 144,
+        "logLoss": 0.6712050146846315,
+        "brier": 0.23919379319065223
+      },
+      "candidate": {
+        "samples": 144,
+        "logLoss": 0.6559422374866687,
+        "brier": 0.23165645765514664
+      },
+      "logLossDelta": -0.015262777197962762,
+      "brierDelta": -0.00753733553550559,
+      "bootstrap": {
+        "bySeries": {
+          "lower95": -0.04153888894142381,
+          "upper95": 0.011502333695860342,
+          "iterations": 5000,
+          "cluster": "series_id",
+          "clusters": 144
+        },
+        "byTournament": {
+          "lower95": -0.028245212387339347,
+          "upper95": -0.005913091228235728,
+          "iterations": 5000,
+          "cluster": "tournament_id",
+          "clusters": 6
+        }
+      }
+    },
+    "formUncertainty": {
+      "baseline": {
+        "samples": 144,
+        "logLoss": 0.6712050146846315,
+        "brier": 0.23919379319065223
+      },
+      "candidate": {
+        "samples": 144,
+        "logLoss": 0.6712050146846315,
+        "brier": 0.23919379319065223
+      },
+      "logLossDelta": 0,
+      "brierDelta": 0,
+      "bootstrap": {
+        "bySeries": {
+          "lower95": 0,
+          "upper95": 0,
+          "iterations": 5000,
+          "cluster": "series_id",
+          "clusters": 144
+        },
+        "byTournament": {
+          "lower95": 0,
+          "upper95": 0,
+          "iterations": 5000,
+          "cluster": "tournament_id",
+          "clusters": 6
+        }
+      },
+      "interpretation": "marginal proper-score sensitivity to one latent team shock per tournament; not posterior uncertainty and not inferred from probability residuals"
     },
     "holdout": {
       "baseline": {
         "samples": 144,
-        "logLoss": 0.6712050146846313,
+        "logLoss": 0.6712050146846315,
         "brier": 0.23919379319065223
       },
       "calibrated": {
         "samples": 144,
-        "logLoss": 0.6586397498712101,
-        "brier": 0.23250211194936365
+        "logLoss": 0.6559422374866687,
+        "brier": 0.23165645765514664
       },
-      "logLossDelta": -0.01256526481342124,
+      "logLossDelta": -0.015262777197962762,
       "bootstrap": {
-        "lower95": -0.04550257855367511,
-        "upper95": 0.02071065584534854,
+        "lower95": -0.028245212387339347,
+        "upper95": -0.005913091228235728,
         "iterations": 5000,
-        "cluster": "series_id",
-        "clusters": 144
+        "cluster": "tournament_id",
+        "clusters": 6
       }
     },
     "validation": {
-      "status": "experimental",
+      "status": "shadow",
       "validated": false,
-      "formSdHitSafetyCap": true,
-      "note": "form SD is an empirical latent-variance estimate, not posterior uncertainty; per-series shock is disabled rather than guessed"
+      "gates": {
+        "onlineUpdate": {
+          "passed": false,
+          "requires": "lower log loss and Brier; series and tournament bootstrap upper95 < 0"
+        },
+        "formUncertainty": {
+          "passed": false,
+          "requires": "selected positive SD lowers log loss and Brier; series and tournament bootstrap upper95 < 0"
+        }
+      },
+      "inactiveResearch": {
+        "temporal": true,
+        "nextgen": true
+      }
     }
   }
 }

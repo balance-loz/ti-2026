@@ -35,11 +35,26 @@ const decodePodium = (signature) => signature.startsWith("{") ? JSON.parse(signa
 
 const pairKey = (a, b) => [a, b].sort().join("|");
 const PERSONAL_INFERENCE_SCALE = .78;
-const DEFAULT_CALIBRATION = Object.freeze({ liveGlobal: 0, liveRematch: 0, probabilityTemperature: 1, formLogitSd: 0, seriesNoiseLogitSd: .04 });
+const DEFAULT_CALIBRATION = Object.freeze({ liveGlobal: 0, probabilityTemperature: 1, formLogitSd: 0, seriesNoiseLogitSd: 0 });
 const storedProbability = (a, b, answers) => {
   const key = pairKey(a, b); const value = answers[key];
   return value === undefined ? undefined : key.startsWith(`${a}|`) ? value : 100 - value;
 };
+
+export function resolveTournamentCalibration(stats) {
+  const artifact = stats?.tournamentCalibration;
+  const selected = { ...DEFAULT_CALIBRATION, ...(artifact?.selected ?? {}) };
+  const onlinePassed = artifact?.validation?.gates?.onlineUpdate?.passed === true;
+  const formPassed = artifact?.validation?.gates?.formUncertainty?.passed === true;
+  return {
+    ...selected,
+    liveGlobal: onlinePassed ? Number(selected.liveGlobal || 0) : 0,
+    formLogitSd: formPassed ? Number(selected.formLogitSd || 0) : 0,
+    seriesNoiseLogitSd: 0,
+    shadowLiveGlobal: Number(artifact?.shadow?.liveGlobal || 0),
+    shadowFormLogitSd: Number(artifact?.shadow?.formLogitSd || 0),
+  };
+}
 
 function teamScores(answers) {
   const totals = Object.fromEntries(TEAMS.map((team) => [team.id, { sum: 0, count: 0 }]));
@@ -76,8 +91,7 @@ export function buildForecastBase({ answers, stats, mode = "mixed", opinionWeigh
 
 export function buildForecastSource({ answers, stats, matches, mode = "mixed", opinionWeight = 50 }) {
   const base = buildForecastBase({ answers, stats, mode, opinionWeight });
-  const selectedCalibration = { ...DEFAULT_CALIBRATION, ...(stats?.tournamentCalibration?.selected ?? {}) };
-  const calibration = { ...selectedCalibration, formLogitSd: 0, shadowFormLogitSd: Number(selectedCalibration.formLogitSd || 0) };
+  const calibration = resolveTournamentCalibration(stats);
   return updateProbabilitiesWithLiveSeries(base, matches, { liveGlobal: calibration.liveGlobal, seriesInformation: stats?.methodology?.seriesInformation });
 }
 
@@ -122,8 +136,7 @@ export function runForecast(answers, iterations = 100000, seed = Math.floor(Math
   } : { enabled: false, minIterations: requestedIterations, maxIterations: requestedIterations, batchSize: requestedIterations, tolerancePp: 0, stableChecksRequired: 0 };
   adaptiveConfig.maxIterations = Math.max(adaptiveConfig.minIterations, adaptiveConfig.maxIterations);
   const scores = teamScores(answers); const random = seededRandom(seed);
-  const selectedCalibration = { ...DEFAULT_CALIBRATION, ...(stats?.tournamentCalibration?.selected ?? {}) };
-  const calibration = { ...selectedCalibration, formLogitSd: 0, shadowFormLogitSd: Number(selectedCalibration.formLogitSd || 0) };
+  const calibration = resolveTournamentCalibration(stats);
   const totals = Object.fromEntries(TEAMS.map((team) => [team.id, { direct: 0, playin: 0, viaPlayin: 0, playinLoss: 0, swissOut: 0, out: 0, wins: 0, losses: 0, champion: 0, final: 0, top3: 0 }]));
   const scenarioCounts = new Map(); const playoffScenarioCounts = new Map(); const matchupCounts = new Map(); const swissMatchupCounts = new Map(); const swissPathHashes = new Set(); const tournamentPathHashes = new Set(); const finalOutcomeSignatures = new Set();
   const pathSampleLimit = Math.min(adaptiveConfig.maxIterations, 250_000);
@@ -224,5 +237,5 @@ export function runForecast(answers, iterations = 100000, seed = Math.floor(Math
   const sampledIterations = Math.min(completedIterations, pathSampleLimit);
   const swissDuplicateRate = 100 * (1 - swissPathHashes.size / sampledIterations); const tournamentDuplicateRate = 100 * (1 - tournamentPathHashes.size / sampledIterations);
   const lastCheckpoint = convergenceHistory.at(-1);
-  return { teams, scenarios, playoffScenarios, swissMatchups, playinMatchups, iterations: completedIterations, requestedIterations, seed, uniqueBrackets: tournamentPathHashes.size, duplicateRate: tournamentDuplicateRate, uniqueSwissPaths: swissPathHashes.size, swissDuplicateRate, uniqueTournamentPaths: tournamentPathHashes.size, tournamentDuplicateRate, pathSampleIterations: sampledIterations, uniqueSwissOutcomes: scenarioCounts.size, uniquePlayoffPodiums: playoffScenarioCounts.size, uniqueFinalOutcomes: finalOutcomeSignatures.size, calibration, playinProjectionScope: "marginal_matchups_with_official_constraints", convergence: { adaptive: adaptiveConfig.enabled, converged, stopReason: converged ? "stable" : adaptiveConfig.enabled ? "max_iterations" : "fixed_budget", minIterations: adaptiveConfig.minIterations, maxIterations: adaptiveConfig.maxIterations, batchSize: adaptiveConfig.batchSize, tolerancePp: adaptiveConfig.tolerancePp, stableChecksRequired: adaptiveConfig.stableChecksRequired, stableChecks, maxDeltaPp: lastCheckpoint?.maxDeltaPp ?? null, maxSamplingMarginPp: lastCheckpoint?.maxSamplingMarginPp ?? 98 / Math.sqrt(completedIterations), checkpoints: convergenceHistory }, uncertaintyPolicy: stats?.tournamentCalibration?.validation?.validated ? "historical tournament holdout calibration; published MAIN formLogitSd=0" : "experimental series noise; published MAIN formLogitSd=0", formatVersion: "hidden-groups-r1-r3-playoff-v7-partial-official-playins" };
+  return { teams, scenarios, playoffScenarios, swissMatchups, playinMatchups, iterations: completedIterations, requestedIterations, seed, uniqueBrackets: tournamentPathHashes.size, duplicateRate: tournamentDuplicateRate, uniqueSwissPaths: swissPathHashes.size, swissDuplicateRate, uniqueTournamentPaths: tournamentPathHashes.size, tournamentDuplicateRate, pathSampleIterations: sampledIterations, uniqueSwissOutcomes: scenarioCounts.size, uniquePlayoffPodiums: playoffScenarioCounts.size, uniqueFinalOutcomes: finalOutcomeSignatures.size, calibration, playinProjectionScope: "marginal_matchups_with_official_constraints", convergence: { adaptive: adaptiveConfig.enabled, converged, stopReason: converged ? "stable" : adaptiveConfig.enabled ? "max_iterations" : "fixed_budget", minIterations: adaptiveConfig.minIterations, maxIterations: adaptiveConfig.maxIterations, batchSize: adaptiveConfig.batchSize, tolerancePp: adaptiveConfig.tolerancePp, stableChecksRequired: adaptiveConfig.stableChecksRequired, stableChecks, maxDeltaPp: lastCheckpoint?.maxDeltaPp ?? null, maxSamplingMarginPp: lastCheckpoint?.maxSamplingMarginPp ?? 98 / Math.sqrt(completedIterations), checkpoints: convergenceHistory }, uncertaintyPolicy: "component values are enabled only by their validated tournament holdout gates; failed candidates remain shadow", formatVersion: "hidden-groups-r1-r3-playoff-v7-partial-official-playins" };
 }

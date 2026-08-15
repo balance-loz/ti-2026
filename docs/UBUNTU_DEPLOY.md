@@ -68,6 +68,12 @@ AUTO_SNAPSHOT_ITERATIONS=1000000
 AUTO_SNAPSHOT_MAX_ITERATIONS=1000000
 AUTO_SNAPSHOT_BATCH_SIZE=250000
 AUTO_SNAPSHOT_TOLERANCE_PP=0.10
+FORECAST_JOB_MIN_ITERATIONS=10000
+FORECAST_JOB_MAX_ITERATIONS=1000000
+FORECAST_JOB_LEASE_SECONDS=300
+FORECAST_JOB_POLL_MS=500
+FORECAST_JOB_MAX_ATTEMPTS=3
+FORECAST_SCENARIO_RATE_LIMIT=30
 TI_PLAYIN_START=2026-08-16T00:00:00+08:00
 TI_PLAYOFF_START=2026-08-20T00:00:00+08:00
 ```
@@ -104,7 +110,9 @@ docker compose build --progress=plain web
 http://IP_СЕРВЕРА/
 ```
 
-API раз в 10 минут проверяет два независимых источника. Cybersport.ru даёт опубликованные будущие пары: при первом обнаружении сервер сохраняет соперников, время и pre-match вероятность. OpenDota даёт сыгранные карты лиги `19719`: они объединяются по `series_id`; BO3 записывается после двух побед, BO5 — после трёх. После нового результата сервер самостоятельно выполняет 100 000 прогонов и сохраняет снимок истории. Кнопка «Проверить пары и результаты» запускает такую же проверку вручную.
+API раз в 10 минут проверяет два независимых источника. Cybersport.ru даёт опубликованные будущие пары: при первом обнаружении сервер сохраняет соперников, время и pre-match вероятность. OpenDota даёт сыгранные карты лиги `19719`: они объединяются по `series_id`; BO3 записывается после двух побед, BO5 — после трёх. После новых пар, результатов, профиля или модельного артефакта сервер ставит Monte Carlo в SQLite-очередь и сохраняет неизменяемый снимок истории. Пока worker считает, API продолжает отдавать предыдущий ready read-model с признаком `stale`.
+
+`FORECAST_JOB_MAX_ITERATIONS` ограничивает любой ручной/автоматический прогон, `FORECAST_JOB_LEASE_SECONDS` задаёт lease worker, а `FORECAST_JOB_MAX_ATTEMPTS` — число восстановлений после падения процесса. Lease должен быть заметно длиннее обычного максимального прогона; на медленном VPS увеличьте его до `600`. `FORECAST_SCENARIO_RATE_LIMIT` ограничивает публичные enqueue canonical-профилей на один IP в минуту. Manual и conditional jobs доступны только после входа администратора; conditional всегда использует 50 000 прогонов на ветку и общий seed.
 
 Границы стадий заданы во времени Шанхая: с `TI_PLAYIN_START` матчи считаются стыковыми, с `TI_PLAYOFF_START` — плей-офф. Если организаторы изменят расписание, поправьте эти две переменные и выполните `docker compose up -d`.
 
