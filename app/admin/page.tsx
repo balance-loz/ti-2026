@@ -60,7 +60,7 @@ function stepMark(status: RefreshStep["status"]) {
 
 function RefreshProgressPanel({ progress, running }: { progress: RefreshProgress; running: boolean }) {
   const heartbeatAge = progress.heartbeatAt ? Date.now() - Date.parse(progress.heartbeatAt) : 0;
-  const isStale = running && Number.isFinite(heartbeatAge) && heartbeatAge > 180_000;
+  const isStale = running && Number.isFinite(heartbeatAge) && heartbeatAge > 120_000;
   const logTail = (progress.log ?? "").trim().split(/\n/).slice(-12).join("\n");
   return <div className="admin-refresh-progress">
     <p>
@@ -69,7 +69,7 @@ function RefreshProgressPanel({ progress, running }: { progress: RefreshProgress
       {progress.startedAt ? ` · ${formatElapsed(progress.startedAt)}` : ""}
     </p>
     {progress.detail ? <small>{progress.detail}</small> : null}
-    {isStale ? <small className="is-stale">Нет новых строк больше 3 минут — скорее ждёт OpenDota, чем считает на CPU. Смотрите docker compose logs -f api.</small> : null}
+    {isStale ? <small className="is-stale">Нет новых строк больше 2 минут. Если в логе 429 — OpenDota режет лимит и процесс спит до следующей попытки.</small> : null}
     {progress.steps?.length ? <ol>{progress.steps.map((step) => <li key={step.id} className={`is-${step.status}`}><span>{stepMark(step.status)}</span><b>{step.label}</b></li>)}</ol> : null}
     {logTail ? <pre>{logTail}</pre> : null}
   </div>;

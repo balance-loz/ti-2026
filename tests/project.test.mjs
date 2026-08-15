@@ -642,6 +642,10 @@ test("draft refresh discovers live TI league maps before training", async () => 
   assert.match(updater, /Draft sqlite persist skipped after JSON save/);
   assert.match(updater, /async function apiJsonCached/);
   assert.match(updater, /response\.headers\.get\("retry-after"\)/);
+  assert.match(updater, /MAX_RETRY_WAIT_MS/);
+  assert.match(updater, /sleepWithHeartbeat/);
+  assert.match(updater, /apiJsonArrayOrFallback/);
+  assert.match(updater, /heroStatsFromDraft/);
   assert.doesNotMatch(updater, /Promise\.all\(\[apiJson/);
 });
 

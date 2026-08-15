@@ -24,7 +24,22 @@ const pairKey = (a, b) => [Number(a), Number(b)].sort((left, right) => left - ri
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const errorMessage = (error) => error instanceof Error ? error.message : String(error);
 const asInteger = (value) => { const n = Number(value); return Number.isInteger(n) ? n : null; };
+const MAX_RETRY_WAIT_MS = 45_000;
 let nextRequestAt = 0;
+
+async function sleepWithHeartbeat(ms, label) {
+  if (ms <= 0) return;
+  if (ms <= 5_000) {
+    await sleep(ms);
+    return;
+  }
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    const left = Math.max(0, until - Date.now());
+    process.stdout.write(`${label}: waiting ${Math.ceil(left / 1000)}s\n`);
+    await sleep(Math.min(20_000, left));
+  }
+}
 
 function slimMatch(match) {
   const matchId = asInteger(match?.match_id);
@@ -68,10 +83,10 @@ function teamSide(match, openDotaIds) {
 }
 
 async function apiJson(endpoint) {
-  const attempts = 8;
+  const attempts = 5;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const wait = Math.max(0, nextRequestAt - Date.now());
-    if (wait) await sleep(wait);
+    if (wait) await sleepWithHeartbeat(wait, `OpenDota gap ${endpoint}`);
     nextRequestAt = Date.now() + REQUEST_GAP_MS;
     try {
       const response = await fetch(`${API}${endpoint}`, {
@@ -82,8 +97,9 @@ async function apiJson(endpoint) {
       process.stderr.write(`OpenDota ${response.status} ${endpoint} attempt ${attempt + 1}/${attempts}\n`);
       if (response.status === 429) {
         const retryAfter = Number(response.headers.get("retry-after"));
-        const delayMs = (Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 8 * 2 ** attempt) * 1000;
-        nextRequestAt = Date.now() + delayMs;
+        const delayMs = Math.min(MAX_RETRY_WAIT_MS, (Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 5 * 2 ** attempt) * 1000);
+        await sleepWithHeartbeat(delayMs, `OpenDota 429 ${endpoint} attempt ${attempt + 1}/${attempts}`);
+        nextRequestAt = Date.now() + REQUEST_GAP_MS;
         continue;
       }
       if (response.status < 500) throw new Error(`${endpoint}: OpenDota returned ${response.status}`);
@@ -93,7 +109,7 @@ async function apiJson(endpoint) {
       const returned = Number((message.match(/returned (\d+)/) || [])[1] || 0);
       if (attempt === attempts - 1 || (returned && returned !== 429 && returned < 500)) throw error;
     }
-    await sleep(1000 * 2 ** Math.min(attempt, 5));
+    await sleepWithHeartbeat(1000 * 2 ** Math.min(attempt, 4), `OpenDota retry ${endpoint}`);
   }
   throw new Error(`${endpoint}: retry limit reached`);
 }
@@ -134,6 +150,78 @@ async function apiJsonArray(endpoint, name, cache) {
   const payload = name ? await apiJsonCached(endpoint, name, cache) : await apiJson(endpoint);
   if (!Array.isArray(payload)) throw new Error(`${endpoint}: expected an array, got ${typeof payload}`);
   return payload;
+}
+
+async function readJsonIfExists(file) {
+  try {
+    return JSON.parse(await readFile(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function loadDraftArtifact() {
+  const files = [OUTPUT, process.env.DRAFT_STATS, path.join(ROOT, "model", "draft-stats.json")].filter(Boolean);
+  for (const file of files) {
+    const parsed = await readJsonIfExists(file);
+    if (parsed?.heroes?.length) return parsed;
+  }
+  return null;
+}
+
+function heroStatsFromDraft(draft) {
+  return (draft?.heroes ?? []).map((hero) => {
+    const rankedPicks = Number(hero.rankedPicks || 0);
+    const rankedWinRate = Number(hero.rankedWinRate || 50) / 100;
+    const proPicks = Number(hero.proPicks || 0);
+    const proWinRate = Number(hero.proWinRate || 50) / 100;
+    const image = String(hero.image || "");
+    const icon = String(hero.icon || "");
+    return {
+      id: hero.id,
+      localized_name: hero.name,
+      name: `npc_dota_hero_${hero.slug}`,
+      img: image.startsWith(STEAM_CDN) ? image.slice(STEAM_CDN.length) : image,
+      icon: icon.startsWith(STEAM_CDN) ? icon.slice(STEAM_CDN.length) : icon,
+      primary_attr: hero.primaryAttribute,
+      attack_type: hero.attackType,
+      roles: hero.roles ?? [],
+      cm_enabled: true,
+      "7_pick": rankedPicks,
+      "7_win": Math.round(rankedPicks * rankedWinRate),
+      pro_pick: proPicks,
+      pro_win: Math.round(proPicks * proWinRate),
+      pro_ban: Number(hero.proBans || 0),
+    };
+  });
+}
+
+function patchesFromDraft(draft) {
+  const id = Number(draft?.methodology?.latestOpenDotaPatchId);
+  const date = draft?.methodology?.patchStart;
+  const name = draft?.methodology?.patchName;
+  if (!Number.isInteger(id) || !date) return [];
+  return [{ id, date, name }];
+}
+
+function proPlayersFromTeamStats(teamStats) {
+  return Object.values(teamStats.teams ?? {}).flatMap((team) => (team.players ?? []).map((player) => ({
+    account_id: Number(player.accountId),
+    name: player.name,
+    personaname: player.name,
+  }))).filter((player) => player.account_id > 0);
+}
+
+async function apiJsonArrayOrFallback(endpoint, name, cache, fallback) {
+  try {
+    return await apiJsonArray(endpoint, name, cache);
+  } catch (error) {
+    const body = await fallback();
+    if (!Array.isArray(body) || !body.length) throw error;
+    process.stderr.write(`OpenDota ${endpoint} failed (${errorMessage(error)}); using local artifact fallback (${body.length} rows)\n`);
+    if (name) await writeMetaCache(name, body).catch(() => {});
+    return body;
+  }
 }
 
 function eligiblePatchMaps(teamStats, patchStartSeconds) {
@@ -399,9 +487,10 @@ async function persistDatabase(output, matches) {
 async function main() {
   process.stdout.write("Draft details: fetching OpenDota metadata...\n");
   const teamStats = JSON.parse(await readFile(TEAM_STATS_FILE, "utf8"));
-  const rawHeroes = await apiJsonArray("/heroStats", "heroStats", { preferAgeMs: 6 * 3600 * 1000, staleAgeMs: 7 * 24 * 3600 * 1000 });
-  const proPlayers = await apiJsonArray("/proPlayers", "proPlayers", { preferAgeMs: 6 * 3600 * 1000, staleAgeMs: 7 * 24 * 3600 * 1000 });
-  const patches = await apiJsonArray("/constants/patch", "patches", { preferAgeMs: 24 * 3600 * 1000, staleAgeMs: 30 * 24 * 3600 * 1000 });
+  const draftArtifact = await loadDraftArtifact();
+  const rawHeroes = await apiJsonArrayOrFallback("/heroStats", "heroStats", { preferAgeMs: 6 * 3600 * 1000, staleAgeMs: 7 * 24 * 3600 * 1000 }, () => heroStatsFromDraft(draftArtifact));
+  const proPlayers = await apiJsonArrayOrFallback("/proPlayers", "proPlayers", { preferAgeMs: 6 * 3600 * 1000, staleAgeMs: 7 * 24 * 3600 * 1000 }, () => proPlayersFromTeamStats(teamStats));
+  const patches = await apiJsonArrayOrFallback("/constants/patch", "patches", { preferAgeMs: 24 * 3600 * 1000, staleAgeMs: 30 * 24 * 3600 * 1000 }, () => patchesFromDraft(draftArtifact));
   const currentPatch = [...patches].sort((a, b) => Number(b.id) - Number(a.id))[0];
   if (!currentPatch) throw new Error("OpenDota /constants/patch returned no patches");
   const patchStartSeconds = Math.floor(Date.parse(currentPatch.date) / 1000);
