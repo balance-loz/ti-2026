@@ -644,9 +644,19 @@ test("draft refresh discovers live TI league maps before training", async () => 
   assert.match(updater, /response\.headers\.get\("retry-after"\)/);
   assert.match(updater, /MAX_RETRY_WAIT_MS/);
   assert.match(updater, /sleepWithHeartbeat/);
-  assert.match(updater, /apiJsonArrayOrFallback/);
+  assert.match(updater, /loadMetadataArray/);
+  assert.match(updater, /proPlayersFromArtifacts/);
   assert.match(updater, /heroStatsFromDraft/);
+  assert.match(updater, /using local \$\{backup\.length\} rows/);
   assert.doesNotMatch(updater, /Promise\.all\(\[apiJson/);
+  const teamStats = JSON.parse(await readFile("public/team-stats.json", "utf8"));
+  const draftStats = JSON.parse(await readFile("public/draft-stats.json", "utf8"));
+  const rosterIds = new Set(Object.values(teamStats.teams).flatMap((team) => [...(team.roster ?? []), ...(team.historicalRoster ?? [])]));
+  const namedPlayers = Object.values(draftStats.teams ?? {}).flatMap((team) => team.players ?? []);
+  assert.ok(rosterIds.size >= 80);
+  assert.ok(namedPlayers.length >= 80);
+  assert.ok(draftStats.heroes.length >= 120);
+  assert.ok(Number.isInteger(draftStats.methodology.latestOpenDotaPatchId));
 });
 
 test("deployment files do not contain the administrator password", async () => {

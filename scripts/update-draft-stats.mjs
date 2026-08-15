@@ -82,8 +82,9 @@ function teamSide(match, openDotaIds) {
   return null;
 }
 
-async function apiJson(endpoint) {
-  const attempts = 5;
+async function apiJson(endpoint, options = {}) {
+  const attempts = Math.max(1, Number(options.attempts ?? 5));
+  const maxWaitMs = Math.max(1_000, Number(options.maxWaitMs ?? MAX_RETRY_WAIT_MS));
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const wait = Math.max(0, nextRequestAt - Date.now());
     if (wait) await sleepWithHeartbeat(wait, `OpenDota gap ${endpoint}`);
@@ -91,13 +92,14 @@ async function apiJson(endpoint) {
     try {
       const response = await fetch(`${API}${endpoint}`, {
         headers: { "user-agent": "TI26Predictor/0.4 (local personal analytics)" },
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
       });
       if (response.ok) return response.json();
       process.stderr.write(`OpenDota ${response.status} ${endpoint} attempt ${attempt + 1}/${attempts}\n`);
       if (response.status === 429) {
+        if (options.failFastOn429 || attempt === attempts - 1) throw new Error(`${endpoint}: OpenDota returned 429`);
         const retryAfter = Number(response.headers.get("retry-after"));
-        const delayMs = Math.min(MAX_RETRY_WAIT_MS, (Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 5 * 2 ** attempt) * 1000);
+        const delayMs = Math.min(maxWaitMs, (Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 5 * 2 ** attempt) * 1000);
         await sleepWithHeartbeat(delayMs, `OpenDota 429 ${endpoint} attempt ${attempt + 1}/${attempts}`);
         nextRequestAt = Date.now() + REQUEST_GAP_MS;
         continue;
@@ -107,9 +109,9 @@ async function apiJson(endpoint) {
       const message = errorMessage(error);
       process.stderr.write(`OpenDota error ${endpoint} attempt ${attempt + 1}/${attempts}: ${message}\n`);
       const returned = Number((message.match(/returned (\d+)/) || [])[1] || 0);
-      if (attempt === attempts - 1 || (returned && returned !== 429 && returned < 500)) throw error;
+      if (attempt === attempts - 1 || (returned && returned !== 429 && returned < 500) || (options.failFastOn429 && returned === 429)) throw error;
     }
-    await sleepWithHeartbeat(1000 * 2 ** Math.min(attempt, 4), `OpenDota retry ${endpoint}`);
+    if (attempt < attempts - 1) await sleepWithHeartbeat(1000 * 2 ** Math.min(attempt, 4), `OpenDota retry ${endpoint}`);
   }
   throw new Error(`${endpoint}: retry limit reached`);
 }
@@ -204,24 +206,47 @@ function patchesFromDraft(draft) {
   return [{ id, date, name }];
 }
 
-function proPlayersFromTeamStats(teamStats) {
-  return Object.values(teamStats.teams ?? {}).flatMap((team) => (team.players ?? []).map((player) => ({
-    account_id: Number(player.accountId),
-    name: player.name,
-    personaname: player.name,
-  }))).filter((player) => player.account_id > 0);
+function proPlayersFromArtifacts(teamStats, draft) {
+  const byId = new Map();
+  const remember = (accountId, name) => {
+    const id = Number(accountId);
+    if (!(id > 0)) return;
+    const label = String(name || "").trim();
+    const current = byId.get(id);
+    if (!current || (label && current.name.startsWith("Player "))) {
+      byId.set(id, { account_id: id, name: label || `Player ${id}`, personaname: label || `Player ${id}` });
+    }
+  };
+  for (const team of Object.values(draft?.teams ?? {})) {
+    for (const player of team.players ?? []) remember(player.accountId, player.name);
+  }
+  for (const team of Object.values(teamStats.teams ?? {})) {
+    remember(team.rosterProjection?.replacementOut?.accountId, team.rosterProjection?.replacementOut?.name);
+    remember(team.rosterProjection?.replacementIn?.accountId, team.rosterProjection?.replacementIn?.name);
+    for (const accountId of [...(team.roster ?? []), ...(team.historicalRoster ?? [])]) remember(accountId);
+  }
+  return [...byId.values()];
 }
 
-async function apiJsonArrayOrFallback(endpoint, name, cache, fallback) {
-  try {
-    return await apiJsonArray(endpoint, name, cache);
-  } catch (error) {
-    const body = await fallback();
-    if (!Array.isArray(body) || !body.length) throw error;
-    process.stderr.write(`OpenDota ${endpoint} failed (${errorMessage(error)}); using local artifact fallback (${body.length} rows)\n`);
-    if (name) await writeMetaCache(name, body).catch(() => {});
-    return body;
+async function loadMetadataArray(endpoint, name, fallback) {
+  const local = await fallback();
+  const cached = name ? await readMetaCache(name, 30 * 24 * 3600 * 1000) : null;
+  const backup = Array.isArray(local) && local.length ? local : Array.isArray(cached) && cached.length ? cached : null;
+  if (backup) {
+    process.stdout.write(`Draft details: ${endpoint} using local ${backup.length} rows\n`);
+    return backup;
   }
+  try {
+    const fresh = await apiJson(endpoint, { attempts: 1, failFastOn429: true, timeoutMs: 8_000 });
+    if (Array.isArray(fresh) && fresh.length) {
+      if (name) await writeMetaCache(name, fresh);
+      process.stdout.write(`Draft details: ${endpoint} refreshed from OpenDota (${fresh.length})\n`);
+      return fresh;
+    }
+  } catch (error) {
+    throw new Error(`${endpoint}: ${errorMessage(error)} and no local fallback`);
+  }
+  throw new Error(`${endpoint}: empty response and no local fallback`);
 }
 
 function eligiblePatchMaps(teamStats, patchStartSeconds) {
@@ -277,7 +302,7 @@ async function downloadMissingMatches(matchIds) {
   let failed = 0;
   for (const matchId of queue) {
     try {
-      const detail = await apiJson(`/matches/${matchId}`);
+      const detail = await apiJson(`/matches/${matchId}`, { attempts: 2, maxWaitMs: 8_000, failFastOn429: false, timeoutMs: 15_000 });
       await writeFile(path.join(MATCH_CACHE, `${matchId}.json`), JSON.stringify(detail));
       downloaded += 1;
     } catch (error) {
@@ -485,19 +510,19 @@ async function persistDatabase(output, matches) {
 }
 
 async function main() {
-  process.stdout.write("Draft details: fetching OpenDota metadata...\n");
+  process.stdout.write("Draft details: loading metadata from local artifacts...\n");
   const teamStats = JSON.parse(await readFile(TEAM_STATS_FILE, "utf8"));
   const draftArtifact = await loadDraftArtifact();
-  const rawHeroes = await apiJsonArrayOrFallback("/heroStats", "heroStats", { preferAgeMs: 6 * 3600 * 1000, staleAgeMs: 7 * 24 * 3600 * 1000 }, () => heroStatsFromDraft(draftArtifact));
-  const proPlayers = await apiJsonArrayOrFallback("/proPlayers", "proPlayers", { preferAgeMs: 6 * 3600 * 1000, staleAgeMs: 7 * 24 * 3600 * 1000 }, () => proPlayersFromTeamStats(teamStats));
-  const patches = await apiJsonArrayOrFallback("/constants/patch", "patches", { preferAgeMs: 24 * 3600 * 1000, staleAgeMs: 30 * 24 * 3600 * 1000 }, () => patchesFromDraft(draftArtifact));
+  const rawHeroes = await loadMetadataArray("/heroStats", "heroStats", () => heroStatsFromDraft(draftArtifact));
+  const proPlayers = await loadMetadataArray("/proPlayers", "proPlayers", () => proPlayersFromArtifacts(teamStats, draftArtifact));
+  const patches = await loadMetadataArray("/constants/patch", "patches", () => patchesFromDraft(draftArtifact));
   const currentPatch = [...patches].sort((a, b) => Number(b.id) - Number(a.id))[0];
   if (!currentPatch) throw new Error("OpenDota /constants/patch returned no patches");
   const patchStartSeconds = Math.floor(Date.parse(currentPatch.date) / 1000);
   const eligible = eligiblePatchMaps(teamStats, patchStartSeconds);
   let liveTournamentMaps = 0;
   try {
-    const leagueMaps = await apiJsonArray(`/leagues/${TI_LEAGUE_ID}/matches`, `league-${TI_LEAGUE_ID}`, { preferAgeMs: 10 * 60 * 1000, staleAgeMs: 6 * 3600 * 1000 });
+    const leagueMaps = await loadMetadataArray(`/leagues/${TI_LEAGUE_ID}/matches`, `league-${TI_LEAGUE_ID}`, () => []);
     liveTournamentMaps = addLiveTournamentMaps(eligible, teamStats, leagueMaps, patchStartSeconds);
   } catch (error) {
     process.stderr.write(`Live TI draft discovery skipped: ${errorMessage(error)}\n`);
