@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { completedSeriesFromMaps, inProgressSeriesFromMaps, selectSeriesMaps, seriesWinsFromMaps } from "../server/live-series.mjs";
 import { liveDraftsFromOpenDota, mergeLiveDraftGames } from "../server/live-drafts.mjs";
+import { leagueMapsPollPlan, livePollPlan } from "../server/opendota-poll.mjs";
 import { scheduledSeriesFromCybersportHtml } from "../server/schedule-source.mjs";
 import { buildForecastSource, resolveTournamentCalibration, ROUND_ONE, runForecast, SWISS_GROUPS, SWISS_GROUP_BY_TEAM, swissBucketKey, topGroupScenarios } from "../server/forecast-engine.mjs";
 import { calculateActiveDraftPrediction } from "../server/active-draft-service.mjs";
@@ -706,6 +707,72 @@ test("series map selection keeps finished maps even when the live series id diff
   assert.deepEqual(seriesWinsFromMaps("lgd", "yandex", selected), { winsA: 0, winsB: 2 });
 });
 
+test("series map selection falls back to the latest same-pair cluster when the schedule window is empty", () => {
+  const maps = [
+    { matchId: "old", seriesId: "qual", radiantTeam: "lgd", direTeam: "yandex", winner: "lgd", startTime: 1_770_000_000 },
+    { matchId: "1", seriesId: "aa", radiantTeam: "lgd", direTeam: "yandex", winner: "yandex", startTime: 1_786_872_000 },
+    { matchId: "2", seriesId: "aa", radiantTeam: "yandex", direTeam: "lgd", winner: "lgd", startTime: 1_786_876_000 },
+  ];
+  const selected = selectSeriesMaps({
+    seriesId: null, liveSeriesId: null, liveMatchId: null, teamA: "lgd", teamB: "yandex", scheduledAt: "2026-08-14T00:00:00.000Z",
+  }, maps);
+  assert.deepEqual(selected.map((map) => map.matchId), ["1", "2"]);
+  assert.deepEqual(seriesWinsFromMaps("lgd", "yandex", selected), { winsA: 1, winsB: 1 });
+});
+
+test("OpenDota free-tier polling follows the match window and slows down after picks", () => {
+  const nowMs = Date.parse("2026-08-16T12:00:00.000Z");
+  const scheduled = { winner: null, score_a: 0, score_b: 0, scheduled_at: "2026-08-16T12:10:00.000Z", stage: "playin" };
+  assert.equal(livePollPlan({ nowMs, matches: [], liveGames: [], remainingDaily: 2800 }).shouldPoll, false);
+  assert.equal(livePollPlan({ nowMs, matches: [scheduled], liveGames: [], remainingDaily: 2800 }).intervalSeconds, 45);
+  assert.equal(livePollPlan({
+    nowMs, matches: [scheduled], remainingDaily: 2800,
+    liveGames: [{ matchId: "1", phase: "draft", radiantPicks: [1, 2], direPicks: [3] }],
+  }).intervalSeconds, 20);
+  assert.equal(livePollPlan({
+    nowMs, matches: [scheduled], remainingDaily: 2800,
+    liveGames: [{ matchId: "1", phase: "game", radiantPicks: [1, 2, 3, 4, 5], direPicks: [6, 7, 8, 9, 10] }],
+  }).intervalSeconds, 120);
+  assert.equal(livePollPlan({
+    nowMs, matches: [{ winner: null, score_a: 1, score_b: 1, scheduled_at: "2026-08-16T08:00:00.000Z" }],
+    liveGames: [], remainingDaily: 2800,
+  }).intervalSeconds, 45);
+  assert.equal(livePollPlan({
+    nowMs, matches: [scheduled], remainingDaily: 100,
+    liveGames: [{ matchId: "1", phase: "game", radiantPicks: [1, 2, 3, 4, 5], direPicks: [6, 7, 8, 9, 10] }],
+  }).intervalSeconds, 600);
+  assert.equal(leagueMapsPollPlan({ nowMs, matches: [], liveGames: [], remainingDaily: 2800 }).shouldPoll, false);
+  assert.equal(leagueMapsPollPlan({ nowMs, matches: [scheduled], liveGames: [], remainingDaily: 2800 }).intervalSeconds, 120);
+});
+
+test("OpenDota live polling uses MSK Cybersport times and skips gaps", () => {
+  const storedMsk = { winner: null, score_a: 0, score_b: 0, scheduled_at: "2026-08-16T12:00:00.000Z", stage: "playin", team_a: "lgd", team_b: "yandex" };
+  assert.equal(livePollPlan({
+    nowMs: Date.parse("2026-08-16T07:30:00.000Z"), matches: [storedMsk], liveGames: [], remainingDaily: 2800,
+  }).shouldPoll, false);
+  assert.equal(livePollPlan({
+    nowMs: Date.parse("2026-08-16T10:30:00.000Z"), matches: [storedMsk], liveGames: [], remainingDaily: 2800,
+  }).reason, "match_window_waiting");
+  assert.equal(livePollPlan({
+    nowMs: Date.parse("2026-08-16T15:30:00.000Z"), matches: [storedMsk], liveGames: [], remainingDaily: 2800,
+  }).reason, "match_window_waiting");
+  const first = { winner: "lgd", score_a: 2, score_b: 0, scheduled_at: "2026-08-16T10:00:00.000Z", stage: "playin" };
+  const next = { winner: null, score_a: 0, score_b: 0, scheduled_at: "2026-08-16T20:00:00.000Z", stage: "playin" };
+  assert.equal(livePollPlan({
+    nowMs: Date.parse("2026-08-16T11:20:00.000Z"), matches: [next], liveGames: [], remainingDaily: 2800,
+  }).shouldPoll, false);
+  assert.equal(livePollPlan({
+    nowMs: Date.parse("2026-08-16T11:20:00.000Z"), matches: [first, next], liveGames: [], remainingDaily: 2800,
+  }).reason, "match_window_waiting");
+  assert.equal(livePollPlan({
+    nowMs: Date.parse("2026-08-16T03:00:00.000Z"),
+    matches: [{ winner: null, score_a: 0, score_b: 0, scheduled_at: null, team_a: "og", team_b: "nigma" }],
+    livePairs: ["nigma|og"],
+    liveGames: [],
+    remainingDaily: 2800,
+  }).shouldPoll, true);
+});
+
 test("OpenDota live feed becomes a partial TI draft and rejects stale games", () => {
   const rows = [{ league_id: 19719, match_id: 42, series_id: 7, team_id_radiant: 9247354, team_id_dire: 9572001, game_time: -30, delay: 10, last_update_time: 1_000, radiant_lead: 2400, spectators: 1234,
     players: [{ team: 0, team_slot: 2, account_id: 20, hero_id: 59, name: "Second" }, { team: 0, team_slot: 1, account_id: 10, hero_id: 80, name: "First" }, { team: 1, team_slot: 1, account_id: 30, hero_id: 55 }] }];
@@ -778,10 +845,19 @@ test("unified home loads server-owned live history and draft evidence", async ()
   assert.match(story, /SERVER-FROZEN EVIDENCE/);
   assert.match(story, /fusion-chart-live/);
   assert.match(redirect, /window\.location\.replace\("\/#live"\)/);
-  assert.match(api, /OPENDOTA_API_URL}\/live/);
-  assert.match(api, /OPENDOTA_API_URL}\/leagues\/\$\{TI_LEAGUE_ID\}\/matches/);
+  assert.match(api, /opendotaJson\("\/live"/);
+  assert.match(api, /opendotaJson\(`\/leagues\/\$\{TI_LEAGUE_ID\}\/matches`/);
   assert.match(api, /liveDraftsFromOpenDota/);
   assert.match(api, /liveDraftBackoffUntil/);
+  assert.match(api, /leagueMapsBackoffUntil/);
+  assert.match(api, /async function refreshCybersportSchedule/);
+  assert.match(api, /cybersportLivePairs/);
+  assert.match(api, /setInterval\(refreshLeagueMapsCache/);
+  assert.match(api, /reserveOpenDotaCall/);
+  assert.match(api, /OPENDOTA_FREE_DAILY_LIMIT = 2800/);
+  assert.match(api, /if \(liveDraftBackoffUntil && Date\.now\(\) < liveDraftBackoffUntil\) return liveDraftCache/);
+  assert.match(api, /if \(leagueMapsBackoffUntil && Date\.now\(\) < leagueMapsBackoffUntil\) return liveLeagueMapsCache/);
+  assert.doesNotMatch(api, /refreshLiveDrafts[\s\S]{0,800}persistLeagueMapProgress/);
   assert.match(api, /persistInProgressSeries/);
   assert.match(api, /selectSeriesMaps/);
   assert.match(api, /observedSeriesWins/);
@@ -796,7 +872,8 @@ test("unified home loads server-owned live history and draft evidence", async ()
   assert.match(api, /overlayCombinedLive\(fallback\)/);
   assert.match(api, /SELECT match_id,picks_hash,captured_at FROM live_draft_predictions/);
   assert.doesNotMatch(api, /JSON\.stringify\(\{ opinionWeight: Number\(opinionWeight\), latestSnapshot, matches, locks, drafts, liveFetchedAt \}\)/);
-  assert.match(api, /setInterval\(refreshLiveDraftCache/);
+  assert.match(api, /setInterval\(\(\) => refreshLiveDraftCache\(false\), LIVE_POLL\.tickSeconds \* 1_000\)/);
+  assert.match(api, /from "\.\/opendota-poll\.mjs"/);
   assert.doesNotMatch(api, /refreshLiveDraftCache[\s\S]{0,120}materializeCombinedForecast/);
 });
 
@@ -844,8 +921,8 @@ test("Cybersport schedule becomes official pre-match series", () => {
     <div>14.08.26 в 08:00<img alt="PARIVISION"><img alt="Nigma Galaxy"><span class="vs_pcDDl">vs</span><img alt="BetBoom"></div>
     <div>14.08.26 в 11:00<img alt="Team Spirit"><img alt="Xtreme Gaming"><span class="vs_pcDDl">vs</span></div>`;
   assert.deepEqual(scheduledSeriesFromCybersportHtml(html), [
-    { teamA: "parivision", teamB: "nigma", round: 2, scheduledAt: "2026-08-14T05:00:00.000Z", scheduledDate: "2026-08-14", stage: "swiss", source: "cybersport" },
-    { teamA: "spirit", teamB: "xtreme", round: 2, scheduledAt: "2026-08-14T08:00:00.000Z", scheduledDate: "2026-08-14", stage: "swiss", source: "cybersport" },
+    { teamA: "parivision", teamB: "nigma", round: 2, scheduledAt: "2026-08-14T05:00:00.000Z", scheduledDate: "2026-08-14", stage: "swiss", live: false, source: "cybersport" },
+    { teamA: "spirit", teamB: "xtreme", round: 2, scheduledAt: "2026-08-14T08:00:00.000Z", scheduledDate: "2026-08-14", stage: "swiss", live: false, source: "cybersport" },
   ]);
 });
 
@@ -855,7 +932,7 @@ test("time-less Swiss card keeps its semantic round stage", () => {
     <div class="item_a"><div class="date_x"><span>LIVE</span></div><div class="participant_a"><img alt="LGD"></div><div class="participant_b"><img alt="Vici Gaming"></div><span>0:0</span></div>
     <div id="stage-participants"></div>`;
   assert.deepEqual(scheduledSeriesFromCybersportHtml(html), [
-    { teamA: "lgd", teamB: "vg", round: 5, scheduledAt: null, scheduledDate: null, stage: "swiss", source: "cybersport" },
+    { teamA: "lgd", teamB: "vg", round: 5, scheduledAt: null, scheduledDate: null, stage: "swiss", live: true, source: "cybersport" },
   ]);
 });
 
@@ -867,9 +944,9 @@ test("semantic Elimination Round parsing preserves nullable LIVE and time-less t
     <div class="item_c"><div class="date_x"></div><div class="participant_a"><img alt="Liquid"></div><div class="participant_b"><img alt="Yandex"></div><span class="vs_x">vs</span></div>
     <div id="stage-participants"></div>`;
   assert.deepEqual(scheduledSeriesFromCybersportHtml(html, { now: new Date("2026-08-13T10:15:00.000Z") }), [
-    { teamA: "falcons", teamB: "parivision", round: 1, scheduledAt: "2026-08-13T10:00:00.000Z", scheduledDate: "2026-08-13", stage: "playin", source: "cybersport" },
-    { teamA: "og", teamB: "nigma", round: 1, scheduledAt: null, scheduledDate: null, stage: "playin", source: "cybersport" },
-    { teamA: "liquid", teamB: "yandex", round: 1, scheduledAt: null, scheduledDate: null, stage: "playin", source: "cybersport" },
+    { teamA: "falcons", teamB: "parivision", round: 1, scheduledAt: "2026-08-13T10:00:00.000Z", scheduledDate: "2026-08-13", stage: "playin", live: false, source: "cybersport" },
+    { teamA: "og", teamB: "nigma", round: 1, scheduledAt: null, scheduledDate: null, stage: "playin", live: true, source: "cybersport" },
+    { teamA: "liquid", teamB: "yandex", round: 1, scheduledAt: null, scheduledDate: null, stage: "playin", live: false, source: "cybersport" },
   ]);
 });
 
@@ -877,7 +954,7 @@ test("L1 TEAM sponsorship-safe name resolves to L1ga", () => {
   const html = `<div class="tab_x isActive_y"><span>Раунд 3</span></div>
     <div>15.08.26 в 14:00<img alt="L1 TEAM"><img alt="Team Liquid"><span class="vs_pcDDl">vs</span></div>`;
   assert.deepEqual(scheduledSeriesFromCybersportHtml(html), [
-    { teamA: "l1ga", teamB: "liquid", round: 3, scheduledAt: "2026-08-15T11:00:00.000Z", scheduledDate: "2026-08-15", stage: "swiss", source: "cybersport" },
+    { teamA: "l1ga", teamB: "liquid", round: 3, scheduledAt: "2026-08-15T11:00:00.000Z", scheduledDate: "2026-08-15", stage: "swiss", live: false, source: "cybersport" },
   ]);
 });
 
@@ -885,7 +962,7 @@ test("Tundra schedule name resolves to transferred 1w roster", () => {
   const html = `<div class="tab_x isActive_y"><span>Раунд 2</span></div>
     <div>14.08.26 в 14:00<img alt="Tundra Esports"><img alt="Team Spirit"><span class="vs_pcDDl">vs</span></div>`;
   assert.deepEqual(scheduledSeriesFromCybersportHtml(html), [
-    { teamA: "1w", teamB: "spirit", round: 2, scheduledAt: "2026-08-14T11:00:00.000Z", scheduledDate: "2026-08-14", stage: "swiss", source: "cybersport" },
+    { teamA: "1w", teamB: "spirit", round: 2, scheduledAt: "2026-08-14T11:00:00.000Z", scheduledDate: "2026-08-14", stage: "swiss", live: false, source: "cybersport" },
   ]);
 });
 

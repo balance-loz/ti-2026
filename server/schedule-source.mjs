@@ -35,6 +35,10 @@ function scheduledAtFromText(text, { now, timezoneOffset }) {
   return null;
 }
 
+function dateIsLive(text) {
+  return /\bLIVE\b/i.test(decodeHtml(text || ""));
+}
+
 function scheduledDateFromText(text, scheduledAt) {
   if (scheduledAt) return scheduledAt.slice(0, 10);
   const clean = decodeHtml(text).replace(/\s+/g, " ").trim();
@@ -60,10 +64,11 @@ function addScheduled(scheduled, seen, chunk, round, options, inheritedStage = n
   const dateHtml = chunk.match(/<div[^>]*class="[^"]*date_[^"]*"[^>]*>([\s\S]*?)<\/div>/i)?.[1] ?? chunk;
   const scheduledAt = scheduledAtFromText(dateHtml, options);
   const scheduledDate = scheduledDateFromText(dateHtml, scheduledAt);
+  const live = dateIsLive(dateHtml);
   const key = [teamA, teamB].sort().join("|");
   if (seen.has(key)) return;
   seen.add(key);
-  scheduled.push({ teamA, teamB, round, scheduledAt, scheduledDate, stage: semanticStage(chunk) ?? inheritedStage, source: "cybersport" });
+  scheduled.push({ teamA, teamB, round, scheduledAt, scheduledDate, stage: semanticStage(chunk) ?? inheritedStage, live, source: "cybersport" });
 }
 
 export function scheduledSeriesFromCybersportHtml(html, { timezoneOffset = "+03:00", now = new Date() } = {}) {

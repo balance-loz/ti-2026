@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { Worker } from "node:worker_threads";
 import path from "node:path";
 import { completedSeriesFromMaps, inProgressSeriesFromMaps, OPENDOTA_TEAMS, selectSeriesMaps, seriesWinsFromMaps } from "./live-series.mjs";
+import { anyMatchWindowActive, leagueMapsPollPlan, livePollPlan, LIVE_POLL } from "./opendota-poll.mjs";
 import { scheduledSeriesFromCybersportHtml } from "./schedule-source.mjs";
 import { buildForecastSource, ROUND_ONE } from "./forecast-engine.mjs";
 import { predictTemporalDraft } from "./draft-inference.mjs";
@@ -27,12 +28,18 @@ const SESSION_DAYS = 30;
 const TI_LEAGUE_ID = Number(process.env.TI_LEAGUE_ID || 19719);
 const LIVE_SYNC_ENABLED = process.env.LIVE_SYNC_ENABLED !== "false";
 const LIVE_SYNC_INTERVAL_MINUTES = Math.max(2, Number(process.env.LIVE_SYNC_INTERVAL_MINUTES || 10));
-const LIVE_DRAFT_INTERVAL_SECONDS = Math.max(5, Number(process.env.LIVE_DRAFT_INTERVAL_SECONDS || 10));
+const LIVE_DRAFT_INTERVAL_SECONDS = Math.max(15, Number(process.env.LIVE_DRAFT_INTERVAL_SECONDS || 20));
 const LIVE_DRAFT_GRACE_SECONDS = Math.max(30, Number(process.env.LIVE_DRAFT_GRACE_SECONDS || 120));
 const LIVE_DRAFT_SYNC_ENABLED = process.env.LIVE_DRAFT_SYNC_ENABLED !== "false";
-const MAP_DETAIL_SYNC_LIMIT = Math.max(0, Number(process.env.MAP_DETAIL_SYNC_LIMIT || 12));
+const MAP_DETAIL_SYNC_LIMIT = Math.max(0, Number(process.env.MAP_DETAIL_SYNC_LIMIT || 2));
 const DECISION_MIN_LEAD_MINUTES = Math.max(0, Number(process.env.DECISION_MIN_LEAD_MINUTES || 15));
 const OPENDOTA_API_URL = process.env.OPENDOTA_API_URL || "https://api.opendota.com/api";
+const OPENDOTA_API_KEY = process.env.OPENDOTA_API_KEY || "";
+const OPENDOTA_USER_AGENT = "ti-2026-predictor/1.0 (github.com/balance-loz/ti-2026)";
+const LIVE_LEAGUE_MAPS_INTERVAL_SECONDS = Math.max(60, Number(process.env.LIVE_LEAGUE_MAPS_INTERVAL_SECONDS || 120));
+const OPENDOTA_FREE_DAILY_LIMIT = 2800;
+const OPENDOTA_FREE_MINUTE_LIMIT = 50;
+const SCHEDULE_REFRESH_INTERVAL_SECONDS = Math.max(30, Number(process.env.SCHEDULE_REFRESH_INTERVAL_SECONDS || 90));
 const SCHEDULE_SYNC_ENABLED = process.env.SCHEDULE_SYNC_ENABLED !== "false";
 const SCHEDULE_SOURCE_URL = process.env.SCHEDULE_SOURCE_URL || "https://www.cybersport.ru/tournaments/dota-2/the-international-2026";
 const SCHEDULE_TIMEZONE_OFFSET = process.env.SCHEDULE_TIMEZONE_OFFSET || "+03:00";
@@ -264,8 +271,13 @@ let liveDraftPromise = null;
 let liveDraftCache = { games: [], fetchedAt: null, error: null };
 let liveDraftBackoffUntil = 0;
 let liveDraftBackoffMs = 0;
+let leagueMapsBackoffUntil = 0;
+let leagueMapsPromise = null;
 const liveDraftErrors = new Map();
 let liveLeagueMapsCache = { maps: [], fetchedAt: null };
+let cybersportLivePairs = [];
+let cybersportScheduleFetchedAt = null;
+let cybersportSchedulePromise = null;
 const LIVE_DRAFT_RATE_LIMIT_HOLD_MS = 15 * 60_000;
 let autoSnapshotTimer = null;
 let pendingAutomaticSnapshotTrigger = null;
@@ -282,6 +294,76 @@ const json = (res, status, value) => {
   res.end(JSON.stringify(value));
 };
 const now = () => new Date().toISOString();
+
+const opendotaBudget = { day: "", dayCount: 0, minuteStart: 0, minuteCount: 0 };
+
+function noteOpenDota429(kind = "maps") {
+  if (kind === "live") {
+    liveDraftBackoffMs = Math.min(300_000, Math.max(60_000, liveDraftBackoffMs * 2 || 60_000));
+    liveDraftBackoffUntil = Date.now() + liveDraftBackoffMs;
+    return;
+  }
+  leagueMapsBackoffUntil = Date.now() + 60_000;
+}
+
+function refreshOpenDotaBudgetWindow() {
+  const nowMs = Date.now();
+  const day = new Date().toISOString().slice(0, 10);
+  if (opendotaBudget.day !== day) {
+    opendotaBudget.day = day;
+    opendotaBudget.dayCount = 0;
+  }
+  if (nowMs - opendotaBudget.minuteStart >= 60_000) {
+    opendotaBudget.minuteStart = nowMs;
+    opendotaBudget.minuteCount = 0;
+  }
+}
+
+function opendotaDailyRemaining() {
+  if (OPENDOTA_API_KEY) return Number.POSITIVE_INFINITY;
+  refreshOpenDotaBudgetWindow();
+  return Math.max(0, OPENDOTA_FREE_DAILY_LIMIT - opendotaBudget.dayCount);
+}
+
+function reserveOpenDotaCall() {
+  if (OPENDOTA_API_KEY) return true;
+  refreshOpenDotaBudgetWindow();
+  if (opendotaBudget.dayCount >= OPENDOTA_FREE_DAILY_LIMIT || opendotaBudget.minuteCount >= OPENDOTA_FREE_MINUTE_LIMIT) return false;
+  opendotaBudget.minuteCount += 1;
+  opendotaBudget.dayCount += 1;
+  return true;
+}
+
+function opendotaUrl(pathname) {
+  const base = `${OPENDOTA_API_URL}${pathname.startsWith("/") ? pathname : `/${pathname}`}`;
+  if (!OPENDOTA_API_KEY) return base;
+  return `${base}${base.includes("?") ? "&" : "?"}api_key=${encodeURIComponent(OPENDOTA_API_KEY)}`;
+}
+
+async function opendotaJson(pathname, { timeoutMs = 15_000, kind = "maps" } = {}) {
+  if (!reserveOpenDotaCall()) {
+    const until = Date.now() + 30_000;
+    if (kind === "live") liveDraftBackoffUntil = Math.max(liveDraftBackoffUntil, until);
+    else leagueMapsBackoffUntil = Math.max(leagueMapsBackoffUntil, until);
+    throw new Error("OpenDota free-tier budget");
+  }
+  const response = await fetch(opendotaUrl(pathname), {
+    headers: { "user-agent": OPENDOTA_USER_AGENT },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (response.status === 429) {
+    noteOpenDota429(kind);
+    throw new Error(`OpenDota HTTP 429`);
+  }
+  if (!response.ok) throw new Error(`OpenDota HTTP ${response.status}`);
+  return response.json();
+}
+
+function opendotaInBackoff(kind = "maps") {
+  const until = kind === "live" ? liveDraftBackoffUntil : leagueMapsBackoffUntil;
+  return Boolean(until && Date.now() < until);
+}
+
 const REFRESH_STEPS = Object.freeze([
   { id: "update-stats", script: "scripts/update-stats.mjs", label: "Статистика команд" },
   { id: "backtest-model", script: "scripts/backtest-model.mjs", label: "Бэктест модели команд" },
@@ -1352,10 +1434,11 @@ function persistScheduledSeries(series, probabilities) {
   if (existing?.winner) return "scheduledUnchanged";
   const predictedProbability = probabilityFor(probabilities, series.teamA, series.teamB);
   if (existing) {
-    if (existing.scheduled_at === series.scheduledAt && existing.predicted_probability !== null) return "scheduledUnchanged";
+    const nextScheduled = series.scheduledAt ?? existing.scheduled_at;
+    if (existing.scheduled_at === nextScheduled && existing.predicted_probability !== null) return "scheduledUnchanged";
     const orientedProbability = existing.team_a === series.teamA ? predictedProbability : 100 - predictedProbability;
     db.prepare("UPDATE matches SET scheduled_at = ?, source_match_id = COALESCE(source_match_id, ?), predicted_probability = COALESCE(predicted_probability, ?), updated_at = ? WHERE id = ?")
-      .run(series.scheduledAt, sourceMatchId, orientedProbability, now(), existing.id);
+      .run(nextScheduled, sourceMatchId, orientedProbability, now(), existing.id);
     return "scheduledUpdated";
   }
   const stamp = now();
@@ -1510,18 +1593,106 @@ function persistTournamentMap(map, detail = null) {
   return true;
 }
 
+function latestLeagueMapStartSeconds() {
+  let latest = 0;
+  for (const map of liveLeagueMapsCache.maps || []) {
+    const start = Number(map.start_time) || 0;
+    if (start > latest) latest = start;
+  }
+  return latest;
+}
+
+function openMatchPollRows() {
+  return db.prepare("SELECT winner, score_a, score_b, scheduled_at, stage, team_a, team_b FROM matches WHERE winner IS NULL").all();
+}
+
+function currentLivePollPlan() {
+  return livePollPlan({
+    nowMs: Date.now(),
+    matches: openMatchPollRows(),
+    liveGames: liveDraftCache.games,
+    livePairs: cybersportLivePairs,
+    remainingDaily: opendotaDailyRemaining(),
+    draftSeconds: LIVE_DRAFT_INTERVAL_SECONDS,
+    latestMapStartSeconds: latestLeagueMapStartSeconds(),
+  });
+}
+
+function currentLeagueMapsPollPlan() {
+  return leagueMapsPollPlan({
+    nowMs: Date.now(),
+    matches: openMatchPollRows(),
+    liveGames: liveDraftCache.games,
+    livePairs: cybersportLivePairs,
+    remainingDaily: opendotaDailyRemaining(),
+    windowSeconds: LIVE_LEAGUE_MAPS_INTERVAL_SECONDS,
+    latestMapStartSeconds: latestLeagueMapStartSeconds(),
+  });
+}
+
+function rememberCybersportLivePairs(schedule) {
+  cybersportLivePairs = (schedule || []).filter((item) => item.live).map((item) => [item.teamA, item.teamB].sort().join("|"));
+}
+
+async function refreshCybersportSchedule({ force = false } = {}) {
+  if (!SCHEDULE_SYNC_ENABLED) return { schedule: [], changed: false };
+  if (!force && cybersportScheduleFetchedAt && Date.now() - Date.parse(cybersportScheduleFetchedAt) < SCHEDULE_REFRESH_INTERVAL_SECONDS * 1000) {
+    return { schedule: [], changed: false };
+  }
+  if (cybersportSchedulePromise) return cybersportSchedulePromise;
+  cybersportSchedulePromise = (async () => {
+    const response = await fetch(SCHEDULE_SOURCE_URL, { headers: { "user-agent": OPENDOTA_USER_AGENT }, signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) throw new Error(`Cybersport HTTP ${response.status}`);
+    const schedule = scheduledSeriesFromCybersportHtml(await response.text(), { timezoneOffset: SCHEDULE_TIMEZONE_OFFSET });
+    rememberCybersportLivePairs(schedule);
+    cybersportScheduleFetchedAt = now();
+    const summary = { scheduledInserted: 0, scheduledUpdated: 0, scheduledRemoved: 0, scheduledUnchanged: 0 };
+    const probabilities = schedule.length ? currentForecast().probabilities : {};
+    db.exec("BEGIN");
+    try {
+      for (const item of schedule) {
+        summary.scheduledRemoved += removeConflictingScheduledSeries(item);
+        summary[persistScheduledSeries(item, probabilities)] += 1;
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+    const changed = summary.scheduledInserted || summary.scheduledUpdated || summary.scheduledRemoved;
+    if (changed) {
+      audit("official_schedule_sync", { trigger: "cybersport_refresh", ...summary, livePairs: cybersportLivePairs });
+      queueAutomaticSnapshot(officialPairingTrigger());
+    }
+    return { schedule, changed, ...summary };
+  })().finally(() => { cybersportSchedulePromise = null; });
+  return cybersportSchedulePromise;
+}
+
 async function hydrateTournamentMapDetails(maps) {
   if (!MAP_DETAIL_SYNC_LIMIT) return { requested: 0, saved: 0, failed: 0, remaining: 0 };
   const missing = (maps || []).filter((map) => !db.prepare("SELECT draft_json FROM tournament_maps WHERE match_id=? AND draft_json IS NOT NULL").get(String(map.match_id)));
+  const inWindow = anyMatchWindowActive({
+    nowMs: Date.now(),
+    matches: openMatchPollRows(),
+    liveGames: liveDraftCache.games,
+    latestMapStartSeconds: latestLeagueMapStartSeconds(),
+  });
+  if (!inWindow || opendotaInBackoff("live") || opendotaInBackoff("maps") || opendotaDailyRemaining() < 200) {
+    return { requested: 0, saved: 0, failed: 0, remaining: missing.length, skipped: inWindow ? "opendota_backoff" : "outside_match_window" };
+  }
   const queue = missing.slice(0, MAP_DETAIL_SYNC_LIMIT);
   let saved = 0; let failed = 0;
   for (const map of queue) {
+    if (opendotaInBackoff("live") || opendotaInBackoff("maps")) break;
     try {
-      const response = await fetch(`${OPENDOTA_API_URL}/matches/${map.match_id}`, { headers: { "user-agent": "ti-2026-predictor/1.0 (github.com/balance-loz/ti-2026)" }, signal: AbortSignal.timeout(20_000) });
-      if (!response.ok) throw new Error(`OpenDota match ${map.match_id} HTTP ${response.status}`);
-      if (persistTournamentMap(map, await response.json())) saved += 1;
-    } catch { failed += 1; }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+      const detail = await opendotaJson(`/matches/${map.match_id}`, { timeoutMs: 20_000, kind: "maps" });
+      if (persistTournamentMap(map, detail)) saved += 1;
+    } catch {
+      failed += 1;
+      if (opendotaInBackoff("maps")) break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
   return { requested: queue.length, saved, failed, remaining: Math.max(0, missing.length - saved) };
 }
@@ -1571,17 +1742,26 @@ async function syncLiveMatches(trigger = "timer") {
     const startedAt = now();
     try {
       let maps = []; let schedule = []; let resultError = null; let scheduleError = null;
+      const cacheAgeMs = liveLeagueMapsCache.fetchedAt ? Date.now() - Date.parse(liveLeagueMapsCache.fetchedAt) : Number.POSITIVE_INFINITY;
+      const canReuseLeagueMaps = cacheAgeMs < LIVE_LEAGUE_MAPS_INTERVAL_SECONDS * 1_000 && liveLeagueMapsCache.maps.length;
       try {
-        const response = await fetch(`${OPENDOTA_API_URL}/leagues/${TI_LEAGUE_ID}/matches`, { headers: { "user-agent": "ti-2026-predictor/1.0 (github.com/balance-loz/ti-2026)" }, signal: AbortSignal.timeout(30_000) });
-        if (!response.ok) throw new Error(`OpenDota HTTP ${response.status}`);
-        maps = await response.json();
-        if (!Array.isArray(maps)) throw new Error("OpenDota returned an invalid payload");
-        liveLeagueMapsCache = { maps, fetchedAt: now() };
-      } catch (error) { resultError = error instanceof Error ? error.message : String(error); }
+        if (canReuseLeagueMaps) {
+          maps = liveLeagueMapsCache.maps;
+        } else {
+          maps = await opendotaJson(`/leagues/${TI_LEAGUE_ID}/matches`, { timeoutMs: 30_000, kind: "maps" });
+          if (!Array.isArray(maps)) throw new Error("OpenDota returned an invalid payload");
+          liveLeagueMapsCache = { maps, fetchedAt: now() };
+        }
+      } catch (error) {
+        resultError = error instanceof Error ? error.message : String(error);
+        maps = liveLeagueMapsCache.maps;
+      }
       if (SCHEDULE_SYNC_ENABLED) try {
         const response = await fetch(SCHEDULE_SOURCE_URL, { headers: { "user-agent": "ti-2026-predictor/1.0 (github.com/balance-loz/ti-2026)" }, signal: AbortSignal.timeout(30_000) });
         if (!response.ok) throw new Error(`Cybersport HTTP ${response.status}`);
         schedule = scheduledSeriesFromCybersportHtml(await response.text(), { timezoneOffset: SCHEDULE_TIMEZONE_OFFSET });
+        rememberCybersportLivePairs(schedule);
+        cybersportScheduleFetchedAt = now();
       } catch (error) { scheduleError = error instanceof Error ? error.message : String(error); }
       if (resultError && (!SCHEDULE_SYNC_ENABLED || scheduleError)) throw new Error(`OpenDota: ${resultError}; schedule: ${scheduleError || "disabled"}`);
       const series = completedSeriesFromMaps(maps);
@@ -1626,33 +1806,39 @@ async function syncLiveMatches(trigger = "timer") {
   return liveSyncPromise;
 }
 
+async function refreshLeagueMaps({ force = false } = {}) {
+  const plan = currentLeagueMapsPollPlan();
+  if (!plan.shouldPoll) return liveLeagueMapsCache;
+  if (leagueMapsBackoffUntil && Date.now() < leagueMapsBackoffUntil) return liveLeagueMapsCache;
+  if (!force && liveLeagueMapsCache.fetchedAt && Date.now() - Date.parse(liveLeagueMapsCache.fetchedAt) < plan.intervalSeconds * 1000) return liveLeagueMapsCache;
+  if (leagueMapsPromise) return leagueMapsPromise;
+  leagueMapsPromise = (async () => {
+    try {
+      const maps = await opendotaJson(`/leagues/${TI_LEAGUE_ID}/matches`, { timeoutMs: 15_000, kind: "maps" });
+      if (!Array.isArray(maps)) throw new Error("OpenDota returned an invalid payload");
+      liveLeagueMapsCache = { maps, fetchedAt: now() };
+      const progress = persistLeagueMapProgress(maps);
+      if (progress.completed) queueAutomaticSnapshot("auto_live_result");
+    } catch (error) {
+      console.error("League maps refresh failed:", error instanceof Error ? error.message : String(error));
+    } finally {
+      leagueMapsPromise = null;
+    }
+    return liveLeagueMapsCache;
+  })();
+  return leagueMapsPromise;
+}
+
 async function refreshLiveDrafts({ force = false } = {}) {
-  const freshFor = LIVE_DRAFT_INTERVAL_SECONDS * 1000;
-  if (!force && liveDraftBackoffUntil && Date.now() < liveDraftBackoffUntil) return liveDraftCache;
-  if (!force && liveDraftCache.fetchedAt && Date.now() - Date.parse(liveDraftCache.fetchedAt) < freshFor) return liveDraftCache;
+  const plan = currentLivePollPlan();
+  if (!plan.shouldPoll) return liveDraftCache;
+  if (liveDraftBackoffUntil && Date.now() < liveDraftBackoffUntil) return liveDraftCache;
+  if (!force && liveDraftCache.fetchedAt && Date.now() - Date.parse(liveDraftCache.fetchedAt) < plan.intervalSeconds * 1000) return liveDraftCache;
   if (liveDraftPromise) return liveDraftPromise;
   liveDraftPromise = (async () => {
-    const headers = { "user-agent": "ti-2026-predictor/1.0 (github.com/balance-loz/ti-2026)" };
-    const mapsAreStale = !liveLeagueMapsCache.fetchedAt || Date.now() - Date.parse(liveLeagueMapsCache.fetchedAt) > 30_000;
-    let leagueMaps = liveLeagueMapsCache.maps;
+    const leagueMaps = liveLeagueMapsCache.maps;
     try {
-      if (mapsAreStale) {
-        const mapsResponse = await fetch(`${OPENDOTA_API_URL}/leagues/${TI_LEAGUE_ID}/matches`, { headers, signal: AbortSignal.timeout(10_000) });
-        if (mapsResponse.ok) {
-          const maps = await mapsResponse.json();
-          if (Array.isArray(maps)) {
-            liveLeagueMapsCache = { maps, fetchedAt: now() };
-            leagueMaps = maps;
-            const progress = persistLeagueMapProgress(maps);
-            if (progress.completed) queueAutomaticSnapshot("auto_live_result");
-          }
-        }
-      }
-    } catch { leagueMaps = liveLeagueMapsCache.maps; }
-    try {
-      const response = await fetch(`${OPENDOTA_API_URL}/live`, { headers, signal: AbortSignal.timeout(10_000) });
-      if (!response.ok) throw new Error(`OpenDota live HTTP ${response.status}`);
-      const rows = await response.json();
+      const rows = await opendotaJson("/live", { timeoutMs: 10_000, kind: "live" });
       const fetchedAt = now();
       const games = liveDraftsFromOpenDota(rows, { leagueId: TI_LEAGUE_ID, nowSeconds: Date.parse(fetchedAt) / 1000, leagueMaps });
       for (const game of games) {
@@ -1674,11 +1860,7 @@ async function refreshLiveDrafts({ force = false } = {}) {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (/\b429\b/.test(message)) {
-        liveDraftBackoffMs = Math.min(300_000, Math.max(60_000, liveDraftBackoffMs * 2 || 60_000));
-        liveDraftBackoffUntil = Date.now() + liveDraftBackoffMs;
-      }
-      liveDraftCache = { ...liveDraftCache, error: message };
+      if (!/free-tier budget/.test(message)) liveDraftCache = { ...liveDraftCache, error: message };
     } finally { liveDraftPromise = null; }
     return liveDraftCache;
   })();
@@ -2486,12 +2668,24 @@ server.listen(PORT, "0.0.0.0", () => {
     setTimeout(() => void syncLiveMatches("startup").catch((error) => console.error("Initial live sync failed:", error.message)), 5_000).unref();
     setInterval(() => void syncLiveMatches("timer").catch((error) => console.error("Live sync failed:", error.message)), LIVE_SYNC_INTERVAL_MINUTES * 60_000).unref();
   }
-  const refreshLiveDraftCache = () => void refreshLiveDrafts({ force: true })
+  const refreshLiveDraftCache = (force = false) => void refreshLiveDrafts({ force })
     .catch((error) => console.error("Live draft timer failed:", error.message));
+  const refreshLeagueMapsCache = () => void refreshLeagueMaps({ force: false })
+    .catch((error) => console.error("League maps timer failed:", error.message));
   void Promise.all(FORECAST_AUTO_WEIGHTS.map((weight) => materializeCombinedForecast(weight)))
     .catch((error) => console.error("Initial combined materialization failed:", error.message));
   if (LIVE_DRAFT_SYNC_ENABLED) {
-    setTimeout(refreshLiveDraftCache, 2_000).unref();
-    setInterval(refreshLiveDraftCache, LIVE_DRAFT_INTERVAL_SECONDS * 1_000).unref();
+    setTimeout(() => refreshLiveDraftCache(false), 2_000).unref();
+    setInterval(() => refreshLiveDraftCache(false), LIVE_POLL.tickSeconds * 1_000).unref();
+  }
+  if (LIVE_SYNC_ENABLED || LIVE_DRAFT_SYNC_ENABLED) {
+    setTimeout(() => void refreshLeagueMaps({ force: false }).catch((error) => console.error("Initial league maps failed:", error.message)), 3_000).unref();
+    setInterval(refreshLeagueMapsCache, LIVE_POLL.tickSeconds * 1_000).unref();
+  }
+  if (SCHEDULE_SYNC_ENABLED) {
+    const refreshSchedule = () => void refreshCybersportSchedule({ force: false })
+      .catch((error) => console.error("Cybersport schedule timer failed:", error.message));
+    setTimeout(refreshSchedule, 4_000).unref();
+    setInterval(refreshSchedule, SCHEDULE_REFRESH_INTERVAL_SECONDS * 1_000).unref();
   }
 });

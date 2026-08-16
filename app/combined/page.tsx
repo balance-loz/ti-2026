@@ -91,8 +91,14 @@ function HeroPicks({ ids, heroes }: { ids: number[]; heroes: Map<number, Hero> }
   return <span className="fusion-heroes">{ids.map((id, index) => { const hero = heroes.get(id); return hero ? <img key={`${id}-${index}`} src={hero.image} alt={hero.name} title={hero.name} /> : <i key={`${id}-${index}`} title={`Hero ${id}`}>{id}</i>; })}</span>;
 }
 
-function MapStrip({ maps, heroes, locks, isAdmin, locking, currentMapId, currentMapNumber, liveEstimate, liveGameTime, onLock }: { maps: MapRow[]; heroes: Map<number, Hero>; locks: BetLock[]; isAdmin: boolean; locking: string | null; currentMapId: string | null; currentMapNumber: number; liveEstimate: LiveEstimate | null; liveGameTime: number; onLock: (request: LockRequest) => void }) {
-  if (!maps.length) return <p className="fusion-no-maps">Карты и пики появятся здесь после начала драфта.</p>;
+function MapStrip({ maps, heroes, locks, isAdmin, locking, currentMapId, currentMapNumber, liveEstimate, liveGameTime, onLock, seriesScore, seriesLive }: { maps: MapRow[]; heroes: Map<number, Hero>; locks: BetLock[]; isAdmin: boolean; locking: string | null; currentMapId: string | null; currentMapNumber: number; liveEstimate: LiveEstimate | null; liveGameTime: number; onLock: (request: LockRequest) => void; seriesScore?: { winsA: number; winsB: number } | null; seriesLive?: boolean }) {
+  if (!maps.length) {
+    const played = Number(seriesScore?.winsA || 0) + Number(seriesScore?.winsB || 0);
+    if (played > 0 || seriesLive) {
+      return <p className="fusion-no-maps">Счёт серии {seriesScore?.winsA ?? 0}:{seriesScore?.winsB ?? 0}{seriesLive ? " · телеметрия текущей карты временно недоступна" : ""}. Карты подтянутся из сохранённых матчей лиги.</p>;
+    }
+    return <p className="fusion-no-maps">Карты и пики появятся здесь после начала драфта.</p>;
+  }
   const numberedMaps = maps.map((map, index) => ({
     map,
     mapNumber: !map.winner && currentMapId === map.matchId ? Math.max(index + 1, currentMapNumber) : index + 1,
@@ -135,15 +141,28 @@ function selectSeriesMaps(row: { seriesId?: string | null; liveSeriesId?: string
   };
   const bySeries = seriesId ? maps.filter((map) => String(map.seriesId || "") === String(seriesId)) : [];
   const byLive = liveMatchId ? maps.filter((map) => String(map.matchId) === liveMatchId) : [];
-  const byPair = maps.filter((map) => {
-    if (!samePair(map)) return false;
+  const samePairMaps = maps.filter(samePair);
+  const byPair = samePairMaps.filter((map) => {
     if (!Number.isFinite(scheduledMs)) return true;
     const startMs = Number(map.startTime) * 1000;
     if (!Number.isFinite(startMs) || startMs <= 0) return true;
     return Math.abs(startMs - scheduledMs) <= 36 * 60 * 60 * 1000;
   });
+  const pairMaps = byPair.length ? byPair : (() => {
+    const sorted = [...samePairMaps].sort((left, right) => {
+      const startLeft = Number(left.startTime) > 0 ? Number(left.startTime) : Number.POSITIVE_INFINITY;
+      const startRight = Number(right.startTime) > 0 ? Number(right.startTime) : Number.POSITIVE_INFINITY;
+      return startLeft - startRight || Number(left.matchId) - Number(right.matchId);
+    });
+    const latest = Number(sorted.at(-1)?.startTime) || 0;
+    if (!latest) return sorted;
+    return sorted.filter((map) => {
+      const start = Number(map.startTime) || 0;
+      return !start || latest - start <= 12 * 60 * 60;
+    });
+  })();
   const seen = new Set<string>();
-  return [...bySeries, ...byPair, ...byLive].filter((map) => {
+  return [...bySeries, ...pairMaps, ...byLive].filter((map) => {
     const key = String(map.matchId);
     if (seen.has(key)) return false;
     seen.add(key);
@@ -258,7 +277,7 @@ function SeriesDetail({ row, maps, heroes, locks, isAdmin, locking, onLock }: { 
         return <span className="fusion-status fusion-status--next">до матча</span>;
       })()}</article>
     </div>
-    <MapStrip maps={seriesMaps} heroes={heroes} locks={locks} isAdmin={isAdmin} locking={locking} currentMapId={row.live?.matchId ?? null} currentMapNumber={observedScore(row, maps).winsA + observedScore(row, maps).winsB + 1} liveEstimate={row.liveEstimate ?? row.live?.liveEstimate ?? null} liveGameTime={row.live?.gameTime ?? 0} onLock={onLock} />
+    <MapStrip maps={seriesMaps} heroes={heroes} locks={locks} isAdmin={isAdmin} locking={locking} currentMapId={row.live?.matchId ?? null} currentMapNumber={observedScore(row, maps).winsA + observedScore(row, maps).winsB + 1} liveEstimate={row.liveEstimate ?? row.live?.liveEstimate ?? null} liveGameTime={row.live?.gameTime ?? 0} onLock={onLock} seriesScore={{ winsA: Number(row.match.score_a) || 0, winsB: Number(row.match.score_b) || 0 }} seriesLive={Boolean(row.live)} />
   </div>;
 }
 
@@ -588,7 +607,7 @@ export default function CombinedForecastPage() {
   const toggleMatch = (matchId: number) => setExpandedMatches((current) => { const next = { ...current }; if (next[String(matchId)]) delete next[String(matchId)]; else next[String(matchId)] = "open"; return next; });
   return <main className="fusion-page"><header className="fusion-topbar"><a href="/" className="brand"><span className="brand-glyph">T</span><span>TI / PREDICTOR</span></a><nav aria-label="Разделы главной"><a href="#live">Live</a><a href="#swiss">Swiss</a><a href="#tournament">Турнир</a><a href="#playoff">Плей-офф</a><a href="#accuracy">Точность</a><a href="/intel">Разведка</a></nav><AdminGate isAdmin={Boolean(state?.isAdmin)} onAuthed={() => setRefreshKey((value) => value + 1)} /><ThemeToggle /><span className="live-pill"><i /> LIVE</span></header>
     <section className="fusion-hero fusion-hero--compact"><div><p>TABLE · BRACKET · MAP DRAFT · RESULT</p><h1>Прогноз,<br /><em>который помнит.</em></h1><span>Пока ставки нет, рекомендация свободно обновляется после новых матчей, пиков и live-данных. Нажатие «Я поставил» создаёт неизменяемый снимок именно того прогноза, по которому принято решение.</span></div><aside><div className="fusion-profile-chip"><span>ОСНОВНОЙ ПРОФИЛЬ</span><b>смесь {DISPLAY_OPINION_WEIGHT}% мнения</b></div><div><span><b>СТАВКИ НЕТ</b>можно обновлять</span><i>→</i><span><b>Я ПОСТАВИЛ</b>заморозить</span></div><small>{state?.mainSnapshot?.requested ? `Открыт исторический snapshot #${state.mainSnapshot.baselineId} · значения синхронизированы с главной` : state?.isAdmin ? "Админский режим активен · фиксация ставок на главной, мнения и пересчёт — в админке" : "Войдите в шапке, чтобы фиксировать ставки"}</small></aside></section>
-    {error || state?.live.error || isStale ? <div className={`fusion-data-banner ${error || state?.live.error ? "is-error" : "is-stale"}`} role="alert"><b>{error ? "ОБНОВЛЕНИЕ НЕ УДАЛОСЬ" : state?.live.error ? (/\b429\b/.test(state.live.error) ? "OPEN DOTA РЕЖЕТ ЛИМИТ" : "LIVE-FEED НЕДОСТУПЕН") : "ДАННЫЕ УСТАРЕЛИ"}</b><span>{error ?? (state?.live.error && /\b429\b/.test(state.live.error) ? "Телеметрия текущей карты временно недоступна. Счёт серии и сыгранные карты берём из сохранённых матчей; опрос /live встанет на паузу и сам вернётся." : state?.live.error) ?? `Последнее обновление: ${state ? new Date(state.generatedAt).toLocaleTimeString("ru-RU") : "—"}. Показываем последний успешный snapshot.`}</span></div> : null}
+    {error || state?.live.error || isStale ? <div className={`fusion-data-banner ${error || state?.live.error ? "is-error" : "is-stale"}`} role="alert"><b>{error ? "ОБНОВЛЕНИЕ НЕ УДАЛОСЬ" : state?.live.error ? (/\b429\b/.test(state.live.error) ? "OPEN DOTA РЕЖЕТ ЛИМИТ" : "LIVE-FEED НЕДОСТУПЕН") : "ДАННЫЕ УСТАРЕЛИ"}</b><span>{error ?? (state?.live.error && /\b429\b/.test(state.live.error) ? "Телеметрия текущей карты на паузе из‑за лимита OpenDota. Сыгранные карты и счёт серии подтягиваются отдельно из матчей лиги и не зависят от /live." : state?.live.error) ?? `Последнее обновление: ${state ? new Date(state.generatedAt).toLocaleTimeString("ru-RU") : "—"}. Показываем последний успешный snapshot.`}</span></div> : null}
     {lockMessage ? <p className={`fusion-lock-message ${lockHasError ? "is-error" : "is-success"}`} role="status">{lockMessage}</p> : null}
     <details className="fusion-decision-help"><summary>Как работает фиксация ставки? <span>справка</span></summary><section className="fusion-decision-rule"><article><b>1</b><h3>Рекомендация</h3><p>Без ставки MAIN/LATEST может перепрогнозироваться сколько угодно.</p></article><article><b>2</b><h3>Нажал «Я поставил»</h3><p>Сохраняются победитель, вероятность, точный счёт, профиль, модель, пики и время.</p></article><article><b>3</b><h3>Пришёл результат</h3><p>Ставка получает «угадан/не угадан»; новые расчёты рядом не меняют историю.</p></article></section></details>
     <section className="fusion-metrics"><article><span>СТАВКИ НА СЕРИИ</span><b>{gradedSeriesBets.length ? `${seriesCorrect}/${gradedSeriesBets.length}` : "—"}</b><small>угадано из завершённых ставок</small></article><article><span>СТАВКИ ПОСЛЕ ПИКОВ</span><b>{gradedMapBets.length ? `${draftCorrect}/${gradedMapBets.length}` : "—"}</b><small>угадано карт из завершённых ставок</small></article><article><span>ВСЕГО ЗАФИКСИРОВАНО</span><b>{state?.betLocks.length ?? "—"}</b><small>неизменяемых решений</small></article><article><span>ОБНОВЛЕНО</span><b>{state ? new Date(state.generatedAt).toLocaleTimeString("ru-RU") : "—"}</b><small>{state?.live.error ? "live-feed с ошибкой" : "опрос каждые 10 секунд"}</small></article></section>

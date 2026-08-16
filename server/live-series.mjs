@@ -62,6 +62,26 @@ function uniqueMaps(maps) {
   });
 }
 
+function mapsInScheduleWindow(maps, scheduledMs) {
+  return maps.filter((map) => {
+    if (!Number.isFinite(scheduledMs)) return true;
+    const startMs = Number(map.startTime) * 1000;
+    if (!Number.isFinite(startMs) || startMs <= 0) return true;
+    return Math.abs(startMs - scheduledMs) <= 36 * 60 * 60 * 1000;
+  });
+}
+
+function latestPairCluster(maps) {
+  const sorted = [...maps].sort(chronologicalMaps);
+  if (!sorted.length) return [];
+  const latest = Number(sorted.at(-1).startTime) || 0;
+  if (!latest) return sorted;
+  return sorted.filter((map) => {
+    const start = Number(map.startTime) || 0;
+    return !start || latest - start <= 12 * 60 * 60;
+  });
+}
+
 export function selectSeriesMaps(row, maps) {
   const seriesId = row.liveSeriesId || row.seriesId || "";
   const liveMatchId = row.liveMatchId ? String(row.liveMatchId) : "";
@@ -72,14 +92,10 @@ export function selectSeriesMaps(row, maps) {
   };
   const bySeries = seriesId ? maps.filter((map) => String(map.seriesId || "") === String(seriesId)) : [];
   const byLive = liveMatchId ? maps.filter((map) => String(map.matchId) === liveMatchId) : [];
-  const byPair = maps.filter((map) => {
-    if (!samePair(map)) return false;
-    if (!Number.isFinite(scheduledMs)) return true;
-    const startMs = Number(map.startTime) * 1000;
-    if (!Number.isFinite(startMs) || startMs <= 0) return true;
-    return Math.abs(startMs - scheduledMs) <= 36 * 60 * 60 * 1000;
-  });
-  return uniqueMaps([...bySeries, ...byPair, ...byLive]).sort(chronologicalMaps);
+  const samePairMaps = maps.filter(samePair);
+  const byPair = mapsInScheduleWindow(samePairMaps, scheduledMs);
+  const pairMaps = byPair.length ? byPair : latestPairCluster(samePairMaps);
+  return uniqueMaps([...bySeries, ...pairMaps, ...byLive]).sort(chronologicalMaps);
 }
 
 export function seriesWinsFromMaps(teamA, teamB, maps) {

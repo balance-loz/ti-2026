@@ -60,8 +60,10 @@ TI_LEAGUE_ID=19719
 LIVE_SYNC_ENABLED=true
 LIVE_SYNC_INTERVAL_MINUTES=10
 LIVE_DRAFT_SYNC_ENABLED=true
-LIVE_DRAFT_INTERVAL_SECONDS=10
+LIVE_DRAFT_INTERVAL_SECONDS=20
 LIVE_DRAFT_GRACE_SECONDS=120
+LIVE_LEAGUE_MAPS_INTERVAL_SECONDS=120
+MAP_DETAIL_SYNC_LIMIT=2
 SCHEDULE_SYNC_ENABLED=true
 SCHEDULE_SOURCE_URL=https://www.cybersport.ru/tournaments/dota-2/the-international-2026
 SCHEDULE_TIMEZONE_OFFSET=+03:00
@@ -111,7 +113,7 @@ docker compose build --progress=plain web
 http://IP_СЕРВЕРА/
 ```
 
-API раз в 10 минут проверяет два независимых источника. Cybersport.ru даёт опубликованные будущие пары: при первом обнаружении сервер сохраняет соперников, время и pre-match вероятность. OpenDota даёт сыгранные карты лиги `19719`: они объединяются по `series_id`; BO3 записывается после двух побед, BO5 — после трёх. Live-feed опрашивается отдельно раз в 10 секунд; `LIVE_DRAFT_GRACE_SECONDS` удерживает последнюю карту при кратком пустом ответе провайдера, но завершённая карта удаляется сразу после появления результата. После новых пар, результатов, профиля или модельного артефакта сервер ставит Monte Carlo в SQLite-очередь и сохраняет неизменяемый снимок истории. Пока worker считает, API продолжает отдавать предыдущий ready read-model с признаком `stale`.
+API раз в 10 минут проверяет два независимых источника. Cybersport.ru даёт опубликованные будущие пары: при первом обнаружении сервер сохраняет соперников, время и pre-match вероятность. OpenDota даёт сыгранные карты лиги `19719`: они объединяются по `series_id`; BO3 записывается после двух побед, BO5 — после трёх. Live-feed OpenDota опрашивается только когда Cybersport.ru в MSK показывает окно матча или LIVE: ~20 секунд на драфте, 2 минуты после пиков. В промежутках без игр `/live` не дергается. Расписание Cybersport обновляется раз в 90 секунд и подхватывает переносы. Суточный бюджет держится ниже 3000 запросов; `LIVE_DRAFT_GRACE_SECONDS` удерживает последнюю карту при кратком пустом ответе провайдера, но завершённая карта удаляется сразу после появления результата. После новых пар, результатов, профиля или модельного артефакта сервер ставит Monte Carlo в SQLite-очередь и сохраняет неизменяемый снимок истории. Пока worker считает, API продолжает отдавать предыдущий ready read-model с признаком `stale`.
 
 `FORECAST_JOB_MAX_ITERATIONS` ограничивает любой ручной/автоматический прогон, `FORECAST_JOB_LEASE_SECONDS` задаёт lease worker, а `FORECAST_JOB_MAX_ATTEMPTS` — число восстановлений после падения процесса. Lease должен быть заметно длиннее обычного максимального прогона; на медленном VPS увеличьте его до `600`. `FORECAST_SCENARIO_RATE_LIMIT` ограничивает публичные enqueue canonical-профилей на один IP в минуту. Manual и conditional jobs доступны только после входа администратора; conditional всегда использует 50 000 прогонов на ветку и общий seed.
 
