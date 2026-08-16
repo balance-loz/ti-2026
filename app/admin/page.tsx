@@ -93,8 +93,10 @@ export default function AdminPage() {
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer); }, []);
   useEffect(() => {
     if (!state?.refreshRunning && !state?.refreshProgress?.running) return;
-    const timer = window.setInterval(() => void load({ silent: true }), 2000);
-    return () => window.clearInterval(timer);
+    const loadWhenVisible = () => { if (document.visibilityState === "visible") void load({ silent: true }); };
+    const timer = window.setInterval(loadWhenVisible, 2000);
+    document.addEventListener("visibilitychange", loadWhenVisible);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", loadWhenVisible); };
   }, [state?.refreshRunning, state?.refreshProgress?.running]);
   const run = async (label: string, action: () => Promise<unknown>) => {
     setIsBusy(true); setHasError(false); setMessage("");

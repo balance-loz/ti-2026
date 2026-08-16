@@ -1742,26 +1742,17 @@ async function syncLiveMatches(trigger = "timer") {
     const startedAt = now();
     try {
       let maps = []; let schedule = []; let resultError = null; let scheduleError = null;
-      const cacheAgeMs = liveLeagueMapsCache.fetchedAt ? Date.now() - Date.parse(liveLeagueMapsCache.fetchedAt) : Number.POSITIVE_INFINITY;
-      const canReuseLeagueMaps = cacheAgeMs < LIVE_LEAGUE_MAPS_INTERVAL_SECONDS * 1_000 && liveLeagueMapsCache.maps.length;
       try {
-        if (canReuseLeagueMaps) {
-          maps = liveLeagueMapsCache.maps;
-        } else {
-          maps = await opendotaJson(`/leagues/${TI_LEAGUE_ID}/matches`, { timeoutMs: 30_000, kind: "maps" });
-          if (!Array.isArray(maps)) throw new Error("OpenDota returned an invalid payload");
-          liveLeagueMapsCache = { maps, fetchedAt: now() };
-        }
+        const ignorePollPlan = trigger === "manual" || trigger === "startup";
+        const cache = await refreshLeagueMaps({ force: trigger === "manual", ignorePollPlan });
+        maps = cache.maps || [];
       } catch (error) {
         resultError = error instanceof Error ? error.message : String(error);
         maps = liveLeagueMapsCache.maps;
       }
       if (SCHEDULE_SYNC_ENABLED) try {
-        const response = await fetch(SCHEDULE_SOURCE_URL, { headers: { "user-agent": "ti-2026-predictor/1.0 (github.com/balance-loz/ti-2026)" }, signal: AbortSignal.timeout(30_000) });
-        if (!response.ok) throw new Error(`Cybersport HTTP ${response.status}`);
-        schedule = scheduledSeriesFromCybersportHtml(await response.text(), { timezoneOffset: SCHEDULE_TIMEZONE_OFFSET });
-        rememberCybersportLivePairs(schedule);
-        cybersportScheduleFetchedAt = now();
+        const result = await refreshCybersportSchedule({ force: false });
+        schedule = result.schedule || [];
       } catch (error) { scheduleError = error instanceof Error ? error.message : String(error); }
       if (resultError && (!SCHEDULE_SYNC_ENABLED || scheduleError)) throw new Error(`OpenDota: ${resultError}; schedule: ${scheduleError || "disabled"}`);
       const series = completedSeriesFromMaps(maps);
@@ -1806,9 +1797,9 @@ async function syncLiveMatches(trigger = "timer") {
   return liveSyncPromise;
 }
 
-async function refreshLeagueMaps({ force = false } = {}) {
+async function refreshLeagueMaps({ force = false, ignorePollPlan = false } = {}) {
   const plan = currentLeagueMapsPollPlan();
-  if (!plan.shouldPoll) return liveLeagueMapsCache;
+  if (!ignorePollPlan && !plan.shouldPoll) return liveLeagueMapsCache;
   if (leagueMapsBackoffUntil && Date.now() < leagueMapsBackoffUntil) return liveLeagueMapsCache;
   if (!force && liveLeagueMapsCache.fetchedAt && Date.now() - Date.parse(liveLeagueMapsCache.fetchedAt) < plan.intervalSeconds * 1000) return liveLeagueMapsCache;
   if (leagueMapsPromise) return leagueMapsPromise;
@@ -2263,7 +2254,7 @@ const server = createServer(async (req, res) => {
       if (!map && !history.length) return json(res, 404, { error: "live_map_history_not_found" });
       return json(res, 200, { matchId, map, history });
     }
-    if (req.method === "GET" && url.pathname === "/api/draft/live") return json(res, 200, await refreshLiveDrafts());
+    if (req.method === "GET" && url.pathname === "/api/draft/live") return json(res, 200, liveDraftCache);
     if (req.method === "POST" && url.pathname === "/api/forecast/jobs") {
       if (!sameOrigin(req)) return json(res, 403, { error: "origin" });
       const data = await body(req);
@@ -2384,8 +2375,7 @@ const server = createServer(async (req, res) => {
     if (liveDraftPredictionMatch) {
       if (!sameOrigin(req)) return json(res, 403, { error: "origin" });
       const matchId = decodeURIComponent(liveDraftPredictionMatch[1]);
-      const state = await refreshLiveDrafts();
-      const game = state.games.find((item) => String(item.matchId) === String(matchId));
+      const game = liveDraftCache.games.find((item) => String(item.matchId) === String(matchId));
       if (!game) return json(res, 404, { error: "live_match_not_found" });
       if ((game.radiantPicks?.length ?? 0) !== 5 || (game.direPicks?.length ?? 0) !== 5) return json(res, 409, { error: "draft_not_complete" });
       await body(req);

@@ -875,6 +875,15 @@ test("unified home loads server-owned live history and draft evidence", async ()
   assert.match(api, /setInterval\(\(\) => refreshLiveDraftCache\(false\), LIVE_POLL\.tickSeconds \* 1_000\)/);
   assert.match(api, /from "\.\/opendota-poll\.mjs"/);
   assert.doesNotMatch(api, /refreshLiveDraftCache[\s\S]{0,120}materializeCombinedForecast/);
+  assert.match(api, /url.pathname === "\/api\/draft\/live"\) return json\(res, 200, liveDraftCache\)/);
+  assert.doesNotMatch(api, /\/api\/draft\/live"\) return json\(res, 200, await refreshLiveDrafts/);
+  assert.match(api, /await refreshLeagueMaps\(\{ force: trigger === "manual", ignorePollPlan \}\)/);
+  assert.match(api, /ignorePollPlan = false/);
+  assert.match(api, /refreshCybersportSchedule\(\{ force: false \}\)/);
+  assert.equal([...api.matchAll(/await opendotaJson\(/g)].length, 3);
+  assert.match(page, /loadWhenVisible\(\); const timer/);
+  assert.doesNotMatch(page, /void load\(\); const timer/);
+  assert.match(story, /if \(cancelled \|\| loaded \|\| document\.visibilityState !== "visible"\) return/);
 });
 
 test("OpenDota BO5 is not completed at 2-0", () => {

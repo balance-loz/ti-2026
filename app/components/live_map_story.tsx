@@ -70,17 +70,24 @@ export default function LiveMapStory({ matchId, frozenProbabilityRadiant, eviden
   useEffect(() => {
     if (!autoLoad) return;
     let cancelled = false;
-    const timer = window.setTimeout(async () => {
+    let loaded = false;
+    const loadHistory = async () => {
+      if (cancelled || loaded || document.visibilityState !== "visible") return;
+      loaded = true;
       setIsLoading(true); setHasError(false);
       try {
         const response = await fetch(`/api/draft/live/history/${encodeURIComponent(matchId)}`, { cache: "no-store" });
         if (!response.ok) throw new Error(`history_${response.status}`);
         const payload = await response.json();
         if (!cancelled) setData(payload);
-      } catch { if (!cancelled) setHasError(true); }
-      finally { if (!cancelled) setIsLoading(false); }
-    }, 0);
-    return () => { cancelled = true; window.clearTimeout(timer); };
+      } catch {
+        loaded = false;
+        if (!cancelled) setHasError(true);
+      } finally { if (!cancelled) setIsLoading(false); }
+    };
+    void loadHistory();
+    document.addEventListener("visibilitychange", loadHistory);
+    return () => { cancelled = true; document.removeEventListener("visibilitychange", loadHistory); };
   }, [autoLoad, matchId]);
   const resolvedEvidence = evidence ?? data?.map?.draftPrediction?.evidence ?? null;
   const signals = useMemo(() => [...(resolvedEvidence?.signals ?? [])].sort((left, right) => Math.abs(right.contribution) - Math.abs(left.contribution)), [resolvedEvidence]);
