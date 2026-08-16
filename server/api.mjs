@@ -5,7 +5,7 @@ import { copyFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { Worker } from "node:worker_threads";
 import path from "node:path";
-import { completedSeriesFromMaps, OPENDOTA_TEAMS } from "./live-series.mjs";
+import { completedSeriesFromMaps, inProgressSeriesFromMaps, OPENDOTA_TEAMS, selectSeriesMaps, seriesWinsFromMaps } from "./live-series.mjs";
 import { scheduledSeriesFromCybersportHtml } from "./schedule-source.mjs";
 import { buildForecastSource, ROUND_ONE } from "./forecast-engine.mjs";
 import { predictTemporalDraft } from "./draft-inference.mjs";
@@ -262,8 +262,11 @@ let refreshProgressWriteAt = 0;
 let liveSyncPromise = null;
 let liveDraftPromise = null;
 let liveDraftCache = { games: [], fetchedAt: null, error: null };
+let liveDraftBackoffUntil = 0;
+let liveDraftBackoffMs = 0;
 const liveDraftErrors = new Map();
 let liveLeagueMapsCache = { maps: [], fetchedAt: null };
+const LIVE_DRAFT_RATE_LIMIT_HOLD_MS = 15 * 60_000;
 let autoSnapshotTimer = null;
 let pendingAutomaticSnapshotTrigger = null;
 let forecastJobTimer = null;
@@ -1426,9 +1429,50 @@ function persistLiveSeries(series) {
   const playedB = appearances.filter((match) => match.team_a === series.teamB || match.team_b === series.teamB).length;
   const round = Math.max(playedA, playedB) + 1;
   const predictedProbability = probabilityBefore(series.teamA, series.teamB, series.startTime);
-  db.prepare(`INSERT INTO matches(stage, round, team_a, team_b, winner, score_a, score_b, scheduled_at, source_match_id, predicted_probability, created_at, updated_at)
+    db.prepare(`INSERT INTO matches(stage, round, team_a, team_b, winner, score_a, score_b, scheduled_at, source_match_id, predicted_probability, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(stage, round, series.teamA, series.teamB, winner, series.winsA, series.winsB, new Date(series.startTime * 1000).toISOString(), sourceMatchId, predictedProbability, stamp, stamp);
   return "inserted";
+}
+
+function unfinishedMatchForSeries(series) {
+  const linkedMatchId = canonicalSeriesMatch(series.seriesId);
+  const linked = linkedMatchId ? db.prepare("SELECT * FROM matches WHERE id=?").get(linkedMatchId) : null;
+  if (linked && !linked.winner) return linked;
+  const stage = stageForTimestamp(series.startTime);
+  const scheduledCandidates = db.prepare(`SELECT * FROM matches
+    WHERE stage = ? AND winner IS NULL AND ((team_a = ? AND team_b = ?) OR (team_a = ? AND team_b = ?))
+    ORDER BY round, id`).all(stage, series.teamA, series.teamB, series.teamB, series.teamA);
+  if (scheduledCandidates.length === 1) return scheduledCandidates[0];
+  if (scheduledCandidates.length > 1) audit("series_link_ambiguous", { seriesId: String(series.seriesId), candidateIds: scheduledCandidates.map((row) => row.id), phase: "in_progress" });
+  return null;
+}
+
+function persistInProgressSeries(series) {
+  const target = unfinishedMatchForSeries(series);
+  if (!target) return "unchanged";
+  const scoreA = target.team_a === series.teamA ? series.winsA : series.winsB;
+  const scoreB = target.team_b === series.teamB ? series.winsB : series.winsA;
+  if (Number(target.score_a) === scoreA && Number(target.score_b) === scoreB) return "unchanged";
+  const stamp = now();
+  db.prepare("UPDATE matches SET score_a = ?, score_b = ?, updated_at = ? WHERE id = ?").run(scoreA, scoreB, stamp, target.id);
+  db.prepare("INSERT OR IGNORE INTO series_links(match_id,opendota_series_id,linked_at,evidence_json) VALUES (?,?,?,?)")
+    .run(target.id, String(series.seriesId), stamp, JSON.stringify({ rule: "in_progress_team_pair_stage_unique", startTime: series.startTime }));
+  return "updated";
+}
+
+function persistLeagueMapProgress(maps) {
+  if (!Array.isArray(maps) || !maps.length) return { completed: 0, inProgress: 0 };
+  for (const map of maps) persistTournamentMap(map);
+  let completed = 0;
+  let inProgress = 0;
+  for (const item of completedSeriesFromMaps(maps)) {
+    const status = persistLiveSeries(item);
+    if (status === "inserted" || status === "updated") completed += 1;
+  }
+  for (const item of inProgressSeriesFromMaps(maps)) {
+    if (persistInProgressSeries(item) === "updated") inProgress += 1;
+  }
+  return { completed, inProgress };
 }
 
 function persistTournamentMap(map, detail = null) {
@@ -1542,7 +1586,7 @@ async function syncLiveMatches(trigger = "timer") {
       if (resultError && (!SCHEDULE_SYNC_ENABLED || scheduleError)) throw new Error(`OpenDota: ${resultError}; schedule: ${scheduleError || "disabled"}`);
       const series = completedSeriesFromMaps(maps);
       const unknownTeamIds = [...new Set(maps.flatMap((map) => [Number(map.radiant_team_id), Number(map.dire_team_id)]).filter((id) => id && !OPENDOTA_TEAMS.has(id)))];
-      const summary = { ok: !resultError && !scheduleError, partial: Boolean(resultError || scheduleError), trigger, startedAt, maps: maps.length, completedSeries: series.length, unknownTeamIds, resultError, scheduleError, scheduleSource: SCHEDULE_SYNC_ENABLED ? "Cybersport.ru" : "disabled", scheduledFound: schedule.length, scheduledInserted: 0, scheduledUpdated: 0, scheduledRemoved: 0, scheduledUnchanged: 0, mapDetails: null, forecastQueued: false, inserted: 0, updated: 0, unchanged: 0 };
+      const summary = { ok: !resultError && !scheduleError, partial: Boolean(resultError || scheduleError), trigger, startedAt, maps: maps.length, completedSeries: series.length, unknownTeamIds, resultError, scheduleError, scheduleSource: SCHEDULE_SYNC_ENABLED ? "Cybersport.ru" : "disabled", scheduledFound: schedule.length, scheduledInserted: 0, scheduledUpdated: 0, scheduledRemoved: 0, scheduledUnchanged: 0, inProgressUpdated: 0, mapDetails: null, forecastQueued: false, inserted: 0, updated: 0, unchanged: 0 };
       db.exec("BEGIN");
       try {
         const probabilities = schedule.length ? currentForecast().probabilities : {};
@@ -1552,6 +1596,9 @@ async function syncLiveMatches(trigger = "timer") {
         }
         for (const map of maps) persistTournamentMap(map);
         for (const item of series) summary[persistLiveSeries(item)] += 1;
+        for (const item of inProgressSeriesFromMaps(maps)) {
+          if (persistInProgressSeries(item) === "updated") summary.inProgressUpdated += 1;
+        }
         db.exec("COMMIT");
       } catch (error) { db.exec("ROLLBACK"); throw error; }
       summary.mapDetails = await hydrateTournamentMapDetails(maps);
@@ -1581,22 +1628,31 @@ async function syncLiveMatches(trigger = "timer") {
 
 async function refreshLiveDrafts({ force = false } = {}) {
   const freshFor = LIVE_DRAFT_INTERVAL_SECONDS * 1000;
+  if (!force && liveDraftBackoffUntil && Date.now() < liveDraftBackoffUntil) return liveDraftCache;
   if (!force && liveDraftCache.fetchedAt && Date.now() - Date.parse(liveDraftCache.fetchedAt) < freshFor) return liveDraftCache;
   if (liveDraftPromise) return liveDraftPromise;
   liveDraftPromise = (async () => {
+    const headers = { "user-agent": "ti-2026-predictor/1.0 (github.com/balance-loz/ti-2026)" };
+    const mapsAreStale = !liveLeagueMapsCache.fetchedAt || Date.now() - Date.parse(liveLeagueMapsCache.fetchedAt) > 30_000;
+    let leagueMaps = liveLeagueMapsCache.maps;
     try {
-      const headers = { "user-agent": "ti-2026-predictor/1.0 (github.com/balance-loz/ti-2026)" };
-      const mapsAreStale = !liveLeagueMapsCache.fetchedAt || Date.now() - Date.parse(liveLeagueMapsCache.fetchedAt) > 30_000;
-      const mapsPromise = mapsAreStale
-        ? fetch(`${OPENDOTA_API_URL}/leagues/${TI_LEAGUE_ID}/matches`, { headers, signal: AbortSignal.timeout(10_000) })
-          .then(async (response) => response.ok ? response.json() : Promise.reject(new Error(`OpenDota league HTTP ${response.status}`)))
-          .then((maps) => { if (Array.isArray(maps)) liveLeagueMapsCache = { maps, fetchedAt: now() }; return liveLeagueMapsCache.maps; })
-          .catch(() => liveLeagueMapsCache.maps)
-        : Promise.resolve(liveLeagueMapsCache.maps);
+      if (mapsAreStale) {
+        const mapsResponse = await fetch(`${OPENDOTA_API_URL}/leagues/${TI_LEAGUE_ID}/matches`, { headers, signal: AbortSignal.timeout(10_000) });
+        if (mapsResponse.ok) {
+          const maps = await mapsResponse.json();
+          if (Array.isArray(maps)) {
+            liveLeagueMapsCache = { maps, fetchedAt: now() };
+            leagueMaps = maps;
+            const progress = persistLeagueMapProgress(maps);
+            if (progress.completed) queueAutomaticSnapshot("auto_live_result");
+          }
+        }
+      }
+    } catch { leagueMaps = liveLeagueMapsCache.maps; }
+    try {
       const response = await fetch(`${OPENDOTA_API_URL}/live`, { headers, signal: AbortSignal.timeout(10_000) });
       if (!response.ok) throw new Error(`OpenDota live HTTP ${response.status}`);
       const rows = await response.json();
-      const leagueMaps = await mapsPromise;
       const fetchedAt = now();
       const games = liveDraftsFromOpenDota(rows, { leagueId: TI_LEAGUE_ID, nowSeconds: Date.parse(fetchedAt) / 1000, leagueMaps });
       for (const game of games) {
@@ -1605,6 +1661,8 @@ async function refreshLiveDrafts({ force = false } = {}) {
         persistLiveDraftSnapshot(game, fetchedAt, draftPrediction);
       }
       const currentGames = games.map(decorateLiveDraft);
+      liveDraftBackoffMs = 0;
+      liveDraftBackoffUntil = 0;
       liveDraftCache = {
         games: mergeLiveDraftGames(currentGames, liveDraftCache.games, leagueMaps, {
           fetchedAt,
@@ -1615,11 +1673,51 @@ async function refreshLiveDrafts({ force = false } = {}) {
         error: null,
       };
     } catch (error) {
-      liveDraftCache = { ...liveDraftCache, error: error instanceof Error ? error.message : String(error) };
+      const message = error instanceof Error ? error.message : String(error);
+      if (/\b429\b/.test(message)) {
+        liveDraftBackoffMs = Math.min(300_000, Math.max(60_000, liveDraftBackoffMs * 2 || 60_000));
+        liveDraftBackoffUntil = Date.now() + liveDraftBackoffMs;
+      }
+      liveDraftCache = { ...liveDraftCache, error: message };
     } finally { liveDraftPromise = null; }
     return liveDraftCache;
   })();
   return liveDraftPromise;
+}
+
+function liveGameIsUsable(game) {
+  const freshnessAnchor = game?.serverSeenAt || game?.lastUpdateAt;
+  if (!freshnessAnchor) return false;
+  const ageMs = Date.now() - Date.parse(freshnessAnchor);
+  if (!Number.isFinite(ageMs) || ageMs < 0) return false;
+  if (ageMs <= LIVE_DRAFT_GRACE_SECONDS * 1_000) return true;
+  return Boolean(liveDraftCache.error) && /\b429\b/.test(String(liveDraftCache.error)) && ageMs <= LIVE_DRAFT_RATE_LIMIT_HOLD_MS;
+}
+
+function seriesLookup(match, game = null) {
+  const fromSource = String(match.source_match_id || "").startsWith("opendota:") ? String(match.source_match_id).split(":").at(-1) : null;
+  return {
+    seriesId: fromSource,
+    liveSeriesId: game?.seriesId || fromSource,
+    liveMatchId: game?.matchId || null,
+    teamA: match.team_a,
+    teamB: match.team_b,
+    scheduledAt: match.scheduled_at,
+  };
+}
+
+function observedSeriesWins(match, maps, game = null) {
+  const selected = selectSeriesMaps(seriesLookup(match, game), maps);
+  const fromMaps = seriesWinsFromMaps(match.team_a, match.team_b, selected);
+  const fromResult = match.winner && Number.isFinite(Number(match.score_a)) && Number.isFinite(Number(match.score_b))
+    ? { winsA: Number(match.score_a), winsB: Number(match.score_b) }
+    : { winsA: Number(match.score_a) || 0, winsB: Number(match.score_b) || 0 };
+  const liveA = game ? (game.radiantTeam === match.team_a ? Number(game.seriesScoreRadiant || 0) : Number(game.seriesScoreDire || 0)) : 0;
+  const liveB = game ? (game.radiantTeam === match.team_b ? Number(game.seriesScoreRadiant || 0) : Number(game.seriesScoreDire || 0)) : 0;
+  return {
+    winsA: Math.max(fromMaps.winsA, fromResult.winsA, liveA),
+    winsB: Math.max(fromMaps.winsB, fromResult.winsB, liveB),
+  };
 }
 
 function snapshotMatchesProfile(row, mode, weight) {
@@ -1723,10 +1821,9 @@ async function combinedForecastState(opinionWeight = DEFAULT_OPINION_WEIGHT, req
   const series = matches.map((match) => {
     const seriesId = String(match.source_match_id || "").startsWith("opendota:") ? String(match.source_match_id).split(":").at(-1) : null;
     const game = live.games.find((item) => {
-      const freshnessAnchor = item.serverSeenAt || item.lastUpdateAt;
-      const isFresh = freshnessAnchor && Date.now() - Date.parse(freshnessAnchor) <= LIVE_DRAFT_GRACE_SECONDS * 1_000;
-      if (!isFresh) return false;
-      return (seriesId && String(item.seriesId) === seriesId) || canonicalSeriesMatch(item.seriesId) === Number(match.id);
+      if (!liveGameIsUsable(item)) return false;
+      return (seriesId && String(item.seriesId) === seriesId) || canonicalSeriesMatch(item.seriesId) === Number(match.id)
+        || ([item.radiantTeam, item.direTeam].includes(match.team_a) && [item.radiantTeam, item.direTeam].includes(match.team_b));
     });
     const probabilityFromBlend = orientedProbability(match.team_a, match.team_b, probabilities);
     const storedProbability = match.predicted_probability !== null && match.predicted_probability !== undefined && Number.isFinite(Number(match.predicted_probability)) ? Number(match.predicted_probability) / 100 : null;
@@ -1761,8 +1858,7 @@ async function combinedForecastState(opinionWeight = DEFAULT_OPINION_WEIGHT, req
       source: "experimental_live_map_observation",
       stale: Boolean(game?.stale || game?.retained || liveEstimate.assessment?.stale),
     } : null;
-    const winsA = game ? (game.radiantTeam === match.team_a ? game.seriesScoreRadiant : game.seriesScoreDire) : 0;
-    const winsB = game ? (game.radiantTeam === match.team_b ? game.seriesScoreRadiant : game.seriesScoreDire) : 0;
+    const { winsA, winsB } = observedSeriesWins(match, maps, game);
     const productionProbabilityA = orientedProbability(match.team_a, match.team_b, productionProbabilities) ?? latestSeriesProbabilityA;
     const productionForecast = combinedSeriesForecast({ teamA: match.team_a, teamB: match.team_b, seriesProbabilityA: productionProbabilityA, sourceBestOf: 3, bestOf, winsA, winsB, currentMapProbabilityA: draftMapProbabilityA });
     const forecast = combinedSeriesForecast({ teamA: match.team_a, teamB: match.team_b, seriesProbabilityA: latestSeriesProbabilityA, bestOf, winsA, winsB, currentMapProbabilityA });
@@ -1796,7 +1892,7 @@ async function combinedForecastState(opinionWeight = DEFAULT_OPINION_WEIGHT, req
         historicalCapturedAt: snapshotBaselineProbabilityA !== null ? mainSnapshot?.baselineCreatedAt ?? null : lockedSeriesProbabilityA !== null ? match.created_at : null,
       },
       latest: { probabilityA: latestSeriesProbabilityA, sourceBestOf: 3, targetProbabilityA: forecast.targetSeriesProbabilityA, generatedAt: now() },
-      live: game ? { ...game, history: undefined } : null,
+      live: game ? { ...game, history: undefined, stale: Boolean(game.stale || game.retained || Date.now() - Date.parse(game.serverSeenAt || game.lastUpdateAt || 0) > LIVE_DRAFT_GRACE_SECONDS * 1_000) } : null,
       liveEstimate: presentedLiveEstimate,
       sources: {
         opinionWeight: weight,
@@ -1852,16 +1948,24 @@ function combinedInputHash(opinionWeight = DEFAULT_OPINION_WEIGHT) {
 
 function activeGameForSeries(row) {
   return liveDraftCache.games.find((game) => {
-    const freshnessAnchor = game.serverSeenAt || game.lastUpdateAt;
-    if (!freshnessAnchor || Date.now() - Date.parse(freshnessAnchor) > LIVE_DRAFT_GRACE_SECONDS * 1_000) return false;
+    if (!liveGameIsUsable(game)) return false;
     return (row.seriesId && String(game.seriesId) === String(row.seriesId))
-      || canonicalSeriesMatch(game.seriesId) === Number(row.match.id);
+      || canonicalSeriesMatch(game.seriesId) === Number(row.match.id)
+      || ([game.radiantTeam, game.direTeam].includes(row.match.team_a) && [game.radiantTeam, game.direTeam].includes(row.match.team_b));
   }) ?? null;
 }
 
-function liveOverlayForSeries(row) {
+function liveOverlayForSeries(row, maps) {
   const game = activeGameForSeries(row);
-  if (!game) return { ...row, live: null, liveEstimate: null, sources: { ...row.sources, liveStateApplied: false } };
+  const { winsA, winsB } = observedSeriesWins(row.match, maps, game);
+  const bestOf = bestOfForMatch(row.match, game);
+  if (!game) {
+    const forecast = combinedSeriesForecast({
+      teamA: row.match.team_a, teamB: row.match.team_b, seriesProbabilityA: row.latest.probabilityA, bestOf, winsA, winsB,
+    });
+    return { ...row, forecast, live: null, liveEstimate: null, sources: { ...row.sources, liveStateApplied: false } };
+  }
+  const heldPastGrace = Date.now() - Date.parse(game.serverSeenAt || game.lastUpdateAt || 0) > LIVE_DRAFT_GRACE_SECONDS * 1_000;
   const draftProbabilityRadiant = game.draftPrediction?.probabilityRadiant ?? null;
   const hasDraft = Number.isFinite(Number(draftProbabilityRadiant));
   const draftMapProbabilityA = hasDraft
@@ -1870,13 +1974,10 @@ function liveOverlayForSeries(row) {
   let liveEstimate = null; let currentMapProbabilityA = draftMapProbabilityA;
   if (hasDraft) {
     try { liveEstimate = estimateLiveMap(currentLiveMapModel(), { draftProbabilityRadiant, game }); } catch { liveEstimate = null; }
-    const canApplyLive = !game.stale && !game.retained && !liveEstimate?.assessment?.stale && Number.isFinite(Number(liveEstimate?.liveProbabilityRadiant));
+    const canApplyLive = !heldPastGrace && !game.stale && !game.retained && !liveEstimate?.assessment?.stale && Number.isFinite(Number(liveEstimate?.liveProbabilityRadiant));
     const radiantProbability = canApplyLive ? Number(liveEstimate.liveProbabilityRadiant) : Number(draftProbabilityRadiant);
     currentMapProbabilityA = game.radiantTeam === row.match.team_a ? radiantProbability : 1 - radiantProbability;
   }
-  const winsA = game.radiantTeam === row.match.team_a ? game.seriesScoreRadiant : game.seriesScoreDire;
-  const winsB = game.radiantTeam === row.match.team_b ? game.seriesScoreRadiant : game.seriesScoreDire;
-  const bestOf = bestOfForMatch(row.match, game);
   const forecast = combinedSeriesForecast({ teamA: row.match.team_a, teamB: row.match.team_b, seriesProbabilityA: row.latest.probabilityA, bestOf, winsA, winsB, currentMapProbabilityA });
   const presented = liveEstimate ? {
     ...liveEstimate,
@@ -1885,23 +1986,24 @@ function liveOverlayForSeries(row) {
       ? game.radiantTeam === row.match.team_a ? Number(liveEstimate.liveProbabilityRadiant) : 1 - Number(liveEstimate.liveProbabilityRadiant)
       : null,
     source: "experimental_live_map_observation",
-    stale: Boolean(game.stale || game.retained || liveEstimate.assessment?.stale),
+    stale: Boolean(heldPastGrace || game.stale || game.retained || liveEstimate.assessment?.stale),
   } : null;
   return {
     ...row,
     forecast,
-    live: { ...game, history: undefined },
+    live: { ...game, history: undefined, stale: Boolean(game.stale || game.retained || heldPastGrace) },
     liveEstimate: presented,
     sources: { ...row.sources, draftApplied: hasDraft, liveStateApplied: !presented?.stale && Number.isFinite(Number(presented?.observedProbabilityA)) },
   };
 }
 
 function overlayCombinedLive(state) {
+  const maps = parsedTournamentMaps();
   return {
     ...state,
     generatedAt: now(),
-    series: state.series.map(liveOverlayForSeries),
-    maps: parsedTournamentMaps(),
+    series: state.series.map((row) => liveOverlayForSeries(row, maps)),
+    maps,
     live: { fetchedAt: liveDraftCache.fetchedAt, error: liveDraftCache.error },
   };
 }

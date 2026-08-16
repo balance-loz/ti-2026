@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { completedSeriesFromMaps } from "../server/live-series.mjs";
+import { completedSeriesFromMaps, inProgressSeriesFromMaps, selectSeriesMaps, seriesWinsFromMaps } from "../server/live-series.mjs";
 import { liveDraftsFromOpenDota, mergeLiveDraftGames } from "../server/live-drafts.mjs";
 import { scheduledSeriesFromCybersportHtml } from "../server/schedule-source.mjs";
 import { buildForecastSource, resolveTournamentCalibration, ROUND_ONE, runForecast, SWISS_GROUPS, SWISS_GROUP_BY_TEAM, swissBucketKey, topGroupScenarios } from "../server/forecast-engine.mjs";
@@ -133,8 +133,8 @@ test("production gate keeps adaptive forecasts in shadow when proper scores get 
 });
 
 test("combined page and API persist map truth and explain the no-double-count policy", async () => {
-  const [api, page, tournamentPage, styles, checkpoint, modelGate] = await Promise.all([
-    readFile("server/api.mjs", "utf8"), readFile("app/combined/page.tsx", "utf8"), readFile("app/page.tsx", "utf8"), readFile("app/globals.css", "utf8"), readFile("scripts/checkpoint-production.mjs", "utf8"), readFile("server/model-gate.mjs", "utf8"),
+  const [api, page, tournamentPage, styles, checkpoint, modelGate, liveSeries] = await Promise.all([
+    readFile("server/api.mjs", "utf8"), readFile("app/combined/page.tsx", "utf8"), readFile("app/page.tsx", "utf8"), readFile("app/globals.css", "utf8"), readFile("scripts/checkpoint-production.mjs", "utf8"), readFile("server/model-gate.mjs", "utf8"), readFile("server/live-series.mjs", "utf8"),
   ]);
   assert.match(api, /CREATE TABLE IF NOT EXISTS tournament_maps/);
   assert.match(api, /CREATE TABLE IF NOT EXISTS bet_locks/);
@@ -192,8 +192,8 @@ test("combined page and API persist map truth and explain the no-double-count po
   assert.match(page, /LOWER_PLACEMENT/);
   assert.match(page, /Точный счёт/);
   assert.match(page, /ТЕКУЩАЯ КАРТА/);
-  assert.match(page, /Number\.POSITIVE_INFINITY/);
-  assert.match(page, /row\.forecast\.winsA \+ row\.forecast\.winsB \+ 1/);
+  assert.match(liveSeries, /Number\.POSITIVE_INFINITY/);
+  assert.match(page, /observedScore\(row, maps\)\.winsA \+ observedScore\(row, maps\)\.winsB \+ 1/);
   assert.match(page, /Draft-прогноз ещё не сохранён/);
   assert.match(page, /ПО ПИКАМ/);
   assert.match(page, /онлайн-состояние карты/);
@@ -678,6 +678,34 @@ test("OpenDota maps become a completed series only after two wins", () => {
   assert.deepEqual(series[0], { seriesId: "99", teamA: "1w", teamB: "nigma", winsA: 2, winsB: 0, startTime: 100, seriesType: 1, mapIds: [1, 2], bestOf: 3 });
 });
 
+test("unfinished league maps keep a partial series score and do not count the live map", () => {
+  const maps = [
+    { match_id: 1, series_id: 50, series_type: 1, start_time: 100, radiant_team_id: 10150538, dire_team_id: 9823272, radiant_win: true },
+    { match_id: 2, series_id: 50, series_type: 1, start_time: 200, radiant_team_id: 10150538, dire_team_id: 9823272, radiant_win: false },
+    { match_id: 3, series_id: 50, series_type: 1, start_time: 300, radiant_team_id: 10150538, dire_team_id: 9823272 },
+  ];
+  assert.equal(completedSeriesFromMaps(maps).length, 0);
+  const progress = inProgressSeriesFromMaps(maps);
+  assert.equal(progress.length, 1);
+  assert.equal(progress[0].teamA, "lgd");
+  assert.equal(progress[0].teamB, "yandex");
+  assert.equal(progress[0].winsA, 1);
+  assert.equal(progress[0].winsB, 1);
+});
+
+test("series map selection keeps finished maps even when the live series id differs", () => {
+  const maps = [
+    { matchId: "1", seriesId: "aa", radiantTeam: "lgd", direTeam: "yandex", winner: "yandex", startTime: 1_776_300_000 },
+    { matchId: "2", seriesId: "aa", radiantTeam: "yandex", direTeam: "lgd", winner: "yandex", startTime: 1_776_301_000 },
+    { matchId: "3", seriesId: "bb", radiantTeam: "lgd", direTeam: "yandex", winner: null, startTime: 0 },
+  ];
+  const selected = selectSeriesMaps({
+    seriesId: null, liveSeriesId: "bb", liveMatchId: "3", teamA: "lgd", teamB: "yandex", scheduledAt: null,
+  }, maps);
+  assert.deepEqual(selected.map((map) => map.matchId), ["1", "2", "3"]);
+  assert.deepEqual(seriesWinsFromMaps("lgd", "yandex", selected), { winsA: 0, winsB: 2 });
+});
+
 test("OpenDota live feed becomes a partial TI draft and rejects stale games", () => {
   const rows = [{ league_id: 19719, match_id: 42, series_id: 7, team_id_radiant: 9247354, team_id_dire: 9572001, game_time: -30, delay: 10, last_update_time: 1_000, radiant_lead: 2400, spectators: 1234,
     players: [{ team: 0, team_slot: 2, account_id: 20, hero_id: 59, name: "Second" }, { team: 0, team_slot: 1, account_id: 10, hero_id: 80, name: "First" }, { team: 1, team_slot: 1, account_id: 30, hero_id: 55 }] }];
@@ -753,6 +781,13 @@ test("unified home loads server-owned live history and draft evidence", async ()
   assert.match(api, /OPENDOTA_API_URL}\/live/);
   assert.match(api, /OPENDOTA_API_URL}\/leagues\/\$\{TI_LEAGUE_ID\}\/matches/);
   assert.match(api, /liveDraftsFromOpenDota/);
+  assert.match(api, /liveDraftBackoffUntil/);
+  assert.match(api, /persistInProgressSeries/);
+  assert.match(api, /selectSeriesMaps/);
+  assert.match(api, /observedSeriesWins/);
+  assert.match(page, /selectSeriesMaps/);
+  assert.match(page, /observedScore/);
+  assert.match(page, /факт <b>\{fact\.winsA\}:\{fact\.winsB\}<\/b>/);
   assert.match(api, /live_draft_snapshots/);
   assert.match(api, /live_draft_predictions/);
   assert.match(api, /evidence_json/);
