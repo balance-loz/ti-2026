@@ -1,6 +1,7 @@
 import { convertSeriesProbability } from "./team-model.mjs";
 
 import { updateProbabilitiesWithLiveSeries } from "./live-team-update.mjs";
+import { playoffOpeningPairs } from "./tournament-format.mjs";
 
 export const TEAMS = [
   ["1w", "1w"], ["aurora", "Aurora"], ["betboom", "BETBOOM"], ["falcons", "Falcons"],
@@ -204,7 +205,9 @@ export function runForecast(answers, iterations = 100000, seed = Math.floor(Math
     const qualifiers = [...directSeeds, ...viaSeeds];
     const knownPlayoff = matches.filter((match) => match.stage === "playoff");
     const knownOpening = knownPlayoff.filter((match) => match.round === 1).slice(0, 4);
-    const openingPairs = knownOpening.length === 4 ? knownOpening.map((match) => [match.team_a, match.team_b]) : [[qualifiers[0], qualifiers[7]], [qualifiers[3], qualifiers[4]], [qualifiers[1], qualifiers[6]], [qualifiers[2], qualifiers[5]]];
+    const openingPairs = playoffOpeningPairs(knownPlayoff, knownOpening.length === 4
+      ? knownOpening.map((match) => [match.team_a, match.team_b])
+      : [[qualifiers[0], qualifiers[7]], [qualifiers[3], qualifiers[4]], [qualifiers[1], qualifiers[6]], [qualifiers[2], qualifiers[5]]]);
     const playoffSeries = (label, a, b, bestOf = 3) => { const actual = knownPlayoff.find((match) => match.winner && ((match.team_a === a && match.team_b === b) || (match.team_a === b && match.team_b === a))); const winner = actual?.winner || winnerFor(a, b, bestOf); const loser = winner === a ? b : a; path.push(`PO:${label}:${pairKey(a, b)}>${winner}`); return { a, b, winner, loser }; };
     const uq = openingPairs.map(([a, b], index) => playoffSeries(`UQ${index + 1}`, a, b));
     const us1 = playoffSeries("US1", uq[0].winner, uq[1].winner); const us2 = playoffSeries("US2", uq[2].winner, uq[3].winner);

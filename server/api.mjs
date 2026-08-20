@@ -17,6 +17,7 @@ import { estimateLiveMap } from "./live-map-prediction.mjs";
 import { mostLikelyExactScore, predictionTimeliness, projectPlayoffBracket } from "./projected-bracket.mjs";
 import { selectProductionVariant } from "./model-gate.mjs";
 import { calculateActiveDraftPrediction } from "./active-draft-service.mjs";
+import { isTi2026OpeningPair, TI_2026_PLAYOFF_OPENING_PAIRS } from "./tournament-format.mjs";
 
 const PORT = Number(process.env.API_PORT || 3001);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "data");
@@ -367,6 +368,7 @@ function opendotaInBackoff(kind = "maps") {
 const REFRESH_STEPS = Object.freeze([
   { id: "update-stats", script: "scripts/update-stats.mjs", label: "Статистика команд" },
   { id: "backtest-model", script: "scripts/backtest-model.mjs", label: "Бэктест модели команд" },
+  { id: "tournament-calibration", script: "scripts/calibrate-tournament-variance.mjs", label: "Турнирная online-калибровка" },
   { id: "update-draft-stats", script: "scripts/update-draft-stats.mjs", label: "Пики, синергии и контры" },
   { id: "build-draft-dataset", script: "scripts/build-draft-dataset.mjs", label: "Датасет драфтов" },
   { id: "audit-draft-coverage", script: "scripts/audit-draft-coverage.mjs", label: "Покрытие драфтов" },
@@ -584,7 +586,7 @@ function existingFile(candidates) {
   return null;
 }
 
-const LIVE_JSON_ARTIFACTS = Object.freeze(["intel-stats.json", "team-stats.json"]);
+const LIVE_JSON_ARTIFACTS = Object.freeze(["intel-stats.json", "team-stats.json", "draft-stats.json"]);
 
 function artifactEnvPath(fileName) {
   if (fileName === "draft-stats.json") return process.env.DRAFT_STATS;
@@ -634,7 +636,7 @@ function sendLiveJsonArtifact(res, fileName) {
 
 function publicArtifactFreshness() {
   return Object.fromEntries(LIVE_JSON_ARTIFACTS.map((fileName) => {
-    const key = fileName === "intel-stats.json" ? "intelStats" : "teamStats";
+    const key = fileName === "intel-stats.json" ? "intelStats" : fileName === "draft-stats.json" ? "draftStats" : "teamStats";
     try {
       const fullPath = resolvePublicArtifact(fileName);
       const generatedAt = loadJson(fullPath)?.generatedAt ?? null;
@@ -1427,6 +1429,7 @@ const probabilityFor = (probabilities, teamA, teamB) => {
 function persistScheduledSeries(series, probabilities) {
   const stage = stageForScheduledSeries(series);
   if (!stage) return "scheduledUnchanged";
+  if (stage === "playoff" && Number(series.round) === 1 && !isTi2026OpeningPair(series.teamA, series.teamB)) return "scheduledUnchanged";
   const sourceMatchId = `cybersport:${stage}:${series.round}:${[series.teamA, series.teamB].sort().join("|")}`;
   const existing = db.prepare(`SELECT * FROM matches WHERE stage = ? AND round = ?
     AND ((team_a = ? AND team_b = ?) OR (team_a = ? AND team_b = ?)) ORDER BY id DESC LIMIT 1`)
@@ -1451,6 +1454,7 @@ function persistScheduledSeries(series, probabilities) {
 function removeConflictingScheduledSeries(series) {
   const stage = stageForScheduledSeries(series);
   if (!stage) return 0;
+  if (stage === "playoff" && Number(series.round) === 1 && !isTi2026OpeningPair(series.teamA, series.teamB)) return 0;
   const conflicts = db.prepare(`SELECT id FROM matches
     WHERE stage = ? AND round = ? AND winner IS NULL AND source_match_id LIKE 'cybersport:%'
       AND (team_a IN (?, ?) OR team_b IN (?, ?))
@@ -1459,6 +1463,27 @@ function removeConflictingScheduledSeries(series) {
   const remove = db.prepare("DELETE FROM matches WHERE id = ?");
   for (const conflict of conflicts) remove.run(conflict.id);
   return conflicts.length;
+}
+
+function reconcileOfficialPlayoffOpeningSeries(probabilities = {}) {
+  const invalid = db.prepare(`SELECT id,team_a,team_b FROM matches
+    WHERE stage='playoff' AND round=1 AND winner IS NULL`).all()
+    .filter((match) => !isTi2026OpeningPair(match.team_a, match.team_b));
+  const remove = db.prepare("DELETE FROM matches WHERE id=?");
+  for (const match of invalid) remove.run(match.id);
+  let inserted = 0;
+  const stamp = now();
+  const insert = db.prepare(`INSERT INTO matches(stage,round,team_a,team_b,winner,score_a,score_b,scheduled_at,source_match_id,predicted_probability,created_at,updated_at)
+    VALUES ('playoff',1,?,?,NULL,NULL,NULL,NULL,?,?,?,?)`);
+  for (const [teamA, teamB] of TI_2026_PLAYOFF_OPENING_PAIRS) {
+    const existing = db.prepare(`SELECT id FROM matches WHERE stage='playoff' AND round=1
+      AND ((team_a=? AND team_b=?) OR (team_a=? AND team_b=?)) LIMIT 1`).get(teamA, teamB, teamB, teamA);
+    if (existing) continue;
+    insert.run(teamA, teamB, `official:playoff:1:${[teamA, teamB].sort().join("|")}`, probabilityFor(probabilities, teamA, teamB), stamp, stamp);
+    inserted += 1;
+  }
+  if (invalid.length || inserted) audit("playoff_opening_reconciled", { removed: invalid.map((match) => match.id), inserted });
+  return { removed: invalid.length, inserted };
 }
 
 function officialPairingTrigger() {
@@ -1646,7 +1671,7 @@ async function refreshCybersportSchedule({ force = false } = {}) {
     const schedule = scheduledSeriesFromCybersportHtml(await response.text(), { timezoneOffset: SCHEDULE_TIMEZONE_OFFSET });
     rememberCybersportLivePairs(schedule);
     cybersportScheduleFetchedAt = now();
-    const summary = { scheduledInserted: 0, scheduledUpdated: 0, scheduledRemoved: 0, scheduledUnchanged: 0 };
+    const summary = { scheduledInserted: 0, scheduledUpdated: 0, scheduledRemoved: 0, scheduledUnchanged: 0, openingInserted: 0, openingRemoved: 0 };
     const probabilities = schedule.length ? currentForecast().probabilities : {};
     db.exec("BEGIN");
     try {
@@ -1654,12 +1679,15 @@ async function refreshCybersportSchedule({ force = false } = {}) {
         summary.scheduledRemoved += removeConflictingScheduledSeries(item);
         summary[persistScheduledSeries(item, probabilities)] += 1;
       }
+      const opening = reconcileOfficialPlayoffOpeningSeries(probabilities);
+      summary.openingInserted += opening.inserted;
+      summary.openingRemoved += opening.removed;
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");
       throw error;
     }
-    const changed = summary.scheduledInserted || summary.scheduledUpdated || summary.scheduledRemoved;
+    const changed = summary.scheduledInserted || summary.scheduledUpdated || summary.scheduledRemoved || summary.openingInserted || summary.openingRemoved;
     if (changed) {
       audit("official_schedule_sync", { trigger: "cybersport_refresh", ...summary, livePairs: cybersportLivePairs });
       queueAutomaticSnapshot(officialPairingTrigger());
@@ -1757,7 +1785,7 @@ async function syncLiveMatches(trigger = "timer") {
       if (resultError && (!SCHEDULE_SYNC_ENABLED || scheduleError)) throw new Error(`OpenDota: ${resultError}; schedule: ${scheduleError || "disabled"}`);
       const series = completedSeriesFromMaps(maps);
       const unknownTeamIds = [...new Set(maps.flatMap((map) => [Number(map.radiant_team_id), Number(map.dire_team_id)]).filter((id) => id && !OPENDOTA_TEAMS.has(id)))];
-      const summary = { ok: !resultError && !scheduleError, partial: Boolean(resultError || scheduleError), trigger, startedAt, maps: maps.length, completedSeries: series.length, unknownTeamIds, resultError, scheduleError, scheduleSource: SCHEDULE_SYNC_ENABLED ? "Cybersport.ru" : "disabled", scheduledFound: schedule.length, scheduledInserted: 0, scheduledUpdated: 0, scheduledRemoved: 0, scheduledUnchanged: 0, inProgressUpdated: 0, mapDetails: null, forecastQueued: false, inserted: 0, updated: 0, unchanged: 0 };
+      const summary = { ok: !resultError && !scheduleError, partial: Boolean(resultError || scheduleError), trigger, startedAt, maps: maps.length, completedSeries: series.length, unknownTeamIds, resultError, scheduleError, scheduleSource: SCHEDULE_SYNC_ENABLED ? "Cybersport.ru" : "disabled", scheduledFound: schedule.length, scheduledInserted: 0, scheduledUpdated: 0, scheduledRemoved: 0, scheduledUnchanged: 0, openingInserted: 0, openingRemoved: 0, inProgressUpdated: 0, mapDetails: null, forecastQueued: false, inserted: 0, updated: 0, unchanged: 0 };
       db.exec("BEGIN");
       try {
         const probabilities = schedule.length ? currentForecast().probabilities : {};
@@ -1765,6 +1793,9 @@ async function syncLiveMatches(trigger = "timer") {
           summary.scheduledRemoved += removeConflictingScheduledSeries(item);
           summary[persistScheduledSeries(item, probabilities)] += 1;
         }
+        const opening = reconcileOfficialPlayoffOpeningSeries(probabilities);
+        summary.openingInserted += opening.inserted;
+        summary.openingRemoved += opening.removed;
         for (const map of maps) persistTournamentMap(map);
         for (const item of series) summary[persistLiveSeries(item)] += 1;
         for (const item of inProgressSeriesFromMaps(maps)) {
@@ -1773,7 +1804,7 @@ async function syncLiveMatches(trigger = "timer") {
         db.exec("COMMIT");
       } catch (error) { db.exec("ROLLBACK"); throw error; }
       summary.mapDetails = await hydrateTournamentMapDetails(maps);
-      const scheduleChanged = summary.scheduledInserted || summary.scheduledUpdated || summary.scheduledRemoved;
+      const scheduleChanged = summary.scheduledInserted || summary.scheduledUpdated || summary.scheduledRemoved || summary.openingInserted || summary.openingRemoved;
       if (summary.inserted || summary.updated) { audit("live_sync_results", summary); queueAutomaticSnapshot("auto_live_result"); summary.forecastQueued = true; }
       if (scheduleChanged) {
         audit("official_schedule_sync", summary);
@@ -2649,6 +2680,7 @@ const server = createServer(async (req, res) => {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`TI Predictor API listening on ${PORT}; database ${DB_PATH}`);
   seedPublicArtifacts();
+  reconcileOfficialPlayoffOpeningSeries(currentForecast().probabilities);
   db.prepare(`UPDATE automation_jobs SET status='pending',lease_until=NULL,lease_token=NULL,updated_at=?
     WHERE job_type='forecast' AND status='leased' AND (lease_until IS NULL OR lease_until < ?) AND superseded_by IS NULL AND cancel_requested_at IS NULL`)
     .run(now(), now());

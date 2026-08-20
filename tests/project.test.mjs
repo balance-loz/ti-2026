@@ -125,6 +125,24 @@ test("projected playoff bracket propagates actual winners and keeps frozen predi
   assert.ok(bracket.nodes.some((node) => node.column > 1 && [node.a, node.b].includes("h")));
 });
 
+test("official TI playoff topology rejects stale schedule pairs and never creates a self-match", () => {
+  const qualifiers = ["nigma", "parivision", "spirit", "1w", "falcons", "yandex", "betboom", "liquid"];
+  const probabilities = Object.fromEntries(qualifiers.flatMap((a, index) => qualifiers.slice(index + 1).map((b) => [[a, b].sort().join("|"), .6])));
+  const simulationResult = { scenarios: [{ direct40: ["parivision"], direct41: ["nigma", "liquid"], via: ["spirit", "1w", "falcons", "yandex", "betboom"] }] };
+  const matches = [
+    { id: 65, stage: "playoff", round: 1, team_a: "parivision", team_b: "betboom", winner: "parivision", score_a: 2, score_b: 1 },
+    { id: 66, stage: "playoff", round: 1, team_a: "liquid", team_b: "yandex", winner: "yandex", score_a: 0, score_b: 2 },
+    { id: 67, stage: "playoff", round: 1, team_a: "nigma", team_b: "falcons", winner: null, score_a: 0, score_b: 1 },
+    { id: 68, stage: "playoff", round: 1, team_a: "1w", team_b: "betboom", winner: null, score_a: null, score_b: null },
+    { id: 69, stage: "playoff", round: 1, team_a: "spirit", team_b: "parivision", winner: null, score_a: null, score_b: null },
+  ];
+  const bracket = projectPlayoffBracket({ simulationResult, probabilities, matches });
+  assert.deepEqual(bracket.nodes.filter((node) => node.column === 1 && node.lane === "upper").map((node) => [node.a, node.b]), [
+    ["1w", "spirit"], ["parivision", "betboom"], ["liquid", "yandex"], ["nigma", "falcons"],
+  ]);
+  assert.equal(bracket.nodes.some((node) => node.a === node.b), false);
+});
+
 test("production gate keeps adaptive forecasts in shadow when proper scores get worse", () => {
   const staticScore = { count: 24, correct: 18, brier: 0.21748, logLoss: 0.62717 };
   const worseAdaptive = { count: 24, correct: 18, brier: 0.24349, logLoss: 0.68657 };
@@ -679,6 +697,17 @@ test("OpenDota maps become a completed series only after two wins", () => {
   assert.deepEqual(series[0], { seriesId: "99", teamA: "1w", teamB: "nigma", winsA: 2, winsB: 0, startTime: 100, seriesType: 1, mapIds: [1, 2], bestOf: 3 });
 });
 
+test("a missing OpenDota series_id on map one is reconciled with the same nearby team pair", () => {
+  const maps = [
+    { match_id: 8955197224, series_id: null, start_time: 1787193389, radiant_team_id: 7119388, dire_team_id: 10150413, radiant_win: true },
+    { match_id: 8955247801, series_id: 1132142, start_time: 1787199123, radiant_team_id: 10150413, dire_team_id: 7119388, radiant_win: false },
+  ];
+  assert.deepEqual(completedSeriesFromMaps(maps), [{
+    seriesId: "1132142", teamA: "spirit", teamB: "1w", winsA: 2, winsB: 0,
+    startTime: 1787193389, seriesType: 1, mapIds: [8955197224, 8955247801], bestOf: 3,
+  }]);
+});
+
 test("unfinished league maps keep a partial series score and do not count the live map", () => {
   const maps = [
     { match_id: 1, series_id: 50, series_type: 1, start_time: 100, radiant_team_id: 10150538, dire_team_id: 9823272, radiant_win: true },
@@ -959,6 +988,17 @@ test("semantic Elimination Round parsing preserves nullable LIVE and time-less t
   ]);
 });
 
+test("playoff schedule uses the event day instead of treating every Current tab as round one", () => {
+  const html = `<h2>Расписание</h2>
+    <div class="tab_x isActive_y"><span>Текущие</span></div>
+    <h3>Плей-офф</h3>
+    <div class="item_a"><div class="date_x">21.08.26 в 02:00</div><div><img alt="1w"><img alt="BETBOOM Team"></div><span class="vs_x">vs</span></div>
+    <div id="stage-participants"></div>`;
+  assert.deepEqual(scheduledSeriesFromCybersportHtml(html, { now: new Date("2026-08-20T12:00:00Z") }), [
+    { teamA: "1w", teamB: "betboom", round: 2, scheduledAt: "2026-08-20T23:00:00.000Z", scheduledDate: "2026-08-21", stage: "playoff", live: false, source: "cybersport" },
+  ]);
+});
+
 test("L1 TEAM sponsorship-safe name resolves to L1ga", () => {
   const html = `<div class="tab_x isActive_y"><span>Раунд 3</span></div>
     <div>15.08.26 в 14:00<img alt="L1 TEAM"><img alt="Team Liquid"><span class="vs_pcDDl">vs</span></div>`;
@@ -1170,12 +1210,14 @@ test("prediction audit keeps frozen and adaptive evaluations separate", async ()
   assert.match(styles, /polyline\.is-adaptive/);
 });
 
-test("intel page reads live artifacts from API and refreshes after stats jobs", async () => {
-  const [page, api, nginx, admin] = await Promise.all([
+test("pages read live artifacts from API and the admin refresh runs the full production pipeline", async () => {
+  const [page, combined, api, nginx, admin, refresh] = await Promise.all([
     readFile("app/intel/page.tsx", "utf8"),
+    readFile("app/combined/page.tsx", "utf8"),
     readFile("server/api.mjs", "utf8"),
     readFile("deploy/nginx.conf", "utf8"),
     readFile("app/admin/page.tsx", "utf8"),
+    readFile("scripts/update-all-stats.mjs", "utf8"),
   ]);
   assert.match(page, /\/api\/artifacts\/intel-stats\.json/);
   assert.match(page, /\/api\/artifacts\/team-stats\.json/);
@@ -1189,6 +1231,10 @@ test("intel page reads live artifacts from API and refreshes after stats jobs", 
   assert.match(api, /artifacts: publicArtifactFreshness\(\)/);
   assert.match(nginx, /location = \/intel-stats\.json/);
   assert.match(nginx, /location = \/team-stats\.json/);
+  assert.match(nginx, /location = \/draft-stats\.json/);
+  assert.match(combined, /\/api\/artifacts\/draft-stats\.json/);
+  assert.match(refresh, /calibrate-tournament-variance\.mjs/);
+  assert.match(api, /Турнирная online-калибровка/);
   assert.match(admin, /Monte Carlo 1M · 15%/);
   assert.doesNotMatch(admin, /Monte Carlo 250K/);
 });
@@ -1222,9 +1268,18 @@ test("API serves live intel artifacts without caching", { timeout: 20_000 }, asy
     assert.equal(Object.keys(body.teams).length, 16);
     const aliased = await fetch(`${baseUrl}/intel-stats.json`);
     assert.equal(aliased.status, 200);
+    const draft = await fetch(`${baseUrl}/api/artifacts/draft-stats.json`);
+    assert.equal(draft.status, 200);
+    assert.match(draft.headers.get("cache-control") ?? "", /no-store/);
+    const draftBody = await draft.json();
+    assert.equal(typeof draftBody.generatedAt, "string");
     const state = await fetch(`${baseUrl}/api/state`).then((response) => response.json());
     assert.equal(state.artifacts.intelStats.generatedAt, body.generatedAt);
     assert.equal(typeof state.artifacts.intelStats.mtimeMs, "number");
+    assert.equal(state.artifacts.draftStats.generatedAt, draftBody.generatedAt);
+    assert.deepEqual(state.matches.filter((match) => match.stage === "playoff" && match.round === 1).map((match) => [match.team_a, match.team_b]), [
+      ["1w", "spirit"], ["parivision", "betboom"], ["liquid", "yandex"], ["nigma", "falcons"],
+    ]);
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.message : String(error)}\nAPI output:\n${output}`);
   } finally {

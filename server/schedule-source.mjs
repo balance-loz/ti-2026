@@ -13,9 +13,13 @@ const decodeHtml = (value) => value.replaceAll("&amp;", "&").replaceAll("&quot;"
 const normalize = (value) => decodeHtml(value).normalize("NFKD").replace(/[^a-z0-9]/gi, "").toUpperCase();
 const pad = (value) => String(value).padStart(2, "0");
 
-function calendarDateAt(now, timezoneOffset, dayDelta = 0) {
+function timezoneOffsetMinutes(timezoneOffset) {
   const match = /^([+-])(\d{2}):(\d{2})$/.exec(timezoneOffset);
-  const offsetMinutes = match ? (match[1] === "-" ? -1 : 1) * (Number(match[2]) * 60 + Number(match[3])) : 0;
+  return match ? (match[1] === "-" ? -1 : 1) * (Number(match[2]) * 60 + Number(match[3])) : 0;
+}
+
+function calendarDateAt(now, timezoneOffset, dayDelta = 0) {
+  const offsetMinutes = timezoneOffsetMinutes(timezoneOffset);
   const shifted = new Date(now.getTime() + offsetMinutes * 60_000 + dayDelta * 86_400_000);
   return `${shifted.getUTCFullYear()}-${pad(shifted.getUTCMonth() + 1)}-${pad(shifted.getUTCDate())}`;
 }
@@ -39,11 +43,14 @@ function dateIsLive(text) {
   return /\bLIVE\b/i.test(decodeHtml(text || ""));
 }
 
-function scheduledDateFromText(text, scheduledAt) {
-  if (scheduledAt) return scheduledAt.slice(0, 10);
+function scheduledDateFromText(text, scheduledAt, { now, timezoneOffset }) {
   const clean = decodeHtml(text).replace(/\s+/g, " ").trim();
   const explicit = /(\d{2})\.(\d{2})\.(\d{2})/.exec(clean);
-  return explicit ? `20${explicit[3]}-${explicit[2]}-${explicit[1]}` : null;
+  if (explicit) return `20${explicit[3]}-${explicit[2]}-${explicit[1]}`;
+  if (/^Завтра\b/i.test(clean)) return calendarDateAt(now, timezoneOffset, 1);
+  if (/^Сегодня\b/i.test(clean)) return calendarDateAt(now, timezoneOffset);
+  if (!scheduledAt) return null;
+  return calendarDateAt(new Date(scheduledAt), timezoneOffset);
 }
 
 function semanticStage(text) {
@@ -58,26 +65,35 @@ function participantsFromChunk(chunk) {
     .map((item) => TEAM_ALIASES.get(normalize(item[1]))).filter(Boolean))].slice(0, 2);
 }
 
+function scheduledRound(stage, fallbackRound, scheduledDate, live, options) {
+  if (stage !== "playoff") return fallbackRound;
+  const date = scheduledDate ?? (live ? calendarDateAt(options.now, options.timezoneOffset) : null);
+  if (!date || !options.playoffStartDate) return fallbackRound;
+  const day = Math.floor((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${options.playoffStartDate}T00:00:00Z`)) / 86_400_000);
+  return Number.isFinite(day) && day >= 0 ? day + 1 : fallbackRound;
+}
+
 function addScheduled(scheduled, seen, chunk, round, options, inheritedStage = null) {
   const [teamA, teamB] = participantsFromChunk(chunk);
   if (!teamA || !teamB || teamA === teamB) return;
   const dateHtml = chunk.match(/<div[^>]*class="[^"]*date_[^"]*"[^>]*>([\s\S]*?)<\/div>/i)?.[1] ?? chunk;
   const scheduledAt = scheduledAtFromText(dateHtml, options);
-  const scheduledDate = scheduledDateFromText(dateHtml, scheduledAt);
+  const scheduledDate = scheduledDateFromText(dateHtml, scheduledAt, options);
   const live = dateIsLive(dateHtml);
+  const stage = semanticStage(chunk) ?? inheritedStage;
   const key = [teamA, teamB].sort().join("|");
   if (seen.has(key)) return;
   seen.add(key);
-  scheduled.push({ teamA, teamB, round, scheduledAt, scheduledDate, stage: semanticStage(chunk) ?? inheritedStage, live, source: "cybersport" });
+  scheduled.push({ teamA, teamB, round: scheduledRound(stage, round, scheduledDate, live, options), scheduledAt, scheduledDate, stage, live, source: "cybersport" });
 }
 
-export function scheduledSeriesFromCybersportHtml(html, { timezoneOffset = "+03:00", now = new Date() } = {}) {
+export function scheduledSeriesFromCybersportHtml(html, { timezoneOffset = "+03:00", now = new Date(), playoffStartDate = "2026-08-20" } = {}) {
   if (typeof html !== "string" || !html.length) return [];
   const activeTab = [...html.matchAll(/class="[^"]*tab_[^"]*isActive_[^"]*"[^>]*>\s*<span>([^<]*)<\/span>/gi)].at(-1);
   const round = Number(decodeHtml(activeTab?.[1] || "").match(/\d+/)?.[0] || 1);
   const scheduled = [];
   const seen = new Set();
-  const options = { now: now instanceof Date ? now : new Date(now), timezoneOffset };
+  const options = { now: now instanceof Date ? now : new Date(now), timezoneOffset, playoffStartDate };
 
   // Current Cybersport markup renders only the active round and wraps every
   // series in an item_* block. Parse named LIVE and time-less pairings too, not

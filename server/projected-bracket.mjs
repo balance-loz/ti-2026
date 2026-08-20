@@ -1,4 +1,5 @@
 import { combinedSeriesForecast, orientedProbability } from "./combined-forecast.mjs";
+import { playoffOpeningPairs } from "./tournament-format.mjs";
 
 const finiteProbability = (value) => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value)) ? Math.min(0.99, Math.max(0.01, Number(value))) : null;
 
@@ -59,10 +60,11 @@ export function projectPlayoffBracket({ simulationResult, probabilities, matches
       matchId: actual?.id ?? null,
     };
   };
+  const fallbackPairs = [[qualifiers[0], qualifiers[7]], [qualifiers[3], qualifiers[4]], [qualifiers[1], qualifiers[6]], [qualifiers[2], qualifiers[5]]];
   const openingPairs = actualPlayoff.filter((match) => Number(match.round) === 1).slice(0, 4);
-  const pairs = openingPairs.length === 4
+  const pairs = playoffOpeningPairs(actualPlayoff, openingPairs.length === 4
     ? openingPairs.map((match) => [match.team_a, match.team_b])
-    : [[qualifiers[0], qualifiers[7]], [qualifiers[3], qualifiers[4]], [qualifiers[1], qualifiers[6]], [qualifiers[2], qualifiers[5]]];
+    : fallbackPairs);
   const uq = pairs.map(([a, b], index) => node(`UB QF ${index + 1}`, "upper", 1, a, b));
   const loser = (match) => match.winner === match.a ? match.b : match.a;
   const us = [node("UB SF 1", "upper", 2, uq[0].winner, uq[1].winner), node("UB SF 2", "upper", 2, uq[2].winner, uq[3].winner)];

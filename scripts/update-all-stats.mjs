@@ -6,6 +6,7 @@ process.stderr._handle?.setBlocking?.(true);
 const STEPS = [
   "scripts/update-stats.mjs",
   "scripts/backtest-model.mjs",
+  "scripts/calibrate-tournament-variance.mjs",
   "scripts/update-draft-stats.mjs",
   "scripts/build-draft-dataset.mjs",
   "scripts/audit-draft-coverage.mjs",

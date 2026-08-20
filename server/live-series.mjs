@@ -8,28 +8,50 @@ export const OPENDOTA_TEAMS = new Map([
 
 function groupedSeriesFromMaps(maps, teams) {
   const grouped = new Map();
-  for (const map of maps) {
+  const activeByPair = new Map();
+  const ordered = [...maps].sort((left, right) => Number(left.start_time || 0) - Number(right.start_time || 0) || Number(left.match_id || 0) - Number(right.match_id || 0));
+  for (const map of ordered) {
     const radiantTeam = teams.get(Number(map.radiant_team_id));
     const direTeam = teams.get(Number(map.dire_team_id));
-    if (!radiantTeam || !direTeam || radiantTeam === direTeam || !map.series_id) continue;
-    const key = String(map.series_id);
-    const series = grouped.get(key) || {
-      seriesId: key, teamA: radiantTeam, teamB: direTeam, winsA: 0, winsB: 0,
-      startTime: Number.POSITIVE_INFINITY, seriesType: Number(map.series_type || 1), mapIds: [],
-    };
+    if (!radiantTeam || !direTeam || radiantTeam === direTeam) continue;
+    const pair = [radiantTeam, direTeam].sort().join("|");
+    const start = Number(map.start_time) || 0;
+    const explicitKey = map.series_id ? String(map.series_id) : null;
+    const nearby = activeByPair.get(pair);
+    const isNearby = nearby && start > 0 && nearby.lastStart > 0 && start - nearby.lastStart <= 12 * 60 * 60;
+    let series = explicitKey ? grouped.get(explicitKey) : null;
+    if (!series && isNearby && (!explicitKey || nearby.synthetic)) {
+      series = nearby;
+      if (explicitKey && series.synthetic) {
+        grouped.delete(series.key);
+        series.key = explicitKey;
+        series.seriesId = explicitKey;
+        series.synthetic = false;
+        grouped.set(explicitKey, series);
+      }
+    }
+    if (!series) {
+      const key = explicitKey ?? `missing:${map.match_id}`;
+      series = {
+        key, seriesId: key, teamA: radiantTeam, teamB: direTeam, winsA: 0, winsB: 0,
+        startTime: Number.POSITIVE_INFINITY, lastStart: 0, seriesType: Number(map.series_type || 1), mapIds: [], synthetic: !explicitKey,
+      };
+      grouped.set(key, series);
+    }
     if (typeof map.radiant_win === "boolean") {
       const winner = map.radiant_win ? radiantTeam : direTeam;
       if (winner === series.teamA) series.winsA += 1;
       else series.winsB += 1;
     }
-    const start = Number(map.start_time);
     if (Number.isFinite(start) && start > 0) series.startTime = Math.min(series.startTime, start);
+    if (start > 0) series.lastStart = Math.max(series.lastStart, start);
     series.mapIds.push(Number(map.match_id));
-    grouped.set(key, series);
+    activeByPair.set(pair, series);
   }
   return [...grouped.values()].map((series) => ({
-    ...series,
+    seriesId: series.seriesId, teamA: series.teamA, teamB: series.teamB, winsA: series.winsA, winsB: series.winsB,
     startTime: Number.isFinite(series.startTime) && series.startTime !== Number.POSITIVE_INFINITY ? series.startTime : 0,
+    seriesType: series.seriesType, mapIds: series.mapIds,
     bestOf: series.seriesType === 2 ? 5 : series.seriesType === 0 ? 1 : 3,
   }));
 }
