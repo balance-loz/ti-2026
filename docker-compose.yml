@@ -50,6 +50,7 @@ services:
       FORECAST_JOB_MAX_ATTEMPTS: ${FORECAST_JOB_MAX_ATTEMPTS:-3}
       FORECAST_SCENARIO_RATE_LIMIT: ${FORECAST_SCENARIO_RATE_LIMIT:-30}
       DRAFT_MAX_NEW_MATCHES: ${DRAFT_MAX_NEW_MATCHES:-0}
+      REFRESH_CHILD_MAX_OLD_SPACE_MB: ${REFRESH_CHILD_MAX_OLD_SPACE_MB:-384}
       DRAFT_DB_PATH: /app/data/draft-model.sqlite
       DRAFT_STATS: /app/model/draft-stats.json
       TEAM_STATS: /app/model/team-stats.json

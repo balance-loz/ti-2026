@@ -6,7 +6,7 @@ const ROOT = process.cwd();
 const TEAM_STATS = path.join(ROOT, "public", "team-stats.json");
 const DRAFT_STATS = path.join(ROOT, "public", "draft-stats.json");
 const MATCH_CACHE = path.join(ROOT, "work", "opendota-cache", "matches");
-const OUTPUT = path.join(ROOT, "public", "intel-stats.json");
+const OUTPUT = path.resolve(process.env.INTEL_STATS_OUTPUT || path.join(ROOT, "public", "intel-stats.json"));
 const DAY = 24 * 60 * 60;
 const FORECAST_ITERATIONS = Math.max(10_000, Number(process.env.INTEL_FORECAST_ITERATIONS || 50_000));
 const FORECAST_SEED = 0x54493236;
@@ -21,14 +21,10 @@ async function json(file) {
   return JSON.parse(await readFile(file, "utf8"));
 }
 
-async function maybeMatch(matchId, cache) {
-  if (cache.has(matchId)) return cache.get(matchId);
+async function maybeMatch(matchId) {
   try {
-    const match = await json(matchFile(matchId));
-    cache.set(matchId, match);
-    return match;
+    return await json(matchFile(matchId));
   } catch {
-    cache.set(matchId, null);
     return null;
   }
 }
@@ -211,7 +207,8 @@ function storylineTemplates(team, fieldStrength) {
 
 async function main() {
   const [teamStats, draftStats] = await Promise.all([json(TEAM_STATS), json(DRAFT_STATS)]);
-  const details = new Map();
+  const parsedMatchIds = new Set();
+  const matchPatches = new Map();
   const teamRows = {};
   const now = Math.floor(Date.now() / 1000);
 
@@ -220,8 +217,14 @@ async function main() {
     const maps = acceptedMaps(source);
     const rows = [];
     for (const map of maps) {
-      const detail = await maybeMatch(map.matchId, details);
+      // Do not retain every parsed replay in a process-wide cache. The production
+      // cache is hundreds of megabytes and keeping full matches alive until the
+      // final JSON write can exhaust a small VPS. Cross-team duplicates are cheap
+      // to reread and only compact patch metadata needs to survive this loop.
+      const detail = await maybeMatch(map.matchId);
       if (!detail) continue;
+      parsedMatchIds.add(map.matchId);
+      matchPatches.set(map.matchId, Number(detail.patch || 0));
       const parsed = extractMapMetrics(detail, source, map);
       if (parsed) rows.push(parsed);
     }
@@ -275,17 +278,17 @@ async function main() {
       { id: "ti-roster-registry", label: "TI Predictor roster registry", url: null, role: "Нормализация team ID, алиасов и эпох составов", retrievedAt: teamStats.generatedAt },
     ],
     methodology: {
-      acceptedMaps: teamStats.totals.uniqueAcceptedGames, parsedReplayFiles: [...details.values()].filter(Boolean).length,
+      acceptedMaps: teamStats.totals.uniqueAcceptedGames, parsedReplayFiles: parsedMatchIds.size,
       contexts: ["12 месяцев", "90 дней", "текущая пятёрка", "последний OpenDota patch ID", "только участники TI"],
       storylineFormula: "surprise × sample confidence × roster relevance × freshness",
       caveat: "Style metrics are descriptive and are not presented as causal forecast inputs. Only model storylines expose probability impact.",
     },
-    matchPatches: Object.fromEntries([...details.entries()].filter(([, match]) => match).map(([matchId, match]) => [matchId, Number(match.patch || 0)])),
+    matchPatches: Object.fromEntries(matchPatches),
     tournament: { iterations: forecast.iterations, seed: forecast.seed, teams: tournament },
     teams: teamRows,
   };
   await writeFile(OUTPUT, `${JSON.stringify(output, null, 2)}\n`);
-  console.log(`Saved ${OUTPUT}: ${[...details.values()].filter(Boolean).length} parsed replay files, ${forecast.iterations} tournament simulations.`);
+  console.log(`Saved ${OUTPUT}: ${parsedMatchIds.size} parsed replay files, ${forecast.iterations} tournament simulations.`);
 }
 
 main().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-html-link-for-pages -- Vinext uses native navigation in this project. */
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 type Snapshot = { id: number; trigger: string; created_at: string; completed_match_count: number; iterations: number };
 type RefreshStep = { id: string; label: string; status: "pending" | "running" | "done" | "error" };
@@ -20,7 +20,7 @@ type RefreshProgress = {
 };
 type AdminState = { isAdmin: boolean; answers: Record<string, number>; snapshots: Snapshot[]; refreshRunning: boolean; refreshProgress?: RefreshProgress | null; liveSync?: { running?: boolean; lastSync?: { updatedAt?: string; ok?: boolean } | null } | null };
 type ForecastJob = { id: string; status: string; error?: string | null; snapshotId?: number | null; progress?: { current: number; total: number } };
-type ForecastJob = { id: string; status: string; error?: string | null; snapshotId?: number | null; progress?: { current: number; total: number } };
+type AdminJobStatus = Pick<AdminState, "refreshRunning" | "refreshProgress" | "liveSync">;
 
 const DEFAULT_OPINION_WEIGHT = 15;
 const MANUAL_FORECAST_WEIGHTS = [
@@ -64,7 +64,7 @@ function RefreshProgressPanel({ progress, running }: { progress: RefreshProgress
   const logTail = (progress.log ?? "").trim().split(/\n/).slice(-12).join("\n");
   return <div className="admin-refresh-progress">
     <p>
-      {running ? `Идёт шаг ${progress.stepIndex || "—"}/7` : progress.ok === false ? "Обновление упало" : progress.ok ? "Последнее обновление прошло" : "Последний прогон"}
+      {running ? `Идёт шаг ${progress.stepIndex || "—"}/${progress.steps?.length || "—"}` : progress.ok === false ? "Обновление упало" : progress.ok ? "Последнее обновление прошло" : "Последний прогон"}
       {progress.stepLabel ? ` · ${progress.stepLabel}` : ""}
       {progress.startedAt ? ` · ${formatElapsed(progress.startedAt)}` : ""}
     </p>
@@ -83,24 +83,39 @@ export default function AdminPage() {
   const [message, setMessage] = useState("");
   const [hasError, setHasError] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
+  const loadInFlight = useRef(false);
   const load = async (opts?: { silent?: boolean }) => {
+    if (loadInFlight.current) return;
+    loadInFlight.current = true;
     try {
       const next = await requestJson("/api/state", { cache: "no-store" }) as AdminState;
       setState(next);
       if (!opts?.silent) setAnswers(JSON.stringify(next.answers, null, 2));
     } catch (error) { setHasError(true); setMessage(error instanceof Error ? error.message : String(error)); }
+    finally { loadInFlight.current = false; }
+  };
+  const loadJobStatus = async () => {
+    if (loadInFlight.current) return;
+    loadInFlight.current = true;
+    try {
+      const next = await requestJson("/api/admin/status", { cache: "no-store" }) as AdminJobStatus;
+      setState((current) => current ? { ...current, ...next } : current);
+    } catch (error) {
+      setHasError(true);
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally { loadInFlight.current = false; }
   };
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer); }, []);
   useEffect(() => {
-    if (!state?.refreshRunning && !state?.refreshProgress?.running) return;
-    const loadWhenVisible = () => { if (document.visibilityState === "visible") void load({ silent: true }); };
-    const timer = window.setInterval(loadWhenVisible, 2000);
+    if (!state?.refreshRunning && !state?.refreshProgress?.running && !state?.liveSync?.running) return;
+    const loadWhenVisible = () => { if (document.visibilityState === "visible") void loadJobStatus(); };
+    const timer = window.setInterval(loadWhenVisible, 3000);
     document.addEventListener("visibilitychange", loadWhenVisible);
     return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", loadWhenVisible); };
-  }, [state?.refreshRunning, state?.refreshProgress?.running]);
-  const run = async (label: string, action: () => Promise<unknown>) => {
+  }, [state?.refreshRunning, state?.refreshProgress?.running, state?.liveSync?.running]);
+  const run = async (label: string, action: () => Promise<unknown>, refresh: "full" | "status" = "full") => {
     setIsBusy(true); setHasError(false); setMessage("");
-    try { await action(); setMessage(label); await load(); }
+    try { await action(); setMessage(label); await (refresh === "status" ? loadJobStatus() : load()); }
     catch (error) { setHasError(true); setMessage(error instanceof Error ? error.message : String(error)); }
     finally { setIsBusy(false); }
   };
@@ -161,8 +176,8 @@ export default function AdminPage() {
       <section className="admin-actions-panel"><header><div><span>SERVER JOBS</span><h2>Синхронизация и пересчёт</h2></div><b className={state.refreshRunning || state.liveSync?.running ? "is-busy" : ""}>{state.refreshRunning ? "REFRESH" : state.liveSync?.running ? "SYNC" : "READY"}</b></header>
         {state.refreshProgress ? <RefreshProgressPanel progress={state.refreshProgress} running={Boolean(state.refreshRunning || state.refreshProgress.running)} /> : null}
         <div className="admin-actions-grid">
-        <button disabled={isBusy || state.liveSync?.running} onClick={() => void run("Результаты и расписание синхронизированы.", () => requestJson("/api/admin/live/sync", { method: "POST" }))}>Синхронизировать матчи</button>
-        <button disabled={isBusy || state.refreshRunning} onClick={() => void run("Обновление model artifacts запущено.", () => requestJson("/api/admin/refresh", { method: "POST" }))}>Обновить статистику</button>
+        <button disabled={isBusy || state.liveSync?.running} onClick={() => void run("Синхронизация матчей запущена.", () => requestJson("/api/admin/live/sync", { method: "POST" }), "status")}>Синхронизировать матчи</button>
+        <button disabled={isBusy || state.refreshRunning} onClick={() => void run("Обновление model artifacts запущено.", () => requestJson("/api/admin/refresh", { method: "POST" }), "status")}>Обновить статистику</button>
         <button disabled={isBusy} onClick={() => void startForecast(DEFAULT_OPINION_WEIGHT)}>Monte Carlo 1M · 15%</button>
         <button disabled={isBusy} onClick={() => void run("Раунд 1 подготовлен.", () => requestJson("/api/admin/rounds/prepare", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ round: 1 }) }))}>Подготовить раунд 1</button>
         <button disabled={isBusy} onClick={() => void run("Сессия завершена.", () => requestJson("/api/logout", { method: "POST" }))}>Выйти</button>

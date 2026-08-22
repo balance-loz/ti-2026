@@ -1235,8 +1235,20 @@ test("pages read live artifacts from API and the admin refresh runs the full pro
   assert.match(combined, /\/api\/artifacts\/draft-stats\.json/);
   assert.match(refresh, /calibrate-tournament-variance\.mjs/);
   assert.match(api, /Турнирная online-калибровка/);
+  assert.match(api, /\/api\/admin\/status/);
+  assert.match(api, /LIMIT 149 OFFSET 1/);
+  assert.match(api, /return json\(res, 202, \{ ok: true, liveSync:/);
   assert.match(admin, /Monte Carlo 1M · 15%/);
+  assert.match(admin, /requestJson\("\/api\/admin\/status"/);
+  assert.match(admin, /loadInFlight/);
   assert.doesNotMatch(admin, /Monte Carlo 250K/);
+  assert.doesNotMatch(api, /const result = await syncLiveMatches\("manual"\)/);
+  assert.doesNotMatch(api, /onChunk\(chunk, process\.(stdout|stderr)\)/);
+  assert.doesNotMatch(refresh, /setBlocking/);
+  assert.match(refresh, /--max-old-space-size=/);
+  const intelRefresh = await readFile("scripts/update-intel-stats.mjs", "utf8");
+  assert.match(intelRefresh, /parsedMatchIds/);
+  assert.doesNotMatch(intelRefresh, /const details = new Map/);
 });
 
 test("API serves live intel artifacts without caching", { timeout: 20_000 }, async () => {

@@ -824,8 +824,17 @@ function publicState() {
   const answers = Object.fromEntries(db.prepare("SELECT pair_key, probability FROM answers").all().map((row) => [row.pair_key, row.probability]));
   const matches = db.prepare("SELECT * FROM matches ORDER BY round, id").all();
   const refresh = db.prepare("SELECT value, updated_at FROM settings WHERE key = 'last_refresh'").get() || null;
-  const snapshots = db.prepare("SELECT id, trigger, forecast_mode, opinion_weight, iterations, seed, completed_match_count, model_generated_at, probabilities_json, result_json, inputs_json, snapshot_kind, root_snapshot_id, parent_snapshot_id, profile_key, created_at FROM prediction_snapshots ORDER BY id DESC LIMIT 150").all()
-    .map((row) => ({ ...row, probabilities: JSON.parse(row.probabilities_json), result: JSON.parse(row.result_json), inputs: row.inputs_json ? JSON.parse(row.inputs_json) : null, probabilities_json: undefined, result_json: undefined, inputs_json: undefined }));
+  const latestSnapshot = db.prepare("SELECT id, trigger, forecast_mode, opinion_weight, iterations, seed, completed_match_count, model_generated_at, probabilities_json, result_json, inputs_json, snapshot_kind, root_snapshot_id, parent_snapshot_id, profile_key, created_at FROM prediction_snapshots ORDER BY id DESC LIMIT 1").get();
+  const snapshotHistory = db.prepare("SELECT id, trigger, forecast_mode, opinion_weight, iterations, seed, completed_match_count, model_generated_at, snapshot_kind, root_snapshot_id, parent_snapshot_id, profile_key, created_at FROM prediction_snapshots ORDER BY id DESC LIMIT 149 OFFSET 1").all();
+  const snapshots = latestSnapshot ? [{
+    ...latestSnapshot,
+    probabilities: JSON.parse(latestSnapshot.probabilities_json),
+    result: JSON.parse(latestSnapshot.result_json),
+    inputs: latestSnapshot.inputs_json ? JSON.parse(latestSnapshot.inputs_json) : null,
+    probabilities_json: undefined,
+    result_json: undefined,
+    inputs_json: undefined,
+  }, ...snapshotHistory] : [];
   const liveSyncRow = db.prepare("SELECT value, updated_at FROM settings WHERE key = 'live_sync'").get() || null;
   let lastSync = null;
   try { lastSync = liveSyncRow ? { ...JSON.parse(liveSyncRow.value), updatedAt: liveSyncRow.updated_at } : null; } catch { lastSync = null; }
@@ -1463,6 +1472,21 @@ function removeConflictingScheduledSeries(series) {
   const remove = db.prepare("DELETE FROM matches WHERE id = ?");
   for (const conflict of conflicts) remove.run(conflict.id);
   return conflicts.length;
+}
+
+function adminJobStatus() {
+  const liveSyncRow = db.prepare("SELECT value, updated_at FROM settings WHERE key = 'live_sync'").get() || null;
+  let lastSync = null;
+  try { lastSync = liveSyncRow ? { ...JSON.parse(liveSyncRow.value), updatedAt: liveSyncRow.updated_at } : null; } catch { lastSync = null; }
+  return {
+    refreshRunning: Boolean(refreshProcess),
+    refreshProgress: publicRefreshProgress(),
+    liveSync: {
+      running: Boolean(liveSyncPromise),
+      lastSync,
+      autoForecastRunning: Boolean(db.prepare("SELECT 1 FROM automation_jobs WHERE job_type='forecast' AND kind='scenario_refresh' AND status IN ('pending','leased') AND superseded_by IS NULL LIMIT 1").get()),
+    },
+  };
 }
 
 function reconcileOfficialPlayoffOpeningSeries(probabilities = {}) {
@@ -2479,6 +2503,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname.startsWith("/api/admin/")) {
       if (!sameOrigin(req)) return json(res, 403, { error: "origin" });
       if (!isAdmin(req)) return json(res, 401, { error: "admin_required" });
+      if (req.method === "GET" && url.pathname === "/api/admin/status") return json(res, 200, adminJobStatus());
       if (req.method === "PUT" && url.pathname === "/api/admin/answers") {
         const data = await body(req);
         const entries = Object.entries(data.answers || {}).filter(([key, value]) => /^[a-z0-9]+\|[a-z0-9]+$/.test(key) && Number.isFinite(value) && value >= 0 && value <= 100);
@@ -2620,9 +2645,8 @@ const server = createServer(async (req, res) => {
         let output = "";
         let lineBuffer = "";
         let settled = false;
-        const onChunk = (chunk, stream = process.stdout) => {
+        const onChunk = (chunk) => {
           const text = String(chunk);
-          stream.write(text);
           output = (output + text).slice(-12000);
           lineBuffer += text;
           const parts = lineBuffer.split(/\n/);
@@ -2655,10 +2679,11 @@ const server = createServer(async (req, res) => {
           db.prepare("INSERT INTO settings(key,value,updated_at) VALUES ('last_refresh',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").run(value, now());
           refreshProcess = null;
           activeRefreshProgress = progress;
+          console.log(`[refresh] finished code=${code} ok=${ok}`);
           if (ok) queueAutomaticSnapshot("auto_artifact_refresh", 100);
         };
-        refreshProcess.stdout.on("data", (chunk) => onChunk(chunk, process.stdout));
-        refreshProcess.stderr.on("data", (chunk) => onChunk(chunk, process.stderr));
+        refreshProcess.stdout.on("data", onChunk);
+        refreshProcess.stderr.on("data", onChunk);
         refreshProcess.on("error", (error) => finish(1, error instanceof Error ? error.message : String(error)));
         refreshProcess.on("close", (code) => finish(code ?? 1));
         audit("refresh_started", {});
@@ -2666,8 +2691,8 @@ const server = createServer(async (req, res) => {
       }
       if (req.method === "POST" && url.pathname === "/api/admin/live/sync") {
         if (liveSyncPromise) return json(res, 409, { error: "live_sync_running" });
-        const result = await syncLiveMatches("manual");
-        return json(res, 200, result);
+        void syncLiveMatches("manual").catch((error) => console.error("Manual live sync failed:", error.message));
+        return json(res, 202, { ok: true, liveSync: adminJobStatus().liveSync });
       }
     }
     return json(res, 404, { error: "not_found" });

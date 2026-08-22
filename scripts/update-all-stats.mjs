@@ -1,8 +1,5 @@
 import { spawn } from "node:child_process";
 
-process.stdout._handle?.setBlocking?.(true);
-process.stderr._handle?.setBlocking?.(true);
-
 const STEPS = [
   "scripts/update-stats.mjs",
   "scripts/backtest-model.mjs",
@@ -17,7 +14,11 @@ const STEPS = [
 function run(script, index, total) {
   process.stdout.write(`[refresh] ${index}/${total} start ${script}\n`);
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [script], { cwd: process.cwd(), stdio: "inherit" });
+    const maxOldSpace = Math.max(128, Number(process.env.REFRESH_CHILD_MAX_OLD_SPACE_MB || 384));
+    const args = script.endsWith("update-intel-stats.mjs")
+      ? [`--max-old-space-size=${maxOldSpace}`, script]
+      : [script];
+    const child = spawn(process.execPath, args, { cwd: process.cwd(), stdio: "inherit" });
     child.on("error", reject);
     child.on("close", (code) => {
       if (code !== 0) {
