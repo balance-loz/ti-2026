@@ -16,8 +16,15 @@ function seriesScore(leagueMaps, seriesId, radiantTeam, direTeam, teams) {
 
 export function liveDraftsFromOpenDota(rows, { leagueId = 19719, nowSeconds = Date.now() / 1000, maxAgeSeconds = 300, teams = OPENDOTA_TEAMS, leagueMaps = [] } = {}) {
   if (!Array.isArray(rows)) return [];
+  const completedIds = new Set((leagueMaps || [])
+    .filter((map) => typeof map.radiant_win === "boolean")
+    .map((map) => String(map.match_id)));
   return rows.flatMap((row) => {
     if (Number(row.league_id) !== Number(leagueId)) return [];
+    // OpenDota /live can briefly retain a map after /leagues/:id/matches has
+    // already published its result. The result endpoint is authoritative here:
+    // a completed map must never be reintroduced into the live cache.
+    if (completedIds.has(String(row.match_id))) return [];
     if (finite(row.last_update_time) && nowSeconds - Number(row.last_update_time) > maxAgeSeconds) return [];
     const radiantTeam = teams.get(Number(row.team_id_radiant));
     const direTeam = teams.get(Number(row.team_id_dire));
@@ -53,15 +60,16 @@ export function mergeLiveDraftGames(currentGames, previousGames, leagueMaps, {
 } = {}) {
   const current = Array.isArray(currentGames) ? currentGames : [];
   const previous = Array.isArray(previousGames) ? previousGames : [];
-  const currentIds = new Set(current.map((game) => String(game.matchId)));
   const completedIds = new Set((leagueMaps || [])
     .filter((map) => typeof map.radiant_win === "boolean")
     .map((map) => String(map.match_id)));
+  const activeCurrent = current.filter((game) => !completedIds.has(String(game.matchId)));
+  const currentIds = new Set(activeCurrent.map((game) => String(game.matchId)));
   const nowMs = Date.parse(fetchedAt);
   const retained = previous.filter((game) => {
     if (currentIds.has(String(game.matchId)) || completedIds.has(String(game.matchId))) return false;
     const lastSeenAt = Date.parse(game.serverSeenAt || previousFetchedAt || "");
     return Number.isFinite(nowMs) && Number.isFinite(lastSeenAt) && nowMs - lastSeenAt <= Math.max(30, Number(graceSeconds)) * 1000;
   }).map((game) => ({ ...game, retained: true, stale: true }));
-  return [...current.map((game) => ({ ...game, serverSeenAt: fetchedAt, retained: false, stale: false })), ...retained];
+  return [...activeCurrent.map((game) => ({ ...game, serverSeenAt: fetchedAt, retained: false, stale: false })), ...retained];
 }

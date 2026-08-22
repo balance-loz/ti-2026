@@ -817,6 +817,10 @@ test("OpenDota live feed becomes a partial TI draft and rejects stale games", ()
     lastUpdateAt: "1970-01-01T00:16:40.000Z", phase: "draft",
   }]);
   assert.deepEqual(liveDraftsFromOpenDota(rows, { nowSeconds: 1_301 }), []);
+  assert.deepEqual(liveDraftsFromOpenDota(rows, {
+    nowSeconds: 1_030,
+    leagueMaps: [{ match_id: 42, series_id: 7, radiant_win: false }],
+  }), []);
 });
 
 test("temporary empty live responses retain the active map but completed maps disappear immediately", () => {
@@ -830,6 +834,10 @@ test("temporary empty live responses retain the active map but completed maps di
   assert.equal(retained[0].retained, true);
   assert.equal(retained[0].stale, true);
   assert.deepEqual(mergeLiveDraftGames([], [game], [{ match_id: 42, radiant_win: true }], {
+    fetchedAt: "2026-08-15T12:01:00.000Z",
+    graceSeconds: 120,
+  }), []);
+  assert.deepEqual(mergeLiveDraftGames([{ ...game, lastUpdateAt: "2026-08-15T12:01:00.000Z" }], [game], [{ match_id: 42, radiant_win: true }], {
     fetchedAt: "2026-08-15T12:01:00.000Z",
     graceSeconds: 120,
   }), []);
