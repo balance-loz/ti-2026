@@ -233,6 +233,22 @@ const COLUMN_MIGRATIONS = {
     structure_synced_at: "TEXT",
     structure_source: "TEXT",
   },
+  series: {
+    // An even best-of can finish level. Without this a drawn Bo2 sits forever
+    // as an unfinished Bo3 and never reaches training or scoring.
+    is_draw: "INTEGER NOT NULL DEFAULT 0",
+  },
+  predictions: {
+    // The scoreline is graded apart from the winner: calling 2:1 instead of 2:0
+    // is a much smaller miss than backing the wrong team, and mixing the two
+    // would hide how often the winner itself was right.
+    predicted_score: "TEXT",
+    predicted_score_probability: "REAL",
+    actual_score: "TEXT",
+    score_correct: "INTEGER",
+    outcome_kind: "TEXT",
+    draw_probability: "REAL",
+  },
 };
 
 // scheduled_matches originally required both team names. The table is only

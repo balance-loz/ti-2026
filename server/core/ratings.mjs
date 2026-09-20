@@ -26,9 +26,12 @@ const logLoss = (probability, outcome) => -(outcome * Math.log(clamp(probability
 /** Finished series across all leagues, oldest first, as model rows. */
 export function loadTrainingSeries(db, { nowSeconds = Date.now() / 1000, windowDays = TRAINING_WINDOW_DAYS } = {}) {
   const since = Math.floor(nowSeconds - windowDays * DAY);
-  const rows = db.prepare(`SELECT series_key, league_id, team_a_id, team_b_id, best_of, start_time, score_a, score_b, winner_id
+  // Draws are kept. A level Bo2 says the two sides are close, which is real
+  // evidence; dropping them would throw away every drawn group-stage series.
+  const rows = db.prepare(`SELECT series_key, league_id, team_a_id, team_b_id, best_of, start_time, score_a, score_b,
+                                  winner_id, is_draw
                            FROM series
-                           WHERE status = 'finished' AND winner_id IS NOT NULL AND start_time >= ?
+                           WHERE status = 'finished' AND (winner_id IS NOT NULL OR is_draw = 1) AND start_time >= ?
                              AND team_a_id > 0 AND team_b_id > 0
                            ORDER BY start_time ASC, series_key ASC`).all(since);
   return rows.map((row) => ({
@@ -36,7 +39,8 @@ export function loadTrainingSeries(db, { nowSeconds = Date.now() / 1000, windowD
     leagueId: Number(row.league_id),
     targetLineup: String(row.team_a_id),
     opponentLineup: String(row.team_b_id),
-    targetScore: Number(row.winner_id) === Number(row.team_a_id) ? 1 : 0,
+    isDraw: Number(row.is_draw) === 1,
+    targetScore: Number(row.is_draw) === 1 ? 0.5 : (Number(row.winner_id) === Number(row.team_a_id) ? 1 : 0),
     startTime: Number(row.start_time),
     wins: Number(row.score_a),
     losses: Number(row.score_b),
@@ -57,7 +61,9 @@ export function runRatingArena(series, { holdoutDays = HOLDOUT_DAYS, nowSeconds 
     const model = createOnlineTeamModel(definition);
     let count = 0; let loss = 0; let brier = 0; let correct = 0;
     for (const row of series) {
-      if (row.startTime >= cutoff && model.evidence(row.targetLineup, row.opponentLineup) >= 4) {
+      // A drawn series still teaches the model, but there is no winner to be
+      // scored against, so it is folded in without being graded.
+      if (!row.isDraw && row.startTime >= cutoff && model.evidence(row.targetLineup, row.opponentLineup) >= 4) {
         const probability = model.predict(row.targetLineup, row.opponentLineup, row.startTime);
         loss += logLoss(probability, row.targetScore);
         brier += (probability - row.targetScore) ** 2;

@@ -171,6 +171,10 @@ export function upsertMap(db, row, { leagueId = null, detail = false } = {}) {
   return true;
 }
 
+// How long a series must sit untouched, while its league keeps playing,
+// before it counts as over rather than in progress.
+const SETTLE_SECONDS = Math.max(3600, Number(process.env.SERIES_SETTLE_HOURS || 12) * 3600);
+
 const bestOfFromSeriesType = (seriesType) => (seriesType === 2 ? 5 : seriesType === 1 ? 3 : seriesType === 0 ? 1 : null);
 const pairKey = (a, b) => [Number(a), Number(b)].sort((left, right) => left - right).join("-");
 
@@ -183,6 +187,8 @@ export function rebuildSeries(db, leagueId) {
   const maps = db.prepare(`SELECT match_id, series_id, series_type, radiant_team_id, dire_team_id, radiant_win, start_time
                            FROM maps WHERE league_id = ? AND radiant_team_id > 0 AND dire_team_id > 0
                            ORDER BY start_time ASC, match_id ASC`).all(leagueId);
+  const latestLeagueMap = maps.reduce((latest, map) => Math.max(latest, Number(map.start_time) || 0), 0);
+
   const groups = new Map();
   for (const map of maps) {
     const pair = pairKey(map.radiant_team_id, map.dire_team_id);
@@ -227,20 +233,33 @@ export function rebuildSeries(db, leagueId) {
     const played = group.winsA + group.winsB;
     const declared = bestOfFromSeriesType(group.seriesType);
     // Never claim a best-of smaller than what was actually played.
-    const bestOf = declared && declared >= played ? declared : played >= 4 ? 5 : played >= 2 ? 3 : 1;
-    const needed = Math.floor(bestOf / 2) + 1;
-    const decided = group.winsA >= needed || group.winsB >= needed;
-    const winnerId = !decided ? null : group.winsA > group.winsB ? group.teamA : group.teamB;
+    let bestOf = declared && declared >= played ? declared : played >= 4 ? 5 : played >= 2 ? 3 : 1;
+    let needed = Math.floor(bestOf / 2) + 1;
+    let decided = group.winsA >= needed || group.winsB >= needed;
+
+    // The tournament has moved on past this series: whatever it was, it is over.
+    const settled = latestLeagueMap > 0 && latestLeagueMap - Number(group.lastStart) > SETTLE_SECONDS;
+    // Two maps, one each, and nothing more coming: that is a drawn Bo2, not a
+    // Bo3 waiting for a decider. The feed's series_type cannot be trusted here
+    // — most of these arrive tagged as something else entirely.
+    const isDraw = !decided && settled && played === 2 && group.winsA === group.winsB;
+    if (isDraw) { bestOf = 2; needed = 2; decided = true; }
+
+    const abandoned = !decided && settled;
+    const winnerId = !decided || isDraw ? null
+      : group.winsA > group.winsB ? group.teamA : group.teamB;
+    const status = isDraw || (decided && !isDraw) ? "finished" : abandoned ? "abandoned" : "live";
     db.prepare(`INSERT INTO series(series_key, league_id, opendota_series_id, team_a_id, team_b_id, best_of, stage,
-                  start_time, end_time, score_a, score_b, winner_id, status, map_ids_json, updated_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  start_time, end_time, score_a, score_b, winner_id, status, map_ids_json, updated_at, is_draw)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(series_key) DO UPDATE SET
                   best_of = excluded.best_of, start_time = excluded.start_time, end_time = excluded.end_time,
                   score_a = excluded.score_a, score_b = excluded.score_b, winner_id = excluded.winner_id,
-                  status = excluded.status, map_ids_json = excluded.map_ids_json, updated_at = excluded.updated_at`)
+                  status = excluded.status, map_ids_json = excluded.map_ids_json, updated_at = excluded.updated_at,
+                  is_draw = excluded.is_draw`)
       .run(seriesKey, leagueId, group.seriesId, group.teamA, group.teamB, bestOf, null,
         group.firstStart, group.lastStart, group.winsA, group.winsB, winnerId,
-        decided ? "finished" : "live", JSON.stringify(group.mapIds), at);
+        status, JSON.stringify(group.mapIds), at, isDraw ? 1 : 0);
   }
   // Drop synthetic series that no longer match any map (e.g. after a re-sync).
   const stale = db.prepare("SELECT series_key FROM series WHERE league_id = ?").all(leagueId)
