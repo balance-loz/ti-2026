@@ -366,16 +366,46 @@ export function parseBracket(wikitext) {
 export function parseParticipants(wikitext) {
   if (!wikitext) return [];
   const names = new Set();
-  for (const match of wikitext.matchAll(/\{\{TeamCard\s*\|\s*team\s*=\s*([^|}\n]+)/gi)) names.add(stripMarkup(match[1]));
-  for (const match of wikitext.matchAll(/\{\{TeamOpponent\|([^|}\n]+)/gi)) {
-    const name = stripMarkup(match[1]);
-    if (name) names.add(name);
-  }
-  for (const match of wikitext.matchAll(/\|team\d+\s*=\s*([^|}\n]+)/gi)) {
-    const name = stripMarkup(match[1]);
+  const add = (raw) => {
+    const name = stripMarkup(raw);
     if (name && name.length > 1) names.add(name);
-  }
+  };
+  for (const match of wikitext.matchAll(/\{\{TeamCard\s*\|\s*team\s*=\s*([^|}\n]+)/gi)) add(match[1]);
+  // The participant table names a team as the first positional argument, which
+  // is the only place it appears before the bracket has been drawn.
+  for (const match of wikitext.matchAll(/\{\{(?:Team)?Opponent\|([^|}\n=]+)/gi)) add(match[1]);
+  for (const match of wikitext.matchAll(/\|team\d+\s*=\s*([^|}\n]+)/gi)) add(match[1]);
   return [...names].filter(Boolean);
+}
+
+/**
+ * Rosters as the organiser listed them: five players per team, by role.
+ *
+ * This is what makes a team's strength attributable to a lineup rather than to
+ * a name, so a squad that changed three players is not credited with the old
+ * squad's results.
+ */
+export function parseRosters(wikitext) {
+  if (!wikitext) return [];
+  const rosters = [];
+  const pattern = /\{\{Opponent\|([^|}\n=]+)/gi;
+  let match;
+  while ((match = pattern.exec(wikitext)) !== null) {
+    const team = stripMarkup(match[1]);
+    if (!team) continue;
+    const template = extractTemplate(wikitext, match.index);
+    if (!template) continue;
+    pattern.lastIndex = match.index + template.length;
+    const players = [];
+    for (const person of template.matchAll(/\{\{Person\|role=([^|}]*)\|([^|}\n]+)/gi)) {
+      const role = person[1].trim().toLowerCase();
+      const name = stripMarkup(person[2]);
+      if (!name || role === "coach" || role === "manager" || role === "analyst") continue;
+      players.push({ role, name });
+    }
+    if (players.length) rosters.push({ team, players });
+  }
+  return rosters;
 }
 
 /**
@@ -412,6 +442,7 @@ export function parseTournamentPage(wikitext) {
     format: parseFormat(wikitext),
     bracket: parseBracket(wikitext),
     participants: parseParticipants(wikitext),
+    rosters: parseRosters(wikitext),
     schedule: parseScheduledMatches(wikitext),
   };
 }

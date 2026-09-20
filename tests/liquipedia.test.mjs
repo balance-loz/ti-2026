@@ -146,3 +146,35 @@ test("a page without a bracket or format is reported as absent, not guessed", ()
   assert.equal(parseFormat("==Overview==\nnothing here"), null);
   assert.deepEqual(parseScheduledMatches(""), []);
 });
+
+// --- name matching and page selection ---------------------------------------
+
+const { matchTeamName, normaliseTeamName } = await import("../server/jobs/sync-structure.mjs");
+
+const LEAGUE_TEAMS = [
+  { team_id: 36, name: "Natus Vincere", tag: null },
+  { team_id: 10150633, name: "Pipsqueak + 4", tag: null },
+  { team_id: 9338413, name: "MOUZ", tag: null },
+  { team_id: 10182357, name: "1w", tag: null },
+  { team_id: 9964962, name: "GamerLegion", tag: null },
+  { team_id: 10261180, name: "Conventus Stellarum", tag: null },
+];
+
+test("a Liquipedia team name is matched against the league's own teams", () => {
+  // Punctuation and spacing differ constantly between the two sources.
+  assert.equal(matchTeamName("Pipsqueak+4", LEAGUE_TEAMS)?.team_id, 10150633);
+  assert.equal(matchTeamName("MOUZ", LEAGUE_TEAMS)?.team_id, 9338413);
+  assert.equal(matchTeamName("1w Team", LEAGUE_TEAMS)?.team_id, 10182357);
+  assert.equal(matchTeamName("Conventus Stellarum", LEAGUE_TEAMS)?.team_id, 10261180);
+  // An acronym normalisation cannot bridge is handled by the alias list.
+  assert.equal(matchTeamName("NAVI", LEAGUE_TEAMS)?.team_id, 36);
+  assert.equal(normaliseTeamName("NAVI"), normaliseTeamName("Natus Vincere"));
+});
+
+test("an unknown team is refused rather than matched to the nearest name", () => {
+  // A wrong team id would attach a prediction to the wrong side, which is worse
+  // than having no id at all.
+  assert.equal(matchTeamName("Team Spirit", LEAGUE_TEAMS), null);
+  assert.equal(matchTeamName("", LEAGUE_TEAMS), null);
+  assert.equal(matchTeamName("zzzz", LEAGUE_TEAMS), null);
+});

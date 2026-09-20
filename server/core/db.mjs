@@ -178,6 +178,34 @@ CREATE TABLE IF NOT EXISTS job_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_job_runs_job ON job_runs(job, started_at DESC);
 
+-- Matches announced by the tournament organiser, with their official start
+-- time. Kept apart from the series table, which only ever holds what was
+-- played: a schedule changes, and a rescheduled match must not rewrite a result.
+CREATE TABLE IF NOT EXISTS scheduled_matches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  league_id INTEGER NOT NULL,
+  source TEXT NOT NULL DEFAULT 'liquipedia',
+  external_key TEXT NOT NULL,
+  slot TEXT,
+  stage TEXT,
+  lane TEXT,
+  -- Nullable: a bracket slot exists, with its date, long before anyone knows
+  -- who will play in it. Refusing to store it would mean no bracket until the
+  -- playoffs had already begun.
+  team_a_name TEXT,
+  team_b_name TEXT,
+  team_a_id INTEGER,
+  team_b_id INTEGER,
+  best_of INTEGER,
+  start_time INTEGER,
+  winner_slot INTEGER,
+  series_key TEXT,
+  updated_at TEXT NOT NULL,
+  UNIQUE(league_id, source, external_key)
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_league ON scheduled_matches(league_id, start_time);
+CREATE INDEX IF NOT EXISTS idx_scheduled_upcoming ON scheduled_matches(start_time) WHERE series_key IS NULL;
+
 CREATE TABLE IF NOT EXISTS heroes (
   hero_id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
@@ -196,11 +224,47 @@ CREATE TABLE IF NOT EXISTS settings (
 
 let handle = null;
 
+// Columns introduced after a release. CREATE TABLE IF NOT EXISTS leaves an
+// existing table untouched, so every later column has to be added explicitly or
+// a server that has been running since before the change keeps the old shape.
+const COLUMN_MIGRATIONS = {
+  tournaments: {
+    liquipedia_page: "TEXT",
+    structure_synced_at: "TEXT",
+    structure_source: "TEXT",
+  },
+};
+
+// scheduled_matches originally required both team names. The table is only
+// ever rebuilt from the source, so an empty one can safely be recreated; a
+// populated one is left alone and simply keeps the stricter shape.
+function migrateScheduledMatches(db) {
+  const columns = db.prepare("PRAGMA table_info(scheduled_matches)").all();
+  if (!columns.length) return;
+  const strict = columns.some((row) => row.name === "team_a_name" && row.notnull === 1);
+  if (!strict) return;
+  const count = db.prepare("SELECT COUNT(*) AS n FROM scheduled_matches").get().n;
+  if (count > 0) return;
+  db.exec("DROP TABLE scheduled_matches");
+  db.exec(SCHEMA);
+}
+
+function migrateColumns(db) {
+  for (const [table, columns] of Object.entries(COLUMN_MIGRATIONS)) {
+    const existing = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
+    for (const [name, definition] of Object.entries(columns)) {
+      if (!existing.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+    }
+  }
+}
+
 export function openDb() {
   if (handle) return handle;
   mkdirSync(DATA_DIR, { recursive: true });
   handle = new DatabaseSync(DB_PATH);
   handle.exec(SCHEMA);
+  migrateColumns(handle);
+  migrateScheduledMatches(handle);
   return handle;
 }
 

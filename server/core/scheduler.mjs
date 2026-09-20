@@ -12,6 +12,7 @@ import { trainDraftModel } from "./draft-model.mjs";
 import { backfillHistory, collectRecent, fetchMissingDrafts } from "../jobs/collect-history.mjs";
 import { forecastActiveTournaments } from "../jobs/forecast.mjs";
 import { importPendingArchives } from "../jobs/import-archive.mjs";
+import { syncActiveStructures } from "../jobs/sync-structure.mjs";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -25,6 +26,7 @@ export const JOB_DEFINITIONS = {
   syncActive: { intervalMs: number(process.env.JOB_SYNC_ACTIVE_MINUTES, 15) * MINUTE, description: "Re-pull running tournaments" },
   discover: { intervalMs: number(process.env.JOB_DISCOVER_MINUTES, 60) * MINUTE, description: "Find new tournaments" },
   forecast: { intervalMs: number(process.env.JOB_FORECAST_MINUTES, 20) * MINUTE, description: "Tournament outlook Monte Carlo" },
+  structure: { intervalMs: number(process.env.JOB_STRUCTURE_MINUTES, 180) * MINUTE, description: "Tournament format, bracket and schedule" },
   collectRecent: { intervalMs: number(process.env.JOB_COLLECT_HOURS, 3) * HOUR, description: "New finished pro matches" },
   backfill: { intervalMs: number(process.env.JOB_BACKFILL_MINUTES, 30) * MINUTE, description: "Historical match backfill" },
   draftDetail: { intervalMs: number(process.env.JOB_DRAFT_DETAIL_MINUTES, 30) * MINUTE, description: "Fetch missing pick/ban data" },
@@ -81,6 +83,7 @@ export function createScheduler(db, { enabled = true, logger = console } = {}) {
       return { ...discovered, registered: discovered.registered?.length ?? 0, named, scoped, heroes };
     },
     forecast: async () => forecastActiveTournaments(db),
+    structure: async () => syncActiveStructures(db),
     collectRecent: async () => collectRecent(db),
     backfill: async () => backfillHistory(db, { pages: number(process.env.JOB_BACKFILL_PAGES, 40) }),
     draftDetail: async () => fetchMissingDrafts(db),
@@ -153,7 +156,7 @@ export function createScheduler(db, { enabled = true, logger = console } = {}) {
       }
       // Stagger the first run of each job so a cold start does not fire
       // everything into the API at once.
-      const order = ["importArchive", "live", "discover", "syncActive", "resolve", "forecast", "collectRecent", "draftDetail", "backfill", "retrain"];
+      const order = ["importArchive", "live", "discover", "syncActive", "resolve", "forecast", "structure", "collectRecent", "draftDetail", "backfill", "retrain"];
       order.forEach((name, index) => {
         const timer = setTimeout(async () => {
           if (stopped) return;
