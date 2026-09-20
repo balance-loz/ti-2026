@@ -255,6 +255,68 @@
 .dp-rules { margin: 0; padding-left: 18px; }
 .dp-rules li { margin: 2px 0; color: var(--fusion-muted); }
 
+/* Rounds advance rightwards, so the grand final lands in the last column and
+   the upper and lower bands read as converging on it. */
+.dp-bracket-flow { display: flex; flex-direction: column; gap: 22px; overflow-x: auto; padding-bottom: 8px; }
+.dp-bracket-band h3 {
+  margin: 0 0 8px; font-size: 12px; font-weight: 800;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--fusion-muted);
+}
+.dp-bracket-upper h3 { color: var(--fusion-success); }
+.dp-bracket-lower h3 { color: var(--fusion-danger); }
+.dp-bracket-final h3 { color: var(--fusion-accent); }
+
+.dp-bracket-grid { display: grid; gap: 12px; align-items: start; min-width: max-content; }
+.dp-bracket-column { display: flex; flex-direction: column; gap: 8px; min-width: 190px; }
+.dp-bracket-round-name {
+  font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--fusion-muted); white-space: nowrap;
+}
+.dp-bracket-plain { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+
+.dp-bracket-match {
+  display: flex; flex-direction: column; gap: 3px; padding: 9px 11px;
+  background: var(--fusion-surface); border: 1px solid var(--fusion-line); border-radius: 10px;
+}
+.dp-bracket-played { border-color: color-mix(in srgb, var(--fusion-success) 40%, var(--fusion-line)); }
+.dp-bracket-side { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+.dp-bracket-side .dp-team { min-width: 0; }
+.dp-bracket-side .dp-team b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dp-bracket-odds {
+  margin-left: auto; flex: none;
+  font-size: 10px; font-family: var(--font-geist-mono), monospace; color: var(--fusion-muted);
+}
+.dp-bracket-won b { color: var(--fusion-success); }
+.dp-bracket-won .dp-bracket-odds { color: var(--fusion-success); font-weight: 700; }
+.dp-bracket-meta { font-size: 10px; color: var(--fusion-muted); border-top: 1px solid var(--fusion-line); padding-top: 4px; }
+
+.dp-row-qualify td:first-child { box-shadow: inset 2px 0 0 var(--fusion-accent); }
+
+/* --- background activity ---------------------------------------------------- */
+.dp-running { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+.dp-running-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+  padding: 12px 16px; border-radius: 10px;
+  background: var(--fusion-accent-soft); border: 1px solid var(--fusion-line);
+}
+.dp-spinner {
+  width: 12px; height: 12px; flex: none; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--fusion-accent) 35%, transparent);
+  border-top-color: var(--fusion-accent);
+  animation: dp-spin .8s linear infinite;
+}
+@keyframes dp-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .dp-spinner { animation-duration: 3s; } }
+
+.dp-activity-log { max-height: 460px; overflow-y: auto; }
+.dp-run-error { color: var(--fusion-danger); }
+
+.dp-table input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--fusion-accent); cursor: pointer; }
+
+/* --- format and bracket ----------------------------------------------------- */
+.dp-rules { margin: 0; padding-left: 18px; }
+.dp-rules li { margin: 2px 0; color: var(--fusion-muted); }
+
 .dp-bracket { display: flex; flex-direction: column; gap: 26px; }
 .dp-bracket-lane h3 {
   margin: 0 0 10px; font-size: 12px; font-weight: 800;

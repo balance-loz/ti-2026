@@ -582,3 +582,54 @@ test("a series played by a different five counts for less", async () => {
   // Never zero: an organisation keeps its coaching and draft habits.
   assert.ok(older.rosterWeight > 0);
 });
+
+test("a double-elimination bracket's wiring is derived from its rounds", async () => {
+  const { buildTopology, playBracket } = await import("../server/core/bracket-topology.mjs");
+  const { bracketSeedOrder } = await import("../server/jobs/project-bracket.mjs");
+
+  const section = (name, lane, slots) => ({ name, lane, matches: slots.map((slot) => ({ slot, bestOf: 3 })) });
+  const bracket = {
+    type: "8U4L2DSL1D",
+    sections: [
+      section("Upper Quarterfinals", "upper", ["R1M1", "R1M2", "R1M3", "R1M4"]),
+      section("Lower Round 1", "lower", ["R1M5", "R1M6"]),
+      section("Upper Semifinals", "upper", ["R2M1", "R2M2"]),
+      section("Lower Quarterfinals", "lower", ["R2M3", "R2M4"]),
+      section("Upper Final", "upper", ["R4M1"]),
+      section("Lower Semifinal", "lower", ["R3M1"]),
+      section("Lower Final", "lower", ["R4M2"]),
+      section("Grand Final", "final", ["R5M1"]),
+    ],
+  };
+
+  const topology = buildTopology(bracket);
+  assert.ok(topology, "a standard double-elimination shape must be recognised");
+  assert.equal(topology.seeds, 8);
+  const bySlot = topology.bySlot;
+
+  // The first upper round takes the qualifiers; its losers open the lower one.
+  assert.deepEqual(bySlot.get("R1M1").sources.map((s) => s.from), ["seed", "seed"]);
+  assert.deepEqual(bySlot.get("R1M5").sources, [{ from: "loser", slot: "R1M1" }, { from: "loser", slot: "R1M2" }]);
+  // A lower drop round takes the previous lower winner and an upper loser.
+  assert.deepEqual(bySlot.get("R2M3").sources, [{ from: "winner", slot: "R1M5" }, { from: "loser", slot: "R2M1" }]);
+  // The lower final takes the upper final's loser; the grand final joins both.
+  assert.deepEqual(bySlot.get("R4M2").sources, [{ from: "winner", slot: "R3M1" }, { from: "loser", slot: "R4M1" }]);
+  assert.deepEqual(bySlot.get("R5M1").sources, [{ from: "winner", slot: "R4M1" }, { from: "winner", slot: "R4M2" }]);
+  // Columns advance rightwards so the grand final is last.
+  assert.equal(bySlot.get("R5M1").column, Math.max(...topology.nodes.map((n) => n.column)));
+
+  // Seeding keeps the top two apart until the final.
+  assert.deepEqual(bracketSeedOrder(8), [1, 8, 4, 5, 2, 7, 3, 6]);
+
+  // The stronger seed always winning must produce seed 1 as champion.
+  const seeds = ["s1", "s8", "s4", "s5", "s2", "s7", "s3", "s6"];
+  const rank = (team) => Number(team.slice(1));
+  const played = playBracket(topology, seeds, (a, b) => (rank(a) <= rank(b) ? a : b));
+  assert.equal(played.champion, "s1");
+  assert.equal(played.winners.get("R4M1"), "s1", "the top seed reaches the upper final");
+  assert.equal(played.winners.get("R4M2"), "s2", "the second seed comes back through the lower bracket");
+
+  // A shape that is not double elimination is refused rather than mis-drawn.
+  assert.equal(buildTopology({ sections: [section("Odd", "upper", ["A1", "A2", "A3"]), section("Next", "upper", ["B1", "B2"])] }), null);
+  assert.equal(buildTopology(null), null);
+});

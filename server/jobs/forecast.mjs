@@ -5,14 +5,29 @@ import { nowIso } from "../core/db.mjs";
 import { analyzeTournament, simulateTournament } from "../core/format.mjs";
 import { loadRatings } from "../core/ratings.mjs";
 import { freezeUpcomingSeries } from "../core/predictions.mjs";
+import { projectTournament } from "./project-bracket.mjs";
 
 const ITERATIONS = Math.max(2000, Number(process.env.FORECAST_ITERATIONS || 20_000));
 
+/**
+ * Everything a forecast depends on, in one fingerprint.
+ *
+ * A recomputation must be triggered by both kinds of new information: a result
+ * arriving, and the schedule of what is still to come being published or moved.
+ */
 function inputHash(db, leagueId, ratingsModelId) {
-  const row = db.prepare(`SELECT COUNT(*) AS n, COALESCE(MAX(updated_at),'') AS latest,
-                          COALESCE(SUM(score_a + score_b),0) AS maps FROM series WHERE league_id = ?`).get(leagueId);
+  const results = db.prepare(`SELECT COUNT(*) AS n, COALESCE(MAX(updated_at),'') AS latest,
+                              COALESCE(SUM(score_a + score_b),0) AS maps FROM series WHERE league_id = ?`).get(leagueId);
+  const schedule = db.prepare(`SELECT COUNT(*) AS n, COALESCE(MAX(updated_at),'') AS latest,
+                               COALESCE(SUM(COALESCE(start_time,0)),0) AS times,
+                               SUM(CASE WHEN team_a_id IS NOT NULL THEN 1 ELSE 0 END) AS filled
+                               FROM scheduled_matches WHERE league_id = ?`).get(leagueId);
   return createHash("sha1")
-    .update(`${leagueId}|${row.n}|${row.latest}|${row.maps}|${ratingsModelId ?? "none"}`)
+    .update([
+      leagueId, results.n, results.latest, results.maps,
+      schedule.n, schedule.latest, schedule.times, schedule.filled,
+      ratingsModelId ?? "none",
+    ].join("|"))
     .digest("hex");
 }
 
@@ -31,6 +46,14 @@ export function forecastTournament(db, leagueId, { force = false, iterations = I
   if (analysis.teams.length < 2) return { leagueId, skipped: true, reason: "not_enough_teams" };
 
   const simulation = simulateTournament(analysis, ratings, { iterations, seed: (leagueId * 2654435761) >>> 0 });
+  // The projection is a picture of the same beliefs, not a separate prediction:
+  // it is never scored, only the per-match calls frozen before a game are.
+  let projection = null;
+  try {
+    projection = projectTournament(db, leagueId);
+  } catch (error) {
+    projection = { error: String(error?.message || error) };
+  }
   const payload = {
     generatedAt: nowIso(),
     ratingsModelId: ratings.modelId,
@@ -46,6 +69,7 @@ export function forecastTournament(db, leagueId, { force = false, iterations = I
     })),
     pendingSeries: analysis.pendingSeries,
     finishedSeries: analysis.finishedSeries,
+    projection,
   };
 
   db.prepare(`INSERT INTO tournament_forecasts(league_id, generated_at, iterations, format, confidence, input_hash, payload_json)

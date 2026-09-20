@@ -61,6 +61,39 @@ export type ScheduleSlot = {
   teamB: TeamRef | null;
 };
 
+
+export type ProjectedStanding = TeamRef & {
+  seriesWins: number;
+  seriesLosses: number;
+  expectedPlace: number;
+  qualifyChance: number;
+};
+
+export type ProjectedSlot = {
+  slot: string;
+  lane: "upper" | "lower" | "final";
+  column: number;
+  section: string;
+  bestOf: number | null;
+  startTime: number | null;
+  decided: boolean;
+  known: boolean;
+  teamA: (TeamRef & { reachChance: number | null }) | null;
+  teamB: (TeamRef & { reachChance: number | null }) | null;
+  probabilityA: number | null;
+  winner: TeamRef | null;
+};
+
+export type Projection = {
+  generatedAt: string;
+  iterations: number;
+  playoffSlots: number;
+  standings: ProjectedStanding[];
+  bracket: ProjectedSlot[];
+  columns: number;
+  note: string;
+};
+
 export type ForecastTeam = {
   teamId: string;
   name: string;
@@ -100,6 +133,7 @@ export type TournamentForecast = {
   standings: Array<Omit<ForecastTeam, "champion" | "final" | "top4">>;
   pendingSeries: Array<{ seriesKey: string; teamA: string; teamB: string; bestOf: number }>;
   finishedSeries: number;
+  projection: Projection | null;
   iterations: number;
 };
 

@@ -4,7 +4,8 @@
 import { useCallback, useMemo } from "react";
 import {
   api, clock, CONFIDENCE_LABELS, formatDateTime, FORMAT_LABELS, percent, probabilityPercent, relativeTime,
-  type HeroCatalog, type LiveGame, type ScheduleSlot, type SeriesRow, type TournamentForecast, type TournamentFormat,
+  type HeroCatalog, type LiveGame, type ProjectedSlot, type Projection,
+  type SeriesRow, type TournamentForecast, type TournamentFormat,
 } from "../../lib/api";
 import { useLastPathSegment, usePolled } from "../../lib/hooks";
 import { Badge, EmptyState, ErrorState, Footer, HeroStrip, Panel, ProbabilityBar, Team, TopBar } from "../../components/shell";
@@ -84,44 +85,94 @@ function FormatPanel({ format, source, page }: { format: TournamentFormat; sourc
   );
 }
 
-function Bracket({ slots }: { slots: ScheduleSlot[] }) {
-  const lanes = ["upper", "lower", "final"] as const;
-  const byLane = lanes
-    .map((lane) => ({ lane, rows: slots.filter((slot) => slot.lane === lane) }))
-    .filter((entry) => entry.rows.length);
-  if (!byLane.length) return null;
+function ProjectedMatch({ slot }: { slot: ProjectedSlot }) {
+  const aWins = Boolean(slot.winner && slot.teamA && slot.winner.id === slot.teamA.id);
+  const bWins = Boolean(slot.winner && slot.teamB && slot.winner.id === slot.teamB.id);
+  const missing = <span className="dp-muted dp-small">не определена</span>;
+  return (
+    <div className={slot.decided ? "dp-bracket-match dp-bracket-played" : "dp-bracket-match"}>
+      <div className={aWins ? "dp-bracket-side dp-bracket-won" : "dp-bracket-side"}>
+        {slot.teamA ? <Team team={slot.teamA} compact /> : missing}
+        {slot.probabilityA !== null ? <span className="dp-bracket-odds">{(slot.probabilityA * 100).toFixed(0)}%</span> : null}
+      </div>
+      <div className={bWins ? "dp-bracket-side dp-bracket-won" : "dp-bracket-side"}>
+        {slot.teamB ? <Team team={slot.teamB} compact /> : missing}
+        {slot.probabilityA !== null ? <span className="dp-bracket-odds">{((1 - slot.probabilityA) * 100).toFixed(0)}%</span> : null}
+      </div>
+      <div className="dp-bracket-meta">
+        {slot.decided ? "сыграно" : slot.known ? "пара известна" : "прогноз"}
+        {slot.bestOf ? ` · Bo${slot.bestOf}` : null}
+        {slot.startTime ? ` · ${formatDateTime(slot.startTime)}` : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The bracket laid out left to right: rounds advance rightwards and the grand
+ * final sits in the last column, with the upper and lower bands converging on
+ * it — the way a bracket is normally read.
+ */
+function ProjectedBracket({ projection }: { projection: Projection }) {
+  const columns = Math.max(1, projection.columns);
+  const bands = [
+    { lane: "upper" as const, title: LANE_LABELS.upper },
+    { lane: "lower" as const, title: LANE_LABELS.lower },
+    { lane: "final" as const, title: LANE_LABELS.final },
+  ];
+  const style = { gridTemplateColumns: `repeat(${columns}, minmax(190px, 1fr))` };
 
   return (
-    <div className="dp-bracket">
-      {byLane.map(({ lane, rows }) => {
-        const stages = [...new Set(rows.map((row) => row.stage ?? ""))];
+    <div className="dp-bracket-flow">
+      {bands.map(({ lane, title }) => {
+        const rows = projection.bracket.filter((slot) => slot.lane === lane);
+        if (!rows.length) return null;
         return (
-          <div key={lane} className={`dp-bracket-lane dp-bracket-${lane}`}>
-            <h3>{LANE_LABELS[lane]}</h3>
-            <div className="dp-bracket-rounds">
-              {stages.map((stage) => (
-                <div key={stage} className="dp-bracket-round">
-                  <span className="dp-bracket-round-name">{stage}</span>
-                  {rows.filter((row) => (row.stage ?? "") === stage).map((row) => (
-                    <div key={row.id} className="dp-bracket-match">
-                      <div className={row.winnerSlot === 1 ? "dp-bracket-side dp-bracket-won" : "dp-bracket-side"}>
-                        {row.teamA ? <Team team={row.teamA} compact /> : <span className="dp-muted dp-small">не определена</span>}
-                      </div>
-                      <div className={row.winnerSlot === 2 ? "dp-bracket-side dp-bracket-won" : "dp-bracket-side"}>
-                        {row.teamB ? <Team team={row.teamB} compact /> : <span className="dp-muted dp-small">не определена</span>}
-                      </div>
-                      <div className="dp-bracket-meta">
-                        {row.bestOf ? `Bo${row.bestOf}` : null}
-                        {row.startTime ? ` · ${formatDateTime(row.startTime)}` : null}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ))}
+          <div key={lane} className={`dp-bracket-band dp-bracket-${lane}`}>
+            <h3>{title}</h3>
+            <div className="dp-bracket-grid" style={style}>
+              {Array.from({ length: columns }, (_, column) => {
+                const inColumn = rows.filter((slot) => slot.column === column);
+                return (
+                  <div key={column} className="dp-bracket-column">
+                    {inColumn.length ? <span className="dp-bracket-round-name">{inColumn[0].section}</span> : null}
+                    {inColumn.map((slot) => <ProjectedMatch key={slot.slot} slot={slot} />)}
+                  </div>
+                );
+              })}
             </div>
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function ProjectedStandings({ projection }: { projection: Projection }) {
+  return (
+    <div className="dp-table-wrap">
+      <table className="dp-table">
+        <thead>
+          <tr><th>#</th><th>Команда</th><th>Сейчас</th><th>Ожидаемое место</th><th>Пройдёт дальше</th></tr>
+        </thead>
+        <tbody>
+          {projection.standings.map((row, index) => (
+            <tr key={row.id} className={index < projection.playoffSlots ? "dp-row-qualify" : undefined}>
+              <td className="dp-mono">{index + 1}</td>
+              <td><Team team={row} compact /></td>
+              <td>{row.seriesWins}–{row.seriesLosses}</td>
+              <td className="dp-mono">{row.expectedPlace.toFixed(1)}</td>
+              <td>
+                <ProbabilityBar
+                  probabilityA={row.qualifyChance / 100}
+                  labelA={`${row.qualifyChance.toFixed(0)}%`}
+                  labelB=""
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -264,6 +315,7 @@ export default function TournamentPage() {
 
   const { tournament, forecast, series, live, format, structure, schedule } = detail;
   const bracketSlots = (schedule ?? []).filter((slot) => slot.lane && slot.lane !== "group");
+  const projection = forecast?.projection ?? null;
   const finished = series.filter((row) => row.status === "finished");
   const upcoming = series.filter((row) => row.status !== "finished");
 
@@ -297,12 +349,40 @@ export default function TournamentPage() {
         </Panel>
       ) : null}
 
-      {bracketSlots.length ? (
+      {projection?.standings?.length ? (
+        <Panel
+          title="Ожидаемая таблица"
+          subtitle={`Как, по модели, закончится групповой этап. Дальше проходят ${projection.playoffSlots}`}
+        >
+          <ProjectedStandings projection={projection} />
+        </Panel>
+      ) : null}
+
+      {projection?.bracket?.length ? (
         <Panel
           title="Сетка плейофф"
-          subtitle="Слоты и их официальное время. Пары подставляются по мере выхода команд"
+          subtitle="Пары составлены по ожидаемой таблице и разыграны моделью. Сыгранные матчи показаны как есть"
         >
-          <Bracket slots={bracketSlots} />
+          <ProjectedBracket projection={projection} />
+          <p className="dp-caveat">{projection.note}</p>
+        </Panel>
+      ) : bracketSlots.length ? (
+        <Panel title="Сетка плейофф" subtitle="Слоты и их официальное время">
+          <div className="dp-bracket-grid dp-bracket-plain">
+            {bracketSlots.map((slot) => (
+              <div key={slot.id} className="dp-bracket-match">
+                <div className="dp-bracket-side">
+                  {slot.teamA ? <Team team={slot.teamA} compact /> : <span className="dp-muted dp-small">не определена</span>}
+                </div>
+                <div className="dp-bracket-side">
+                  {slot.teamB ? <Team team={slot.teamB} compact /> : <span className="dp-muted dp-small">не определена</span>}
+                </div>
+                <div className="dp-bracket-meta">
+                  {slot.stage}{slot.startTime ? ` · ${formatDateTime(slot.startTime)}` : null}
+                </div>
+              </div>
+            ))}
+          </div>
         </Panel>
       ) : null}
 
