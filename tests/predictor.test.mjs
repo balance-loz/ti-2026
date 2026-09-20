@@ -26,6 +26,7 @@ const { analyzeTournament, simulateTournament } = await import("../server/core/f
 const { freezePrediction, getPrediction, resolvePredictions, accuracySummary, freezeUpcomingSeries } = await import("../server/core/predictions.mjs");
 const { ratingPairProbability } = await import("../server/core/ratings.mjs");
 const { normalizeLiveRow, livePollIntervalSeconds } = await import("../server/core/live.mjs");
+const { explainSeries, explainDraft, heroContributions, teamLineup } = await import("../server/core/explain.mjs");
 
 const db = openDb();
 
@@ -632,4 +633,183 @@ test("a double-elimination bracket's wiring is derived from its rounds", async (
   // A shape that is not double elimination is refused rather than mis-drawn.
   assert.equal(buildTopology({ sections: [section("Odd", "upper", ["A1", "A2", "A3"]), section("Next", "upper", ["B1", "B2"])] }), null);
   assert.equal(buildTopology(null), null);
+});
+
+// --- explanations -----------------------------------------------------------
+
+// Injected rather than trained: these tests are about how a forecast is taken
+// apart, not about what the numbers happen to be today.
+const RATINGS_FIXTURE = {
+  modelId: "ratings-test",
+  ratings: {
+    "501": { rating: 1.2, series: 40, name: "Strong" },
+    "502": { rating: 0.1, series: 40, name: "Weak" },
+    "503": { rating: 0.9, series: 2, name: "Newcomer" },
+  },
+  validation: {
+    holdoutDays: 45,
+    coinflipLogLoss: 0.6931,
+    champion: { family: "elo", logLoss: 0.63, accuracy: 0.65, samples: 200 },
+    rosterWeighting: {
+      applied: true,
+      withoutRosters: { logLoss: 0.64, accuracy: 0.62 },
+      withRosters: { logLoss: 0.63, accuracy: 0.65 },
+    },
+  },
+};
+
+const DRAFT_FIXTURE = {
+  schemaVersion: 1,
+  modelId: "draft-test",
+  dataset: { matches: 1000 },
+  inference: { heroScale: 1, roleScale: 0, radiantBias: 0.04, temperature: 1, dimensions: 0 },
+  heroes: {
+    "1": { coefficient: 0.5, games: 100 },
+    "2": { coefficient: -0.3, games: 90 },
+    "3": { coefficient: 0.1, games: 80 },
+    "4": { coefficient: 0, games: 70 },
+    "5": { coefficient: 0.2, games: 60 },
+    "6": { coefficient: -0.1, games: 50 },
+    "7": { coefficient: 0.05, games: 40 },
+    "8": { coefficient: -0.2, games: 30 },
+    "9": { coefficient: 0.3, games: 20 },
+  },
+  synergy: {},
+  counters: {},
+  validation: {
+    radiantBaseRate: 0.51,
+    holdout: { logLoss: 0.671, accuracy: 0.578, samples: 8000 },
+    baselineLogLoss: 0.676,
+    baselineDescription: "pre-match team strength only, no hero information",
+    improvementNats: 0.0044,
+    search: [
+      { validation: { logLoss: 0.6768 }, features: { heroes: 126, synergies: 0, counters: 0 } },
+      { validation: { logLoss: 0.6786 }, features: { heroes: 126, synergies: 112, counters: 233 } },
+    ],
+  },
+};
+
+test("an explanation adds up to exactly the prediction it explains", () => {
+  const explained = explainSeries(db, { teamAId: 501, teamBId: 502, bestOf: 3, ratings: RATINGS_FIXTURE });
+  // Every step is measured against the state it actually saw, so the deltas
+  // reconstruct the final number rather than approximating it.
+  const rebuilt = explained.factors.reduce((total, factor) => total + factor.delta, 0.5);
+  assert.ok(Math.abs(rebuilt - explained.probabilityA) < 0.001, `${rebuilt} vs ${explained.probabilityA}`);
+  // The stronger team is favoured, and the series format sharpens that.
+  assert.ok(explained.probabilityA > 0.5);
+  assert.equal(explained.factors[0].key, "rating");
+  assert.equal(explained.factors.at(-1).key, "format");
+});
+
+test("thin evidence appears as its own visible correction, not a silent one", () => {
+  const explained = explainSeries(db, { teamAId: 503, teamBId: 502, bestOf: 1, ratings: RATINGS_FIXTURE });
+  const reliability = explained.factors.find((factor) => factor.key === "reliability");
+  assert.ok(reliability, "a shrunk probability must say that it was shrunk");
+  // Shrinking pulls toward even, so it must undo part of the rating gap.
+  assert.ok(Math.sign(reliability.delta) !== Math.sign(explained.factors[0].delta));
+  assert.ok(explained.notes.some((note) => note.key === "thin_evidence"));
+});
+
+test("a frozen prediction is explained with the ratings it was made with", () => {
+  const explained = explainSeries(db, {
+    teamAId: 501, teamBId: 502, bestOf: 3, ratings: RATINGS_FIXTURE,
+    // What the model believed then: the sides were the other way round.
+    snapshot: { ratingA: 0.1, ratingB: 1.2, seriesA: 40, seriesB: 40, modelId: "ratings-old" },
+  });
+  assert.equal(explained.basis, "frozen");
+  assert.equal(explained.modelId, "ratings-old");
+  assert.ok(explained.probabilityA < 0.5, "the frozen call favoured the other side");
+  assert.ok(explained.notes.some((note) => note.key === "frozen_basis"));
+  // Quality still describes the model that is published now.
+  assert.equal(explained.quality.logLoss, 0.63);
+});
+
+test("context is reported beside the forecast, never counted as an influence", () => {
+  const explained = explainSeries(db, { teamAId: 501, teamBId: 502, bestOf: 3, ratings: RATINGS_FIXTURE });
+  const keys = explained.factors.map((factor) => factor.key);
+  for (const absent of ["headToHead", "h2h", "roster", "form"]) {
+    assert.ok(!keys.includes(absent), `${absent} is not an input and must not be drawn as one`);
+  }
+  assert.ok(explained.context.headToHead);
+  assert.ok(Array.isArray(explained.context.formA));
+  assert.ok(explained.notes.some((note) => note.key === "h2h_not_an_input"));
+});
+
+test("every pick carries its own signed contribution", () => {
+  const rows = heroContributions(DRAFT_FIXTURE, [1, 3, 5, 7, 9], [2, 4, 6, 8]);
+  const byHero = new Map(rows.map((row) => [row.heroId, row]));
+  // A positive coefficient helps whoever picked it, which flips with the side.
+  assert.ok(byHero.get(1).logit > 0);
+  assert.ok(byHero.get(2).logit > 0, "a weak hero on Dire helps Radiant");
+  assert.ok(byHero.get(6).logit > 0);
+  assert.ok(byHero.get(9).logit > 0);
+  // A hero the model never learned moves nothing rather than guessing.
+  assert.equal(byHero.get(4).logit, 0);
+  const unknown = heroContributions(DRAFT_FIXTURE, [999], []);
+  assert.equal(unknown[0].known, false);
+  assert.equal(unknown[0].logit, 0);
+});
+
+test("a draft explanation decomposes the map and states what the model lacks", () => {
+  db.prepare("INSERT OR REPLACE INTO heroes(hero_id, name, localized_name, updated_at) VALUES (?,?,?,?)")
+    .run(1, "npc_dota_hero_antimage", "Anti-Mage", new Date().toISOString());
+
+  const explained = explainDraft(db, {
+    radiantTeamId: 501, direTeamId: 502,
+    radiantPicks: [1, 3, 5, 7, 9], direPicks: [2, 4, 6, 8, 10],
+    ratings: RATINGS_FIXTURE, draftModel: DRAFT_FIXTURE,
+  });
+  assert.equal(explained.available, true);
+  assert.equal(explained.heroes.length, 10);
+  assert.equal(explained.heroes[0].name, "Anti-Mage", "the strongest pick leads and is named");
+
+  // The chain starts at the rating prior, not at even odds.
+  assert.equal(explained.factors[0].from, explained.priorProbabilityRadiant);
+  const rebuilt = explained.factors.reduce((total, factor) => total + factor.delta, explained.priorProbabilityRadiant);
+  assert.ok(Math.abs(rebuilt - explained.probabilityRadiant) < 0.001);
+
+  // Synergies and counters were measured and rejected; that has to be said.
+  const note = explained.notes.find((entry) => entry.key === "pairs_rejected");
+  assert.ok(note);
+  assert.match(note.text, /112/);
+  assert.match(note.text, /0\.6786/);
+});
+
+test("an incomplete draft is declined rather than half-answered", () => {
+  const explained = explainDraft(db, {
+    radiantTeamId: 501, direTeamId: 502,
+    radiantPicks: [1, 3], direPicks: [2],
+    ratings: RATINGS_FIXTURE, draftModel: DRAFT_FIXTURE,
+  });
+  assert.equal(explained.available, false);
+  assert.equal(explained.reason, "incomplete_picks");
+  assert.equal(explained.probabilityRadiant, explained.priorProbabilityRadiant);
+  assert.deepEqual(explained.heroes, []);
+});
+
+test("a lineup is read from the maps a team actually played", () => {
+  upsertTeam(db, { teamId: 611, name: "Steady" });
+  upsertTeam(db, { teamId: 612, name: "Opponents" });
+  const players = (ids, radiant) => ids.map((account_id, index) => ({
+    account_id, hero_id: index + 1, player_slot: radiant ? index : index + 128, name: `p${account_id}`,
+  }));
+  const five = [11, 12, 13, 14, 15];
+  for (let index = 0; index < 6; index += 1) {
+    // The newest map fields a stand-in; four of five is still the same team.
+    const fielded = index === 0 ? [11, 12, 13, 14, 99] : five;
+    upsertMap(db, {
+      match_id: 900_100 + index,
+      radiant_team_id: 611,
+      dire_team_id: 612,
+      radiant_win: true,
+      start_time: NOW - index * DAY,
+      duration: 2000,
+      players: [...players(fielded, true), ...players([21, 22, 23, 24, 25], false)],
+    }, { leagueId: 4242 });
+  }
+
+  const lineup = teamLineup(db, 611);
+  assert.equal(lineup.players.length, 5);
+  assert.deepEqual(lineup.players.map((player) => player.accountId).sort((a, b) => a - b), five);
+  assert.equal(lineup.stableMaps, 6, "a single stand-in does not count as a new lineup");
 });

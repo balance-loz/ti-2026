@@ -3,8 +3,9 @@
 // Everything here is assembled from what is already stored — no model is run,
 // no probability is recomputed. A page must show the number that was actually
 // published at the time, not a fresh one that would quietly look better.
-import { loadRatings, ratingPairProbability } from "./ratings.mjs";
+import { loadRatings } from "./ratings.mjs";
 import { heroCatalog } from "./heroes.mjs";
+import { explainSeries, explainDraft } from "./explain.mjs";
 
 const parseJson = (value, fallback = null) => {
   if (!value) return fallback;
@@ -190,11 +191,42 @@ export function seriesDetail(db, seriesKey) {
         // The stored features are what the model saw; they explain the call.
         features: parseJson(draft.features_json, null),
       } : null,
+      // Pick by pick, with the current draft model. Its coefficients are not
+      // stored per prediction, so a call frozen under an older version is
+      // explained by today's — flagged here rather than passed off as the same.
+      explanation: (() => {
+        const radiantPicks = parseJson(map.radiant_picks_json, []);
+        const direPicks = parseJson(map.dire_picks_json, []);
+        const explained = explainDraft(db, {
+          radiantTeamId: map.radiant_team_id,
+          direTeamId: map.dire_team_id,
+          radiantPicks, direPicks,
+        });
+        const restated = Boolean(draft?.model_id && explained.modelId && draft.model_id !== explained.modelId);
+        return {
+          ...explained,
+          basis: restated ? "current_model" : "frozen",
+          notes: restated
+            ? [...explained.notes, {
+              key: "model_moved_on",
+              text: `Прогноз фиксировала версия ${draft.model_id}, а разбор посчитан текущей ${explained.modelId}: `
+                + "коэффициенты героев хранятся только для действующей модели.",
+            }]
+            : explained.notes,
+        };
+      })(),
     };
   }).filter(Boolean);
 
-  // Recomputed only to explain the standing prediction, never to replace it.
-  const explanation = ratingPairProbability(loadRatings(), row.team_a_id, row.team_b_id);
+  // Rebuilt from whatever the frozen prediction recorded, so the explanation
+  // describes the call that was graded rather than one made with hindsight.
+  const frozenFeatures = seriesPrediction ? parseJson(seriesPrediction.features_json, null) : null;
+  const explanation = explainSeries(db, {
+    teamAId: row.team_a_id,
+    teamBId: row.team_b_id,
+    bestOf: row.best_of || 3,
+    snapshot: frozenFeatures ? { ...frozenFeatures, modelId: seriesPrediction.model_id } : null,
+  });
 
   return {
     seriesKey,
@@ -219,14 +251,7 @@ export function seriesDetail(db, seriesKey) {
       outcomeKind: seriesPrediction.outcome_kind,
       features: parseJson(seriesPrediction.features_json, null),
     } : null,
-    explanation: {
-      mapProbabilityA: explanation.mapProbabilityA,
-      confidence: explanation.confidence,
-      ratingA: explanation.ratingA ?? null,
-      ratingB: explanation.ratingB ?? null,
-      seriesA: explanation.seriesA,
-      seriesB: explanation.seriesB,
-    },
+    explanation,
     maps,
     heroCatalog: heroCatalog(db),
   };

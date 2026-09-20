@@ -16,6 +16,11 @@ const REQUEST_GAP_MS = Math.max(2000, Number(process.env.LIQUIPEDIA_GAP_MS || 22
 const CACHE_DIR = path.resolve(process.env.LIQUIPEDIA_CACHE_DIR || "work/liquipedia-cache");
 const PAGE_TTL_MS = Math.max(60 * 60_000, Number(process.env.LIQUIPEDIA_PAGE_TTL_HOURS || 6) * 60 * 60_000);
 
+// How long to stay away after being told we are asking too often. Liquipedia
+// warns that repeatedly tripping their limiter turns the block permanent, so
+// the cooldown is long and is written to disk: a restart must not undo it.
+const COOLDOWN_MS = Math.max(60_000, Number(process.env.LIQUIPEDIA_COOLDOWN_MINUTES || 60) * 60_000);
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let chain = Promise.resolve();
 let lastRequestAt = 0;
@@ -25,6 +30,23 @@ export class LiquipediaUnavailable extends Error {
     super(`liquipedia_unavailable: ${reason}`);
     this.name = "LiquipediaUnavailable";
   }
+}
+
+const cooldownFile = () => path.join(CACHE_DIR, "cooldown.json");
+
+/** Milliseconds left on the rate-limit cooldown, or 0 when clear. */
+export function cooldownRemainingMs() {
+  try {
+    const until = Number(JSON.parse(readFileSync(cooldownFile(), "utf8"))?.until || 0);
+    return Math.max(0, until - Date.now());
+  } catch { return 0; }
+}
+
+function startCooldown(reason) {
+  try {
+    mkdirSync(CACHE_DIR, { recursive: true });
+    writeFileSync(cooldownFile(), JSON.stringify({ until: Date.now() + COOLDOWN_MS, reason, at: new Date().toISOString() }));
+  } catch { /* best effort */ }
 }
 
 function cacheFile(key) {
@@ -53,6 +75,15 @@ function request(params, { cacheKey = null, cacheMaxAgeMs = null } = {}) {
     const cached = readCache(cacheKey, cacheMaxAgeMs);
     if (cached !== null) return Promise.resolve(cached);
   }
+  // Blocked: serve whatever we cached, however old, rather than adding to the
+  // requests that got us blocked in the first place.
+  const cooldown = cooldownRemainingMs();
+  if (cooldown > 0) {
+    const stale = cacheKey ? readCache(cacheKey, Infinity) : null;
+    if (stale !== null) return Promise.resolve(stale);
+    return Promise.reject(new LiquipediaUnavailable(`cooling_down_${Math.round(cooldown / 60_000)}m`));
+  }
+
   const run = async () => {
     const wait = Math.max(0, REQUEST_GAP_MS - (Date.now() - lastRequestAt));
     if (wait > 0) await sleep(wait);
@@ -65,9 +96,22 @@ function request(params, { cacheKey = null, cacheMaxAgeMs = null } = {}) {
     } catch (error) {
       throw new LiquipediaUnavailable(String(error?.message || error));
     }
-    if (response.status === 429) throw new LiquipediaUnavailable("rate_limited");
+    if (response.status === 429 || response.status === 403) {
+      startCooldown(`http_${response.status}`);
+      throw new LiquipediaUnavailable("rate_limited");
+    }
     if (!response.ok) throw new LiquipediaUnavailable(`http_${response.status}`);
-    const body = await response.json();
+
+    // A block comes back as an HTML interstitial with a 200, not as JSON, so
+    // the content type is what distinguishes it from a real answer.
+    const text = await response.text();
+    if (!text.trimStart().startsWith("{") && !text.trimStart().startsWith("[")) {
+      startCooldown(/rate limited/i.test(text) ? "rate_limit_page" : "non_json");
+      throw new LiquipediaUnavailable("rate_limited");
+    }
+    let body;
+    try { body = JSON.parse(text); } catch { throw new LiquipediaUnavailable("bad_json"); }
+
     if (cacheKey) writeCache(cacheKey, body);
     return body;
   };
@@ -177,6 +221,195 @@ export async function candidateTitles(name) {
   return [...new Set([...constructed, ...found])]
     .sort((a, b) => score(b) - score(a))
     .slice(0, 8);
+}
+
+// --- the tournament catalog -------------------------------------------------
+//
+// Guessing a page title from a tournament's name only works when the two look
+// alike. They often do not: OpenDota calls one event "RES Unchained - A Blast
+// Dota Slam IX Quali" while Liquipedia files it under `BLAST/SLAM/9/Europe`.
+// No amount of prefix searching bridges that.
+//
+// Liquipedia does publish the mapping, though — its tier index pages list every
+// tournament with its page, its full name and its dates. Read those once a day
+// and the question stops being "what might this page be called" and becomes a
+// local lookup against a real catalog.
+
+const INDEX_PAGES = String(process.env.LIQUIPEDIA_INDEX_PAGES
+  || "Tier 1 Tournaments,Tier 2 Tournaments,Tier 3 Tournaments,Tier 4 Tournaments,Qualifier Tournaments")
+  .split(",").map((entry) => entry.trim()).filter(Boolean);
+const CATALOG_TTL_MS = Math.max(60 * 60_000, Number(process.env.LIQUIPEDIA_CATALOG_TTL_HOURS || 24) * 60 * 60_000);
+const DAY = 86_400;
+
+const decodeEntities = (value) => String(value || "")
+  .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+  .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)))
+  .replace(/&nbsp;/g, " ").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+  .replace(/&amp;/g, "&");
+
+const stripTags = (value) => decodeEntities(String(value || "").replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ").trim();
+
+/** Rendered HTML of a page. The index pages only exist as rendered tables. */
+export async function fetchRenderedHtml(title, { cache = true, maxAgeMs = PAGE_TTL_MS } = {}) {
+  const body = await request(
+    { action: "parse", format: "json", page: title, prop: "text", redirects: 1 },
+    cache ? { cacheKey: `html-${title}`, cacheMaxAgeMs: maxAgeMs } : {},
+  );
+  if (body?.error) return null;
+  return body?.parse?.text?.["*"] ?? null;
+}
+
+/**
+ * Start and end of an index page's date cell.
+ * They come in four shapes: "Sep 10, 2026", "Oct 19-31, 2027",
+ * "Apr 26 - May 09, 2027" and "Dec 30, 2025 - Jan 05, 2026".
+ */
+export function parseIndexDates(raw) {
+  const text = String(raw || "").replace(/[‐-―−]/g, "-").replace(/\s+/g, " ").trim();
+  if (!text || !/\b20\d{2}\b/.test(text)) return { startTime: null, endTime: null };
+
+  const part = (chunk) => {
+    const word = /\b([a-z]{3,9})\b/i.exec(chunk);
+    const month = word ? MONTHS.findIndex((name) => name.startsWith(word[1].toLowerCase())) : -1;
+    const year = /\b(20\d{2})\b/.exec(chunk);
+    const day = /\b(\d{1,2})\b/.exec(chunk.replace(/\b20\d{2}\b/g, " "));
+    return { month: month >= 0 ? month : null, day: day ? Number(day[1]) : null, year: year ? Number(year[1]) : null };
+  };
+
+  const chunks = text.split(/\s*-\s*/);
+  const left = part(chunks[0]);
+  const right = chunks.length > 1 ? part(chunks[1]) : null;
+  if (right) {
+    // "Oct 19-31, 2027" states the month once and the year once; each side
+    // borrows whatever the other spelled out.
+    if (right.month == null) right.month = left.month;
+    if (left.month == null) left.month = right.month;
+    if (left.year == null) left.year = right.year;
+    if (right.year == null) right.year = left.year;
+  }
+
+  const epoch = (entry) => (entry && entry.month != null && entry.day != null && entry.year != null
+    ? Math.floor(Date.UTC(entry.year, entry.month, entry.day) / 1000)
+    : null);
+  const startTime = epoch(left);
+  const endTime = epoch(right) ?? startTime;
+  return { startTime, endTime: endTime != null && startTime != null && endTime < startTime ? startTime : endTime };
+}
+
+/** Every tournament row on a rendered index page. */
+export function parseTournamentIndex(html) {
+  const text = decodeEntities(html);
+  const entries = [];
+  for (const row of text.split('class="table2__row--body"').slice(1)) {
+    const link = /<td[^>]*class="[^"]*column__tournament[^"]*"[^>]*>\s*<a href="\/dota2\/([^"#]+)"[^>]*>([\s\S]*?)<\/a>/.exec(row);
+    if (!link) continue;
+    let page;
+    try { page = decodeURIComponent(link[1]); } catch { page = link[1]; }
+    page = page.replace(/_/g, " ").trim();
+    const name = stripTags(link[2]);
+    if (!page || !name) continue;
+
+    const cells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((cell) => stripTags(cell[1]));
+    // The date is the cell after the tournament name, but rather than trusting
+    // the column count, take the first cell that reads as a date.
+    let dates = { startTime: null, endTime: null };
+    let dateText = null;
+    for (const cell of cells.slice(2)) {
+      const parsed = parseIndexDates(cell);
+      if (parsed.startTime != null) { dates = parsed; dateText = cell; break; }
+    }
+    entries.push({ page, name, dateText, ...dates });
+  }
+  return entries;
+}
+
+/**
+ * The catalog, cached for a day.
+ *
+ * A partial read is still useful, so index pages that fail are skipped rather
+ * than failing the whole build; only a build that found nothing at all falls
+ * back to the previous catalog.
+ */
+export async function fetchTournamentCatalog({ maxAgeMs = CATALOG_TTL_MS, pages = INDEX_PAGES } = {}) {
+  const cached = readCache("catalog", maxAgeMs);
+  if (cached) return cached;
+
+  const byPage = new Map();
+  const sources = [];
+  for (const indexPage of pages) {
+    try {
+      const html = await fetchRenderedHtml(indexPage, { cache: false });
+      const rows = html ? parseTournamentIndex(html) : [];
+      for (const row of rows) if (!byPage.has(row.page)) byPage.set(row.page, row);
+      sources.push({ page: indexPage, rows: rows.length });
+    } catch (error) {
+      if (!(error instanceof LiquipediaUnavailable)) throw error;
+      sources.push({ page: indexPage, rows: 0, error: error.message });
+    }
+  }
+
+  if (!byPage.size) {
+    const stale = readCache("catalog", Infinity);
+    if (stale) return { ...stale, stale: true };
+    return { fetchedAt: new Date().toISOString(), entries: [], sources };
+  }
+
+  const catalog = { fetchedAt: new Date().toISOString(), entries: [...byPage.values()], sources };
+  writeCache("catalog", catalog);
+  return catalog;
+}
+
+/**
+ * Tokens a tournament name is worth matching on, with roman numerals folded
+ * into digits so "Slam IX" and "Season 9" meet.
+ */
+export function nameTokens(value) {
+  return normalise(value).split(" ")
+    .filter((token) => token.length > 1)
+    .map((token) => (token.length >= 2 && ROMAN[token] ? String(ROMAN[token]) : token));
+}
+
+/**
+ * Catalog entries that could be this tournament, best first.
+ *
+ * Words are weighted by how rare they are across the catalog, so "dota",
+ * "season" and "qualifier" count for little while "unchained" counts for a lot.
+ * Nothing here needs the network — the catalog is already on disk.
+ */
+export function rankCatalog(name, { entries = [], startTime = null, limit = 8, minScore = 0.4 } = {}) {
+  const query = nameTokens(name);
+  if (!query.length || !entries.length) return [];
+
+  const indexed = entries.map((entry) => ({ entry, tokens: new Set(nameTokens(entry.name)) }));
+  const frequency = new Map();
+  for (const { tokens } of indexed) for (const token of tokens) frequency.set(token, (frequency.get(token) || 0) + 1);
+  const weight = (token) => 1 / Math.log(2 + (frequency.get(token) || 0));
+
+  // OpenDota truncates long names ("... Slam IX Quali"), so the final word may
+  // be a fragment of the real one.
+  const last = query.at(-1);
+  const total = query.reduce((sum, token) => sum + weight(token), 0);
+
+  const scored = [];
+  for (const { entry, tokens } of indexed) {
+    let matched = 0;
+    for (const token of query) {
+      const hit = tokens.has(token)
+        || (token === last && token.length >= 3 && [...tokens].some((other) => other.startsWith(token)));
+      if (hit) matched += weight(token);
+    }
+    let score = total ? matched / total : 0;
+
+    if (startTime && entry.startTime) {
+      const from = entry.startTime - 2 * DAY;
+      const to = (entry.endTime ?? entry.startTime) + 3 * DAY;
+      if (startTime >= from && startTime <= to) score += 0.35;
+      else score -= Math.min(0.5, (startTime < from ? from - startTime : startTime - to) / (60 * DAY));
+    }
+    if (score >= minScore) scored.push({ ...entry, score });
+  }
+
+  return scored.sort((a, b) => b.score - a.score).slice(0, limit);
 }
 
 // --- parsing ----------------------------------------------------------------

@@ -4,16 +4,8 @@
 // output. A page showing `{"stored":412,"pagesUsed":5,...}` tells you nothing
 // about whether the thing is working; these summaries do.
 
-const plural = (count, one, few, many) => {
-  const n = Math.abs(Number(count) || 0);
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return one;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
-  return many;
-};
+import { counted as count } from "./russian.mjs";
 
-const count = (value, one, few, many) => `${Number(value).toLocaleString("ru-RU")} ${plural(value, one, few, many)}`;
 const day = (seconds) => (seconds ? new Date(seconds * 1000).toISOString().slice(0, 10) : null);
 
 // The scheduler labels jobs in English for the API; the page is Russian.
@@ -74,7 +66,14 @@ export function describeJobRun(job, detail) {
         detail.named?.renamed ? `названий уточнено ${detail.named.renamed}` : null,
       ].filter(Boolean).join(", ");
     case "structure":
-      return `структура: ${detail.withPage ?? 0} из ${count(detail.leagues ?? 0, "турнира", "турниров", "турниров")} со страницей организатора`;
+      return [
+        `структура: ${detail.withPage ?? 0} из ${count(detail.leagues ?? 0, "турнира", "турниров", "турниров")} со страницей организатора`,
+        // The catalog is what turns page discovery from guesswork into a lookup,
+        // so its size is the first thing to check when a tournament is missed.
+        detail.catalogEntries
+          ? `каталог: ${count(detail.catalogEntries, "турнир", "турнира", "турниров")}`
+          : "каталог пуст — источник недоступен",
+      ].join(", ");
     case "forecast":
       return Number(detail.updated)
         ? `пересчитано ${count(detail.updated, "турнир", "турнира", "турниров")}`

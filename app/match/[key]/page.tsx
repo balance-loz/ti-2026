@@ -5,6 +5,7 @@ import { useCallback } from "react";
 import { api, formatDateTime, probabilityPercent, relativeTime, type SeriesDetail, type SeriesMap } from "../../lib/api";
 import { useLastPathSegment, usePolled } from "../../lib/hooks";
 import { Badge, EmptyState, ErrorState, Footer, HeroStrip, Panel, ProbabilityBar, Team, TopBar } from "../../components/shell";
+import { DraftReasoning, SeriesReasoning } from "../../components/explain";
 
 const clockFromSeconds = (seconds: number | null) =>
   seconds ? `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}` : "—";
@@ -60,6 +61,8 @@ function MapCard({ map, detail }: { map: SeriesMap; detail: SeriesDetail }) {
       ) : (
         <p className="dp-muted dp-small">Карта сыграна до того, как система её застала — прогноза по драфту нет.</p>
       )}
+
+      <DraftReasoning explanation={map.explanation} />
     </article>
   );
 }
@@ -141,18 +144,11 @@ export default function MatchPage() {
         )}
       </Panel>
 
-      <Panel title="Почему так" subtitle="Из чего сложилась оценка">
-        <dl className="dp-metrics">
-          <div><dt>шанс на карте</dt><dd>{probabilityPercent(explanation.mapProbabilityA)}</dd></div>
-          <div><dt>рейтинг {teamA.name}</dt><dd>{explanation.ratingA?.toFixed(2) ?? "—"}</dd></div>
-          <div><dt>рейтинг {teamB.name}</dt><dd>{explanation.ratingB?.toFixed(2) ?? "—"}</dd></div>
-          <div><dt>серий в основе</dt><dd>{explanation.seriesA} / {explanation.seriesB}</dd></div>
-          <div><dt>уверенность</dt><dd>{explanation.confidence}</dd></div>
-        </dl>
-        <p className="dp-caveat">
-          Вероятность серии выводится из шанса на одной карте: все точные счета считаются
-          аналитически, поэтому они всегда в сумме дают вероятность победы и не могут ей противоречить.
-        </p>
+      <Panel
+        title="Почему так"
+        subtitle={`Шаг за шагом: с чего модель начала и что сдвинуло оценку до ${probabilityPercent(explanation.probabilityA)} за ${teamA.name}`}
+      >
+        <SeriesReasoning explanation={explanation} teamA={teamA} teamB={teamB} />
       </Panel>
 
       <Panel title="Карты и драфты" subtitle="По каждой карте — пики и прогноз, сделанный по ним">

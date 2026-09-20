@@ -7,6 +7,7 @@
 import { nowIso } from "../core/db.mjs";
 import {
   candidateTitles, fetchWikitext, parseTournamentPage, LiquipediaUnavailable,
+  fetchTournamentCatalog, rankCatalog,
 } from "../core/liquipedia.mjs";
 
 const STRUCTURE_TTL_MS = Math.max(60 * 60_000, Number(process.env.STRUCTURE_TTL_HOURS || 6) * 60 * 60_000);
@@ -138,12 +139,47 @@ function dateScore(tournament, parsed) {
   return { score: -30, overlap: -gapDays };
 }
 
-export async function resolvePage(db, tournament) {
+// A catalog hit this good needs no help: nearly every distinctive word in the
+// name matched and the dates line up.
+const CATALOG_CONFIDENT = Number(process.env.STRUCTURE_CATALOG_CONFIDENT || 0.8);
+
+/**
+ * Pages worth checking for this tournament.
+ *
+ * The catalog is asked first because it knows the real titles; guessing from
+ * the name is only a fallback for events the index pages have not listed yet,
+ * such as one that is running right now.
+ */
+export async function candidatePages(tournament, { catalog = null } = {}) {
+  const titles = [];
+  let fromCatalog = [];
+  try {
+    const source = catalog ?? await fetchTournamentCatalog();
+    fromCatalog = rankCatalog(tournament.name, {
+      entries: source?.entries ?? [],
+      startTime: Number(tournament.start_time || 0) || null,
+    });
+    for (const hit of fromCatalog) titles.push(hit.page);
+  } catch (error) {
+    if (!(error instanceof LiquipediaUnavailable)) throw error;
+  }
+
+  if (!fromCatalog.length || fromCatalog[0].score < CATALOG_CONFIDENT) {
+    try {
+      for (const title of await candidateTitles(tournament.name)) titles.push(title);
+    } catch (error) {
+      if (!(error instanceof LiquipediaUnavailable)) throw error;
+    }
+  }
+  return { titles: [...new Set(titles)].slice(0, 8), catalogHits: fromCatalog.length };
+}
+
+export async function resolvePage(db, tournament, { catalog = null } = {}) {
   const teams = leagueTeams(db, tournament.league_id);
   if (teams.length < MIN_PARTICIPANT_MATCHES) {
     return { page: null, reason: "too_few_known_teams" };
   }
-  const titles = await candidateTitles(tournament.name);
+  const { titles, catalogHits } = await candidatePages(tournament, { catalog });
   const tried = [];
   let best = null;
 
@@ -170,8 +206,8 @@ export async function resolvePage(db, tournament) {
   // successive seasons of an event share teams, so an earlier season can clear
   // the bar while a later one fits the calendar better.
 
-  if (best) return { ...best, tried };
-  return { page: null, reason: tried.length ? "no_page_matched_participants" : "no_candidates", tried };
+  if (best) return { ...best, tried, catalogHits };
+  return { page: null, reason: tried.length ? "no_page_matched_participants" : "no_candidates", tried, catalogHits };
 }
 
 function storeSchedule(db, leagueId, parsed, teams) {
@@ -223,7 +259,7 @@ function storeSchedule(db, leagueId, parsed, teams) {
 }
 
 /** Fetch and store one tournament's structure. Skipped while still fresh. */
-export async function syncTournamentStructure(db, leagueId, { force = false } = {}) {
+export async function syncTournamentStructure(db, leagueId, { force = false, catalog = null } = {}) {
   const tournament = db.prepare("SELECT * FROM tournaments WHERE league_id = ?").get(leagueId);
   if (!tournament) return { leagueId, skipped: true, reason: "unknown_tournament" };
 
@@ -240,7 +276,7 @@ export async function syncTournamentStructure(db, leagueId, { force = false } = 
     if (!parsed) page = null;
   }
   if (!page) {
-    const resolution = await resolvePage(db, tournament);
+    const resolution = await resolvePage(db, tournament, { catalog });
     if (!resolution.page) {
       // Remember the attempt so a tournament with no page is not retried on
       // every pass; it will be looked at again once the TTL expires.
@@ -276,10 +312,18 @@ export async function syncActiveStructures(db, { force = false, limit = Number(p
   const leagues = db.prepare(`SELECT league_id FROM tournaments
                               WHERE tracked = 1 AND status = 'live' AND map_count > 0
                               ORDER BY last_match_time DESC LIMIT ?`).all(limit);
+  // Fetched once for the whole pass: it is the same catalog for every league.
+  let catalog = null;
+  try {
+    catalog = await fetchTournamentCatalog();
+  } catch (error) {
+    if (!(error instanceof LiquipediaUnavailable)) throw error;
+  }
+
   const results = [];
   for (const row of leagues) {
     try {
-      results.push(await syncTournamentStructure(db, Number(row.league_id), { force }));
+      results.push(await syncTournamentStructure(db, Number(row.league_id), { force, catalog }));
     } catch (error) {
       if (error instanceof LiquipediaUnavailable) {
         results.push({ leagueId: Number(row.league_id), error: error.message });
@@ -291,6 +335,7 @@ export async function syncActiveStructures(db, { force = false, limit = Number(p
   return {
     leagues: leagues.length,
     withPage: results.filter((row) => row.page).length,
+    catalogEntries: catalog?.entries?.length ?? 0,
     results,
   };
 }

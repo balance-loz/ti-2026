@@ -1,11 +1,40 @@
 // Parser tests for the Liquipedia source. Fixtures are trimmed copies of real
-// pages, so none of this touches the network.
+// pages, and the one test that does make a request makes it to a local stand-in,
+// so none of this touches Liquipedia.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+// Liquipedia answers a blocked client with an HTML interstitial carrying a 200,
+// not with JSON and not with a 429. Standing in for that is the only way to
+// test that the client recognises it.
+let upstreamRequests = 0;
+const upstream = createServer((req, res) => {
+  upstreamRequests += 1;
+  res.writeHead(200, { "Content-Type": "text/html" });
+  res.end("<!DOCTYPE HTML><title>Rate Limited - Liquipedia</title><h1>Rate Limited</h1>"
+    + "<p>Your IP address has been temporarily blocked from accessing Liquipedia.");
+});
+await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+// A listening socket would hold the process open long after the tests finish.
+upstream.unref();
+
+process.env.LIQUIPEDIA_API_URL = `http://127.0.0.1:${upstream.address().port}/api.php`;
+process.env.LIQUIPEDIA_CACHE_DIR = mkdtempSync(path.join(tmpdir(), "liquipedia-test-"));
+
+process.on("exit", () => {
+  upstream.close();
+  try { rmSync(process.env.LIQUIPEDIA_CACHE_DIR, { recursive: true, force: true }); } catch { /* best effort */ }
+});
 
 const {
   editionNumber, editionYear, parseMatchDate,
   parseFormat, parseBracket, parseScheduledMatches, parseParticipants,
+  parseTournamentIndex, parseIndexDates, rankCatalog,
+  fetchWikitext, cooldownRemainingMs, LiquipediaUnavailable,
 } = await import("../server/core/liquipedia.mjs");
 
 const BRACKET_FIXTURE = `
@@ -177,4 +206,100 @@ test("an unknown team is refused rather than matched to the nearest name", () =>
   assert.equal(matchTeamName("Team Spirit", LEAGUE_TEAMS), null);
   assert.equal(matchTeamName("", LEAGUE_TEAMS), null);
   assert.equal(matchTeamName("zzzz", LEAGUE_TEAMS), null);
+});
+
+// --- the tournament catalog -------------------------------------------------
+
+// One row of a rendered tier index page, with Liquipedia's own entity encoding
+// of the class names left intact — that encoding is why a naive parser reads
+// nothing at all.
+const INDEX_FIXTURE = `<div class="table2 table2--generic tournaments-listing"><div class="table2&#95;&#95;container"><table class="table2&#95;&#95;table"><tbody>
+<tr class="table2&#95;&#95;row--head"><th colspan="2">Tournament</th><th>Date</th><th>Prize&#160;Pool</th></tr>
+<tr class="table2&#95;&#95;row--body"><td data-sort-value="PGL Wallachia Season 8"><span class="league-icon-small-image"><a href="/dota2/PGL/Wallachia/8"><img alt="x" /></a></span></td><td class="column&#95;&#95;tournament" data-sort-value="PGL Wallachia Season 8"><a href="/dota2/PGL/Wallachia/8" title="PGL/Wallachia/8">PGL Wallachia Season 8</a></td><td data-nowrap="">Apr 18&#8211;26, 2026</td><td>$1,000,000</td></tr>
+<tr class="table2&#95;&#95;row--body"><td data-sort-value="RES"><span><a href="/dota2/BLAST/SLAM/9/Europe"><img alt="x" /></a></span></td><td class="column&#95;&#95;tournament" data-nowrap="" data-sort-value="RES"><a href="/dota2/BLAST/SLAM/9/Europe" title="BLAST/SLAM/9/Europe">RES Unchained 6: BLAST SLAM IX Europe Closed Qualifier</a></td><td data-nowrap="">Sep 12&#8211;13, 2026</td><td>-</td></tr>
+<tr class="table2&#95;&#95;row--body"><td data-sort-value="BLAST SLAM IX"><span><a href="/dota2/BLAST/SLAM/9"><img alt="x" /></a></span></td><td class="column&#95;&#95;tournament" data-sort-value="BLAST SLAM IX"><a href="/dota2/BLAST/SLAM/9" title="BLAST/SLAM/9">BLAST SLAM IX</a></td><td data-nowrap="">Nov 20&#8211;29, 2026</td><td>$1,000,000</td></tr>
+</tbody></table></div></div>`;
+
+const day = (year, month, date) => Math.floor(Date.UTC(year, month - 1, date) / 1000);
+
+test("index dates cover every shape the tier tables use", () => {
+  assert.deepEqual(parseIndexDates("Sep 10, 2026"), { startTime: day(2026, 9, 10), endTime: day(2026, 9, 10) });
+  // A range that states its month once: the far side borrows it.
+  assert.deepEqual(parseIndexDates("Oct 19–31, 2027"), { startTime: day(2027, 10, 19), endTime: day(2027, 10, 31) });
+  // Two months, one year.
+  assert.deepEqual(parseIndexDates("Apr 26 – May 09, 2027"), { startTime: day(2027, 4, 26), endTime: day(2027, 5, 9) });
+  // Two months and two years, across new year.
+  assert.deepEqual(parseIndexDates("Dec 30, 2025 – Jan 05, 2026"), { startTime: day(2025, 12, 30), endTime: day(2026, 1, 5) });
+  // Nothing usable rather than a guess.
+  assert.deepEqual(parseIndexDates("TBD"), { startTime: null, endTime: null });
+  assert.deepEqual(parseIndexDates("Oct 2026"), { startTime: null, endTime: null });
+});
+
+test("a rendered index page yields page titles, names and dates", () => {
+  const entries = parseTournamentIndex(INDEX_FIXTURE);
+  assert.equal(entries.length, 3);
+
+  const wallachia = entries.find((entry) => entry.page === "PGL/Wallachia/8");
+  assert.equal(wallachia.name, "PGL Wallachia Season 8");
+  assert.equal(wallachia.startTime, day(2026, 4, 18));
+  assert.equal(wallachia.endTime, day(2026, 4, 26));
+
+  // The header row is not a tournament, and the icon cell's link must not be
+  // mistaken for the name cell's.
+  assert.ok(!entries.some((entry) => entry.name === "Tournament"));
+  assert.equal(entries.filter((entry) => entry.page === "BLAST/SLAM/9/Europe").length, 1);
+});
+
+test("catalog lookup finds pages whose titles the name never suggests", () => {
+  const entries = parseTournamentIndex(INDEX_FIXTURE);
+
+  // OpenDota truncates this name, and nothing in it hints at `BLAST/SLAM/9/...`.
+  const quali = rankCatalog("RES Unchained - A Blast Dota Slam IX Quali",
+    { entries, startTime: day(2026, 9, 12) });
+  assert.equal(quali[0].page, "BLAST/SLAM/9/Europe");
+
+  // The main event shares three words with its qualifier; the rare ones decide.
+  const main = rankCatalog("BLAST Slam IX", { entries, startTime: day(2026, 11, 21) });
+  assert.equal(main[0].page, "BLAST/SLAM/9");
+
+  // The calendar is part of the score: the same page rates lower when the
+  // tournament we are placing was played nowhere near it.
+  const offDate = rankCatalog("BLAST Slam IX", { entries, startTime: day(2026, 9, 12) });
+  const scoreOf = (hits) => hits.find((hit) => hit.page === "BLAST/SLAM/9")?.score ?? 0;
+  assert.ok(scoreOf(offDate) < scoreOf(main));
+  // And on that date the qualifier, not the main event, is the better guess.
+  assert.equal(offDate[0].page, "BLAST/SLAM/9/Europe");
+
+  // A tournament Liquipedia does not list gets no candidates, not a wrong one.
+  assert.deepEqual(rankCatalog("肛宝联赛-老婆杯", { entries, startTime: day(2026, 9, 15) }), []);
+});
+
+test("roman numerals and arabic seasons are the same edition", () => {
+  const entries = parseTournamentIndex(INDEX_FIXTURE);
+  // "Season 9" must reach a page Liquipedia titled "IX".
+  const hits = rankCatalog("BLAST Slam Season 9", { entries, startTime: day(2026, 11, 21) });
+  assert.equal(hits[0].page, "BLAST/SLAM/9");
+});
+
+// --- behaving when the source says stop -------------------------------------
+
+test("a block is recognised as one and stops the client asking again", async () => {
+  assert.equal(cooldownRemainingMs(), 0, "nothing should be cooling down yet");
+
+  // The block arrives as HTML with a 200. Parsing it as JSON throws a
+  // SyntaxError that no caller expects, so the client has to spot it first.
+  await assert.rejects(
+    () => fetchWikitext("Any Page"),
+    (error) => error instanceof LiquipediaUnavailable && /rate_limited/.test(error.message),
+  );
+  assert.equal(upstreamRequests, 1);
+  assert.ok(cooldownRemainingMs() > 0, "being blocked has to be remembered");
+
+  // Liquipedia warns that repeatedly tripping their limiter makes the block
+  // permanent, so while cooling down nothing is asked of them at all.
+  await assert.rejects(
+    () => fetchWikitext("Another Page"),
+    (error) => error instanceof LiquipediaUnavailable && /cooling_down/.test(error.message),
+  );
+  assert.equal(upstreamRequests, 1, "a cooling-down client must send no requests");
 });

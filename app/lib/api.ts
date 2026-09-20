@@ -252,6 +252,94 @@ export type TeamDetail = {
   heroCatalog: HeroCatalog;
 };
 
+/** One named, signed step between two probabilities. */
+export type Factor = {
+  key: string;
+  label: string;
+  detail: string;
+  logit: number | null;
+  from: number;
+  to: number;
+  delta: number;
+  evidence: Record<string, unknown> | null;
+};
+
+export type ExplanationNote = { key: string; text: string };
+
+export type HeroContribution = {
+  heroId: number;
+  name: string;
+  side: "radiant" | "dire";
+  logit: number;
+  impact: number;
+  games: number;
+  known: boolean;
+  favours: "radiant" | "dire" | "none";
+};
+
+export type DraftExplanation = {
+  available: boolean;
+  reason?: string;
+  basis: "frozen" | "current_model";
+  modelId: string | null;
+  priorProbabilityRadiant: number;
+  probabilityRadiant: number;
+  draftDelta: number;
+  prior: { label: string; ratingRadiant: number; ratingDire: number; confidence: string };
+  factors: Factor[];
+  heroes: HeroContribution[];
+  quality: null | {
+    logLoss: number;
+    accuracy: number;
+    samples: number;
+    baselineLogLoss: number;
+    baselineDescription: string | null;
+    improvementNats: number;
+  };
+  notes: ExplanationNote[];
+};
+
+export type Lineup = null | {
+  players: { accountId: number; name: string | null; maps: number; share: number }[];
+  sampledMaps: number;
+  stableMaps: number;
+  stableSince: number | null;
+  unchangedThroughout: boolean;
+};
+
+export type SeriesExplanation = {
+  basis: "frozen" | "current";
+  modelId: string | null;
+  bestOf: number;
+  probabilityA: number;
+  probabilityB: number;
+  drawProbability: number;
+  confidence: string;
+  factors: Factor[];
+  context: {
+    headToHead: {
+      played: number;
+      winsA: number;
+      winsB: number;
+      draws: number;
+      matches: { seriesKey: string; startTime: number | null; bestOf: number | null; scoreA: number; scoreB: number; winner: "a" | "b" | null; isDraw: boolean }[];
+    };
+    lineupA: Lineup;
+    lineupB: Lineup;
+    formA: { seriesKey: string; startTime: number | null; opponentId: number; score: string; result: "win" | "loss" | "draw" }[];
+    formB: { seriesKey: string; startTime: number | null; opponentId: number; score: string; result: "win" | "loss" | "draw" }[];
+  };
+  quality: null | {
+    family: string | null;
+    logLoss: number;
+    accuracy: number;
+    coinflipLogLoss: number;
+    samples: number;
+    holdoutDays: number | null;
+  };
+  notes: ExplanationNote[];
+};
+
 export type SeriesMap = {
   matchId: number;
   radiant: TeamRef;
@@ -269,6 +357,7 @@ export type SeriesMap = {
     correct: boolean | null;
     features: Record<string, unknown> | null;
   };
+  explanation: DraftExplanation;
 };
 
 export type SeriesDetail = {
@@ -295,14 +384,7 @@ export type SeriesDetail = {
     outcomeKind: string | null;
     features: Record<string, unknown> | null;
   };
-  explanation: {
-    mapProbabilityA: number;
-    confidence: string;
-    ratingA: number | null;
-    ratingB: number | null;
-    seriesA: number;
-    seriesB: number;
-  };
+  explanation: SeriesExplanation;
   maps: SeriesMap[];
   heroCatalog: HeroCatalog;
 };
