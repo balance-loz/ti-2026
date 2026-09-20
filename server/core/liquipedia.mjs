@@ -644,24 +644,64 @@ export function parseRosters(wikitext) {
   return rosters;
 }
 
+/** A round number out of a heading or a match-list title, if it states one. */
+export function roundNumber(text) {
+  const match = /\b(?:round|раунд)\s*#?(\d{1,2})\b/i.exec(String(text || ""));
+  return match ? Number(match[1]) : null;
+}
+
 /**
  * Every match on the page that carries a start time, bracket or not. This is
  * the schedule the predictor needs in order to freeze before a game begins.
+ *
+ * Group matches also carry the round they were published under. That number
+ * cannot be recovered afterwards — counting a team's matches gets it wrong the
+ * moment somebody has a bye — so the enclosing heading or `Matchlist` title is
+ * tracked while scanning rather than thrown away.
  */
 export function parseScheduledMatches(wikitext) {
   if (!wikitext) return [];
   const results = [];
-  const pattern = /\{\{Match\b/g;
+  // One alternating scan: headings and match lists set the context that the
+  // matches after them inherit.
+  const pattern = /^(={2,6})[ \t]*(.+?)[ \t]*\1[ \t]*$|\{\{Matchlist\b|\{\{Match\b/gm;
+
+  let headingRound = null;
+  let headingDepth = 0;
+  let listRound = null;
+  let listEnd = -1;
   let match;
+
   while ((match = pattern.exec(wikitext)) !== null) {
+    if (match[1]) {
+      const depth = match[1].length;
+      const round = roundNumber(match[2]);
+      // A heading that names a round sets it; any heading at the same level or
+      // above that does not clears it, so a later section cannot inherit it.
+      if (round != null) { headingRound = round; headingDepth = depth; }
+      else if (depth <= headingDepth) { headingRound = null; headingDepth = 0; }
+      continue;
+    }
+
     const template = extractTemplate(wikitext, match.index);
     if (!template) continue;
-    const parsed = parseMatchTemplate(template);
-    // Skip past this template so a nested Match is never read twice.
     pattern.lastIndex = match.index + template.length;
+
+    if (match[0] === "{{Matchlist") {
+      const fields = templateFields(template);
+      listRound = roundNumber(fields.title) ?? roundNumber(fields.id);
+      listEnd = match.index + template.length;
+      // The list's own matches are read by the scan that continues inside it.
+      pattern.lastIndex = match.index + "{{Matchlist".length;
+      continue;
+    }
+
+    const parsed = parseMatchTemplate(template);
     if (!parsed.startTime || !parsed.teamA || !parsed.teamB) continue;
-    results.push(parsed);
+    const inList = match.index < listEnd;
+    results.push({ ...parsed, round: (inList ? listRound : null) ?? headingRound ?? null });
   }
+
   // The same match can appear in both a match list and the bracket.
   const seen = new Set();
   return results.filter((row) => {

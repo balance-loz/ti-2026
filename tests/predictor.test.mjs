@@ -813,3 +813,294 @@ test("a lineup is read from the maps a team actually played", () => {
   assert.deepEqual(lineup.players.map((player) => player.accountId).sort((a, b) => a - b), five);
   assert.equal(lineup.stableMaps, 6, "a single stand-in does not count as a new lineup");
 });
+
+// --- bracket geometry -------------------------------------------------------
+
+const { layoutBracket, BRACKET_LAYOUT } = await import("../server/core/bracket-layout.mjs");
+const { buildTopology: topologyOf } = await import("../server/core/bracket-topology.mjs");
+
+/** The same standard double-elimination shape the topology test uses. */
+function standardTopology() {
+  const section = (name, lane, slots) => ({ name, lane, matches: slots.map((slot) => ({ slot, bestOf: 3 })) });
+  return topologyOf({
+    type: "8U4L2DSL1D",
+    sections: [
+      section("Upper Bracket Quarterfinals", "upper", ["R1M1", "R1M2", "R1M3", "R1M4"]),
+      section("Lower Bracket Round 1", "lower", ["R1M5", "R1M6"]),
+      section("Upper Bracket Semifinals", "upper", ["R2M1", "R2M2"]),
+      section("Lower Bracket Quarterfinals", "lower", ["R2M3", "R2M4"]),
+      section("Upper Bracket Final", "upper", ["R4M1"]),
+      section("Lower Bracket Semifinal", "lower", ["R3M1"]),
+      section("Lower Bracket Final", "lower", ["R4M2"]),
+      section("Grand Final", "final", ["R5M1"]),
+    ],
+  });
+}
+
+test("a bracket is placed with every match level with the two that feed it", () => {
+  const topology = standardTopology();
+  const layout = layoutBracket(topology.nodes);
+  assert.ok(layout);
+
+  const box = new Map(layout.boxes.map((entry) => [entry.slot, entry]));
+  const centre = (slot) => box.get(slot).y + box.get(slot).h / 2;
+
+  // The first round is simply stacked, one match pitch apart.
+  assert.equal(centre("R1M2") - centre("R1M1"), BRACKET_LAYOUT.boxHeight + BRACKET_LAYOUT.rowGap);
+  // Every later round sits midway between its two feeders — that is what makes
+  // the picture readable as a bracket rather than as columns.
+  assert.equal(centre("R2M1"), (centre("R1M1") + centre("R1M2")) / 2);
+  assert.equal(centre("R4M1"), (centre("R2M1") + centre("R2M2")) / 2);
+  assert.equal(centre("R3M1"), (centre("R2M3") + centre("R2M4")) / 2);
+  // A lower round that takes a loser from above has one same-lane feeder and
+  // follows it, which is how a real lower bracket runs. Asserted against the
+  // wiring rather than against named slots, because which match feeds which
+  // depends on the order the organiser listed them in.
+  let dropRounds = 0;
+  for (const node of topology.nodes) {
+    const sameLane = node.sources.filter((source) => source.from === "winner"
+      && topology.bySlot.get(source.slot)?.lane === node.lane);
+    if (node.lane !== "lower" || sameLane.length !== 1) continue;
+    dropRounds += 1;
+    assert.equal(centre(node.slot), centre(sameLane[0].slot), `${node.slot} should follow ${sameLane[0].slot}`);
+  }
+  assert.ok(dropRounds >= 2, "a double-elimination lower bracket has drop rounds");
+  // The grand final belongs to neither lane and sits between the two finals.
+  assert.equal(centre("R5M1"), (centre("R4M1") + centre("R4M2")) / 2);
+
+  // The lanes never overlap, and the divider falls between them.
+  const upperBottom = Math.max(...layout.boxes.filter((entry) => entry.lane === "upper").map((entry) => entry.y + entry.h));
+  const lowerTop = Math.min(...layout.boxes.filter((entry) => entry.lane === "lower").map((entry) => entry.y));
+  assert.ok(lowerTop >= upperBottom);
+  assert.equal(layout.dividers.length, 1);
+  assert.ok(layout.dividers[0] > upperBottom && layout.dividers[0] < lowerTop);
+
+  // Nothing is drawn outside the canvas it declares.
+  for (const entry of layout.boxes) {
+    assert.ok(entry.x >= 0 && entry.x + entry.w <= layout.width, `${entry.slot} outside horizontally`);
+    assert.ok(entry.y >= 0 && entry.y + entry.h <= layout.height, `${entry.slot} outside vertically`);
+  }
+});
+
+test("only the winner's path is drawn, and it is drawn as an elbow", () => {
+  const topology = standardTopology();
+  const layout = layoutBracket(topology.nodes);
+  const box = new Map(layout.boxes.map((entry) => [entry.slot, entry]));
+
+  // A loser drop is real but is not a line: drawing it would put an edge on
+  // nearly every match and turn the bracket into a mesh.
+  assert.equal(layout.edges.filter((edge) => edge.to === "R1M5").length, 0);
+  assert.equal(layout.edges.filter((edge) => edge.to === "R1M1").length, 0, "seeded matches have no incoming line");
+  const winnerSources = topology.nodes
+    .flatMap((node) => node.sources.filter((source) => source.from === "winner"));
+  assert.equal(layout.edges.length, winnerSources.length);
+
+  for (const edge of layout.edges) {
+    const from = box.get(edge.from);
+    const to = box.get(edge.to);
+    assert.equal(edge.points.length, 4);
+    assert.equal(edge.points[0][0], from.x + from.w, "leaves the right edge of its source");
+    assert.equal(edge.points[3][0], to.x, "arrives at the left edge of its target");
+    assert.equal(edge.points[1][0], edge.points[2][0], "the middle segment is vertical");
+    // Anchored to the target, so an edge that skips a column runs straight at
+    // its own height and turns only just before it arrives.
+    assert.equal(edge.points[1][0], to.x - BRACKET_LAYOUT.columnGap / 2);
+    assert.equal(edge.points[0][1], from.y + from.h / 2);
+    assert.equal(edge.points[3][1], to.y + to.h / 2);
+  }
+
+  // The upper final reaches the grand final across a skipped column.
+  const long = layout.edges.find((edge) => edge.from === "R4M1" && edge.to === "R5M1");
+  assert.ok(long);
+  assert.ok(box.get("R5M1").column - box.get("R4M1").column > 1);
+});
+
+test("an unusable bracket is declined rather than drawn wrong", () => {
+  assert.equal(layoutBracket([]), null);
+  assert.equal(layoutBracket(null), null);
+  // A stored projection written before rows carried their wiring.
+  const stripped = standardTopology().nodes.map((node) => {
+    const copy = { ...node };
+    delete copy.sources;
+    return copy;
+  });
+  assert.equal(layoutBracket(stripped), null);
+  // A lane the picture has no place for.
+  assert.equal(layoutBracket([{ slot: "X", lane: "group", column: 0, sources: [] }]), null);
+});
+
+// --- the group table --------------------------------------------------------
+
+const { groupTable, seriesStages } = await import("../server/core/group-table.mjs");
+const { linkScheduledToSeries } = await import("../server/jobs/freeze-scheduled.mjs");
+
+const GROUP_RATINGS = {
+  modelId: "ratings-group-test",
+  ratings: {
+    "701": { rating: 1.4, series: 30, name: "Team 701" },
+    "702": { rating: 0.2, series: 30, name: "Team 702" },
+    "703": { rating: 0.8, series: 30, name: "Team 703" },
+    "704": { rating: -0.4, series: 30, name: "Team 704" },
+  },
+  validation: {},
+};
+
+/** A 2:0 series between two teams, as two maps sharing one series id. */
+function playSeries(leagueId, seriesId, winner, loser, startTime) {
+  seedMap({ matchId: seriesId * 10 + 1, leagueId, seriesId: String(seriesId), radiant: winner, dire: loser, radiantWin: 1, startTime });
+  seedMap({ matchId: seriesId * 10 + 2, leagueId, seriesId: String(seriesId), radiant: loser, dire: winner, radiantWin: 0, startTime: startTime + 1800 });
+}
+
+const addFixture = (leagueId, { key, lane = "group", round = null, a, b, startTime, seriesKey = null, slot = null }) =>
+  db.prepare(`INSERT INTO scheduled_matches(league_id, source, external_key, slot, stage, lane, round,
+      team_a_name, team_b_name, team_a_id, team_b_id, best_of, start_time, winner_slot, series_key, updated_at)
+    VALUES(?, 'liquipedia', ?,?,?,?,?,?,?,?,?,3,?,NULL,?,?)`)
+    .run(leagueId, key, slot, lane === "group" ? "Group Stage" : "Playoffs", lane, round,
+      `Team ${a}`, `Team ${b}`, a, b, startTime, seriesKey, new Date().toISOString());
+
+function seedSwissLeague(leagueId) {
+  upsertTournament(db, { leagueId, name: `Swiss ${leagueId}`, tier: "professional" });
+  for (const id of [701, 702, 703, 704]) upsertTeam(db, { teamId: id, name: `Team ${id}` });
+
+  // Rounds one and two are played; round three is only scheduled.
+  playSeries(leagueId, leagueId + 1, 701, 702, NOW - 5 * DAY);
+  playSeries(leagueId, leagueId + 2, 703, 704, NOW - 5 * DAY + HOUR);
+  playSeries(leagueId, leagueId + 3, 701, 703, NOW - 4 * DAY);
+  playSeries(leagueId, leagueId + 4, 702, 704, NOW - 4 * DAY + HOUR);
+  rebuildSeries(db, leagueId);
+
+  const keyOf = (a, b) => db.prepare(`SELECT series_key FROM series WHERE league_id = ?
+      AND ((team_a_id = ? AND team_b_id = ?) OR (team_a_id = ? AND team_b_id = ?))`)
+    .get(leagueId, a, b, b, a)?.series_key ?? null;
+
+  return { keyOf };
+}
+
+test("a Swiss table is built from the published rounds and links every played cell", () => {
+  const leagueId = 900060;
+  const { keyOf } = seedSwissLeague(leagueId);
+
+  addFixture(leagueId, { key: "r1a", round: 1, a: 701, b: 702, startTime: NOW - 5 * DAY, seriesKey: keyOf(701, 702) });
+  addFixture(leagueId, { key: "r1b", round: 1, a: 703, b: 704, startTime: NOW - 5 * DAY + HOUR, seriesKey: keyOf(703, 704) });
+  addFixture(leagueId, { key: "r2a", round: 2, a: 701, b: 703, startTime: NOW - 4 * DAY, seriesKey: keyOf(701, 703) });
+  addFixture(leagueId, { key: "r2b", round: 2, a: 702, b: 704, startTime: NOW - 4 * DAY + HOUR, seriesKey: keyOf(702, 704) });
+  // Round three exists on the page but has not been played.
+  addFixture(leagueId, { key: "r3a", round: 3, a: 701, b: 704, startTime: NOW + DAY });
+  addFixture(leagueId, { key: "r3b", round: 3, a: 702, b: 703, startTime: NOW + DAY + HOUR });
+
+  const table = groupTable(db, leagueId, { ratings: GROUP_RATINGS, playoffSlots: 2 });
+  assert.equal(table.source, "published_rounds");
+  assert.equal(table.rounds.length, 3);
+  assert.deepEqual(table.rounds.map((round) => round.label), ["Раунд 1", "Раунд 2", "Раунд 3"]);
+  assert.equal(table.rows.length, 4);
+
+  // Two wins puts 701 first, and the table is ordered by what happened.
+  const leader = table.rows[0];
+  assert.equal(leader.team.id, "701");
+  assert.equal(leader.seriesWins, 2);
+  assert.equal(leader.mapWins, 4);
+  assert.equal(leader.qualifying, true);
+  assert.equal(table.rows.at(-1).qualifying, false);
+
+  const first = leader.cells[0];
+  assert.equal(first.result, "win");
+  assert.equal(first.scoreFor, 2);
+  assert.equal(first.scoreAgainst, 0);
+  assert.equal(first.opponent.id, "702");
+  assert.match(first.href, /^\/match\//, "a played cell opens its own explanation");
+
+  // The loser of the same match sees it from its own side.
+  const beaten = table.rows.find((row) => row.team.id === "702");
+  assert.equal(beaten.cells[0].result, "loss");
+  assert.equal(beaten.cells[0].scoreFor, 0);
+  assert.equal(beaten.cells[0].seriesKey, first.seriesKey);
+
+  // An unplayed round has no score and cannot be clicked into.
+  const upcoming = leader.cells[2];
+  assert.equal(upcoming.status, "scheduled");
+  assert.equal(upcoming.scoreFor, null);
+  assert.equal(upcoming.href, null);
+});
+
+test("an unplayed cell carries the model's number, from that row's own side", () => {
+  const leagueId = 900061;
+  const { keyOf } = seedSwissLeague(leagueId);
+  addFixture(leagueId, { key: "p1", round: 1, a: 701, b: 702, startTime: NOW - 5 * DAY, seriesKey: keyOf(701, 702) });
+  addFixture(leagueId, { key: "p2", round: 2, a: 701, b: 704, startTime: NOW + DAY });
+
+  const table = groupTable(db, leagueId, { ratings: GROUP_RATINGS, playoffSlots: 2 });
+  const strong = table.rows.find((row) => row.team.id === "701").cells[1];
+  const weak = table.rows.find((row) => row.team.id === "704").cells[1];
+  assert.equal(strong.probabilitySource, "model");
+  // The two sides of one match are two views of the same number.
+  assert.ok(Math.abs(strong.probability + weak.probability - 1) < 1e-9);
+  assert.ok(strong.probability > 0.5, "the higher-rated team is favoured");
+
+  // A played cell never gets a fresh probability: that would be hindsight.
+  const played = table.rows.find((row) => row.team.id === "701").cells[0];
+  assert.equal(played.probabilitySource, null);
+  assert.equal(played.probability, null);
+});
+
+test("without published rounds the table falls back to each team's own order and says so", () => {
+  const leagueId = 900062;
+  seedSwissLeague(leagueId);
+  const table = groupTable(db, leagueId, { ratings: GROUP_RATINGS, playoffSlots: 2 });
+
+  assert.equal(table.source, "match_ordinal");
+  assert.deepEqual(table.rounds.map((round) => round.label), ["Матч 1", "Матч 2"]);
+  // The caption has to admit the numbering is ours, not the organiser's.
+  assert.match(table.caveat, /по порядку/i);
+  for (const row of table.rows) {
+    assert.equal(row.cells.filter(Boolean).length, 2, "every team played twice, so no gaps");
+  }
+});
+
+test("a playoff series never appears in the group table", () => {
+  const leagueId = 900063;
+  const { keyOf } = seedSwissLeague(leagueId);
+  // A bracket slot dated after the group stage, and a series played under it.
+  playSeries(leagueId, leagueId + 5, 701, 703, NOW + 2 * DAY);
+  rebuildSeries(db, leagueId);
+  addFixture(leagueId, { key: "bracket:R1M1", lane: "upper", slot: "R1M1", a: 701, b: 703, startTime: NOW + 2 * DAY });
+
+  const stages = seriesStages(db, leagueId);
+  assert.equal(stages.source, "bracket_start_time");
+  const playoffKey = db.prepare(`SELECT series_key FROM series WHERE league_id = ? ORDER BY start_time DESC LIMIT 1`)
+    .get(leagueId).series_key;
+  assert.equal(stages.byKey.get(playoffKey), "playoff");
+  assert.equal(stages.byKey.get(keyOf(701, 702)), "group");
+
+  const table = groupTable(db, leagueId, { ratings: GROUP_RATINGS });
+  const keys = table.rows.flatMap((row) => row.cells.filter(Boolean).map((cell) => cell.seriesKey));
+  assert.ok(!keys.includes(playoffKey), "a playoff result must not sit in the group table");
+});
+
+test("linking a scheduled match records which stage its series belonged to", () => {
+  const leagueId = 900064;
+  const { keyOf } = seedSwissLeague(leagueId);
+  addFixture(leagueId, { key: "link-1", round: 1, a: 701, b: 702, startTime: NOW - 5 * DAY });
+
+  linkScheduledToSeries(db, { nowSeconds: NOW + 10 * DAY });
+  const key = keyOf(701, 702);
+  assert.equal(db.prepare("SELECT stage FROM series WHERE series_key = ?").get(key).stage, "group");
+
+  // A later resync of the results must not wipe what the schedule told us.
+  rebuildSeries(db, leagueId);
+  assert.equal(db.prepare("SELECT stage FROM series WHERE series_key = ?").get(key).stage, "group");
+});
+
+test("a rescheduled fixture is shown once, as the row that produced a result", () => {
+  const leagueId = 900065;
+  const { keyOf } = seedSwissLeague(leagueId);
+  // The organiser's key carries the start time, so moving a match leaves the
+  // old row behind. Both describe the same match and must collapse into one.
+  addFixture(leagueId, { key: "moved-old", round: 1, a: 701, b: 702, startTime: NOW - 6 * DAY });
+  addFixture(leagueId, { key: "moved-new", round: 1, a: 701, b: 702, startTime: NOW - 5 * DAY, seriesKey: keyOf(701, 702) });
+
+  const table = groupTable(db, leagueId, { ratings: GROUP_RATINGS });
+  const leader = table.rows.find((row) => row.team.id === "701");
+  const firstRound = leader.cells.filter((cell) => cell && cell.opponent.id === "702");
+  assert.equal(firstRound.length, 1);
+  assert.equal(firstRound[0].seriesKey, keyOf(701, 702), "the row that reached a result is the one kept");
+});

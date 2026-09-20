@@ -228,14 +228,21 @@ function storeSchedule(db, leagueId, parsed, teams) {
     if (rows.some((row) => row.startTime === match.startTime
       && normaliseTeamName(row.teamA) === normaliseTeamName(match.teamA)
       && normaliseTeamName(row.teamB) === normaliseTeamName(match.teamB))) continue;
+    // The round travels with the fixture: the group table cannot recover it
+    // afterwards, and the key deliberately stays time-based (see below).
     rows.push({ ...match, stage: "Group Stage", lane: "group", slot: null, key });
   }
 
-  const insert = db.prepare(`INSERT INTO scheduled_matches(league_id, source, external_key, slot, stage, lane,
+  // The group key stays `time:<start>:<names>` on purpose. It is the identity
+  // frozen predictions are written against (`sched:<league>:<key>`), so changing
+  // it would orphan calls the model already committed to.
+  const insert = db.prepare(`INSERT INTO scheduled_matches(league_id, source, external_key, slot, stage, lane, round,
       team_a_name, team_b_name, team_a_id, team_b_id, best_of, start_time, winner_slot, updated_at)
-    VALUES(?, 'liquipedia', ?,?,?,?,?,?,?,?,?,?,?,?)
+    VALUES(?, 'liquipedia', ?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(league_id, source, external_key) DO UPDATE SET
       stage=excluded.stage, lane=excluded.lane,
+      -- A later read that lost the heading must not erase a round we already had.
+      round=COALESCE(excluded.round, scheduled_matches.round),
       team_a_name=excluded.team_a_name, team_b_name=excluded.team_b_name,
       team_a_id=COALESCE(excluded.team_a_id, scheduled_matches.team_a_id),
       team_b_id=COALESCE(excluded.team_b_id, scheduled_matches.team_b_id),
@@ -249,7 +256,7 @@ function storeSchedule(db, leagueId, parsed, teams) {
     const teamA = row.teamA ? matchTeamName(row.teamA, teams) : null;
     const teamB = row.teamB ? matchTeamName(row.teamB, teams) : null;
     if (teamA && teamB) resolved += 1;
-    insert.run(leagueId, row.key, row.slot ?? null, row.stage ?? null, row.lane ?? null,
+    insert.run(leagueId, row.key, row.slot ?? null, row.stage ?? null, row.lane ?? null, row.round ?? null,
       row.teamA ?? null, row.teamB ?? null, teamA?.team_id ?? null, teamB?.team_id ?? null,
       row.bestOf ?? null, row.startTime ? Math.floor(Date.parse(row.startTime) / 1000) : null,
       row.winner ?? null, at);

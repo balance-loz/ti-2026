@@ -4,11 +4,13 @@
 import { useCallback, useMemo } from "react";
 import {
   api, clock, CONFIDENCE_LABELS, formatDateTime, FORMAT_LABELS, percent, probabilityPercent, relativeTime,
-  type HeroCatalog, type LiveGame, type ProjectedSlot, type Projection,
+  type HeroCatalog, type LiveGame, type Projection,
   type SeriesRow, type TournamentForecast, type TournamentFormat,
 } from "../../lib/api";
 import { useLastPathSegment, usePolled } from "../../lib/hooks";
 import { Badge, EmptyState, ErrorState, Footer, HeroStrip, Panel, ProbabilityBar, Team, TopBar } from "../../components/shell";
+import { ProjectedBracket } from "../../components/bracket";
+import { GroupStageTable } from "../../components/group-table";
 
 function LiveGameCard({ game, heroes }: { game: LiveGame; heroes: HeroCatalog }) {
   const probability = game.frozenDraftProbabilityRadiant ?? game.draft?.probabilityRadiant ?? null;
@@ -48,13 +50,6 @@ function LiveGameCard({ game, heroes }: { game: LiveGame; heroes: HeroCatalog })
 }
 
 
-const LANE_LABELS: Record<string, string> = {
-  upper: "Верхняя сетка",
-  lower: "Нижняя сетка",
-  final: "Гранд-финал",
-  group: "Групповой этап",
-};
-
 function FormatPanel({ format, source, page }: { format: TournamentFormat; source: string | null; page: string | null }) {
   return (
     <>
@@ -85,102 +80,13 @@ function FormatPanel({ format, source, page }: { format: TournamentFormat; sourc
   );
 }
 
-function ProjectedMatch({ slot }: { slot: ProjectedSlot }) {
-  const aWins = Boolean(slot.winner && slot.teamA && slot.winner.id === slot.teamA.id);
-  const bWins = Boolean(slot.winner && slot.teamB && slot.winner.id === slot.teamB.id);
-  const missing = <span className="dp-muted dp-small">не определена</span>;
-  return (
-    <div className={slot.decided ? "dp-bracket-match dp-bracket-played" : "dp-bracket-match"}>
-      <div className={aWins ? "dp-bracket-side dp-bracket-won" : "dp-bracket-side"}>
-        {slot.teamA ? <Team team={slot.teamA} compact /> : missing}
-        {slot.probabilityA !== null ? <span className="dp-bracket-odds">{(slot.probabilityA * 100).toFixed(0)}%</span> : null}
-      </div>
-      <div className={bWins ? "dp-bracket-side dp-bracket-won" : "dp-bracket-side"}>
-        {slot.teamB ? <Team team={slot.teamB} compact /> : missing}
-        {slot.probabilityA !== null ? <span className="dp-bracket-odds">{((1 - slot.probabilityA) * 100).toFixed(0)}%</span> : null}
-      </div>
-      <div className="dp-bracket-meta">
-        {slot.decided ? "сыграно" : slot.known ? "пара известна" : "прогноз"}
-        {slot.bestOf ? ` · Bo${slot.bestOf}` : null}
-        {slot.startTime ? ` · ${formatDateTime(slot.startTime)}` : null}
-      </div>
-    </div>
-  );
-}
-
-/**
- * The bracket laid out left to right: rounds advance rightwards and the grand
- * final sits in the last column, with the upper and lower bands converging on
- * it — the way a bracket is normally read.
- */
-function ProjectedBracket({ projection }: { projection: Projection }) {
-  const columns = Math.max(1, projection.columns);
-  const bands = [
-    { lane: "upper" as const, title: LANE_LABELS.upper },
-    { lane: "lower" as const, title: LANE_LABELS.lower },
-    { lane: "final" as const, title: LANE_LABELS.final },
-  ];
-  const style = { gridTemplateColumns: `repeat(${columns}, minmax(190px, 1fr))` };
-
-  return (
-    <div className="dp-bracket-flow">
-      {bands.map(({ lane, title }) => {
-        const rows = projection.bracket.filter((slot) => slot.lane === lane);
-        if (!rows.length) return null;
-        return (
-          <div key={lane} className={`dp-bracket-band dp-bracket-${lane}`}>
-            <h3>{title}</h3>
-            <div className="dp-bracket-grid" style={style}>
-              {Array.from({ length: columns }, (_, column) => {
-                const inColumn = rows.filter((slot) => slot.column === column);
-                return (
-                  <div key={column} className="dp-bracket-column">
-                    {inColumn.length ? <span className="dp-bracket-round-name">{inColumn[0].section}</span> : null}
-                    {inColumn.map((slot) => <ProjectedMatch key={slot.slot} slot={slot} />)}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function ProjectedStandings({ projection }: { projection: Projection }) {
-  return (
-    <div className="dp-table-wrap">
-      <table className="dp-table">
-        <thead>
-          <tr><th>#</th><th>Команда</th><th>Сейчас</th><th>Ожидаемое место</th><th>Пройдёт дальше</th></tr>
-        </thead>
-        <tbody>
-          {projection.standings.map((row, index) => (
-            <tr key={row.id} className={index < projection.playoffSlots ? "dp-row-qualify" : undefined}>
-              <td className="dp-mono">{index + 1}</td>
-              <td><Team team={row} compact /></td>
-              <td>{row.seriesWins}–{row.seriesLosses}</td>
-              <td className="dp-mono">{row.expectedPlace.toFixed(1)}</td>
-              <td>
-                <ProbabilityBar
-                  probabilityA={row.qualifyChance / 100}
-                  labelA={`${row.qualifyChance.toFixed(0)}%`}
-                  labelB=""
-                />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function ForecastTable({ forecast }: { forecast: TournamentForecast }) {
+function ForecastTable({ forecast, projection }: { forecast: TournamentForecast; projection: Projection | null }) {
   const alive = forecast.teams.filter((team) => !team.eliminated);
   const out = forecast.teams.filter((team) => team.eliminated);
   const rows = [...alive, ...out];
+  // The simulation's own view of the group stage, joined in rather than given a
+  // table of its own — the same teams three times over reads as noise.
+  const projected = new Map((projection?.standings ?? []).map((row) => [row.id, row]));
   return (
     <>
       <div className="dp-forecast-meta">
@@ -198,6 +104,8 @@ function ForecastTable({ forecast }: { forecast: TournamentForecast }) {
               <th>Команда</th>
               <th>Серии</th>
               <th>Карты</th>
+              {projected.size ? <th title="Ожидаемое итоговое место в группе">Место</th> : null}
+              {projected.size ? <th title="Вероятность выйти из группы">Пройдёт</th> : null}
               <th>Чемпион</th>
               <th>Финал</th>
               <th>Топ-4</th>
@@ -212,6 +120,12 @@ function ForecastTable({ forecast }: { forecast: TournamentForecast }) {
                 </td>
                 <td>{team.seriesWins}–{team.seriesLosses}</td>
                 <td className="dp-muted">{team.mapWins}–{team.mapLosses}</td>
+                {projected.size ? (
+                  <td className="dp-mono">{projected.get(team.teamId)?.expectedPlace?.toFixed(1) ?? "—"}</td>
+                ) : null}
+                {projected.size ? (
+                  <td className="dp-mono">{percent(projected.get(team.teamId)?.qualifyChance)}</td>
+                ) : null}
                 <td><b>{percent(team.champion)}</b></td>
                 <td>{percent(team.final)}</td>
                 <td>{percent(team.top4)}</td>
@@ -251,10 +165,17 @@ function SeriesTable({ series }: { series: SeriesRow[] }) {
                   </div>
                   <span className="dp-muted dp-small">
                     {formatDateTime(row.startTime)} · Bo{row.bestOf ?? "?"}
+                    {" · "}
+                    <a className="dp-link" href={`/match/${encodeURIComponent(row.seriesKey)}`}>разбор</a>
                   </span>
                 </td>
                 <td>
-                  {row.status === "finished" ? <b>{row.scoreA} : {row.scoreB}</b> : <Badge tone={row.status === "live" ? "live" : "neutral"}>{row.status === "live" ? "идёт" : "ожидается"}</Badge>}
+                  {/* The cell itself is the link: nothing inside it is one. */}
+                  <a className="dp-cell-link" href={`/match/${encodeURIComponent(row.seriesKey)}`}>
+                    {row.status === "finished"
+                      ? <b>{row.scoreA} : {row.scoreB}</b>
+                      : <Badge tone={row.status === "live" ? "live" : "neutral"}>{row.status === "live" ? "идёт" : "ожидается"}</Badge>}
+                  </a>
                 </td>
                 <td>
                   {probabilityA === null ? (
@@ -313,7 +234,7 @@ export default function TournamentPage() {
     );
   }
 
-  const { tournament, forecast, series, live, format, structure, schedule } = detail;
+  const { tournament, forecast, series, live, format, structure, schedule, groupStage } = detail;
   const bracketSlots = (schedule ?? []).filter((slot) => slot.lane && slot.lane !== "group");
   const projection = forecast?.projection ?? null;
   const finished = series.filter((row) => row.status === "finished");
@@ -349,12 +270,12 @@ export default function TournamentPage() {
         </Panel>
       ) : null}
 
-      {projection?.standings?.length ? (
+      {groupStage?.rows.length ? (
         <Panel
-          title="Ожидаемая таблица"
-          subtitle={`Как, по модели, закончится групповой этап. Дальше проходят ${projection.playoffSlots}`}
+          title="Групповой этап"
+          subtitle="Кто с кем играл и чем закончилось. Любой матч открывается кликом"
         >
-          <ProjectedStandings projection={projection} />
+          <GroupStageTable stage={groupStage} />
         </Panel>
       ) : null}
 
@@ -387,10 +308,10 @@ export default function TournamentPage() {
       ) : null}
 
       <Panel
-        title="Кто выиграет турнир"
-        subtitle="Монте-Карло по текущему положению и рейтингам команд"
+        title="Прогноз модели"
+        subtitle="Монте-Карло по текущему положению и рейтингам команд. Ничего из этого не оценивается — оценка идёт только по прогнозам, зафиксированным до конкретного матча"
       >
-        {forecast ? <ForecastTable forecast={forecast} /> : (
+        {forecast ? <ForecastTable forecast={forecast} projection={projection} /> : (
           <EmptyState title="Прогноз ещё не построен" hint="Нужно несколько сыгранных серий и обученная рейтинговая модель." />
         )}
       </Panel>
@@ -403,6 +324,7 @@ export default function TournamentPage() {
 
       <Panel
         title="Сыгранные серии"
+        actions={<a className="dp-link" href="/model/team_ratings">все прогнозы модели →</a>}
         subtitle={accuracy.seriesRow
           ? `Точность на этом турнире: ${percent((accuracy.seriesRow.accuracy ?? 0) * 100)} на ${accuracy.seriesRow.count} сериях, Brier ${accuracy.seriesRow.brier?.toFixed(3) ?? "—"}`
           : "Прогноз записывается только до результата, поэтому у серий, сыгранных до запуска системы, его нет — точность начинает накапливаться с первого матча, который система застала."}
@@ -411,7 +333,11 @@ export default function TournamentPage() {
       </Panel>
 
       {accuracy.mapRow ? (
-        <Panel title="Точность по драфтам" subtitle="Карты, предсказанные по пикам в прямом эфире">
+        <Panel
+          title="Точность по драфтам"
+          subtitle="Карты, предсказанные по пикам в прямом эфире"
+          actions={<a className="dp-link" href="/model/draft">все прогнозы модели →</a>}
+        >
           <dl className="dp-metrics">
             <div><dt>карт</dt><dd>{accuracy.mapRow.count}</dd></div>
             <div><dt>точность</dt><dd>{percent((accuracy.mapRow.accuracy ?? 0) * 100)}</dd></div>

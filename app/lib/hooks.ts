@@ -54,6 +54,25 @@ const subscribePath = (onChange: () => void) => {
   return () => { pathListeners.delete(onChange); window.removeEventListener("popstate", onChange); };
 };
 
+/**
+ * Whether a media query matches right now.
+ *
+ * Read through a store for the same reason as the path: it is browser state
+ * that exists before React hydrates, and copying it into state inside an effect
+ * would render the wrong layout first and then jump.
+ */
+export function useMediaQuery(query: string): boolean {
+  return useSyncExternalStore(
+    (onChange) => {
+      const list = window.matchMedia(query);
+      list.addEventListener("change", onChange);
+      return () => list.removeEventListener("change", onChange);
+    },
+    () => window.matchMedia(query).matches,
+    () => false,
+  );
+}
+
 /** Last path segment of the current URL, decoded. Empty string on the server. */
 export function useLastPathSegment(): string {
   return useSyncExternalStore(

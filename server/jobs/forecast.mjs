@@ -9,6 +9,12 @@ import { projectTournament } from "./project-bracket.mjs";
 
 const ITERATIONS = Math.max(2000, Number(process.env.FORECAST_ITERATIONS || 20_000));
 
+// Bumped when the stored payload gains a field. The fingerprint below is made
+// of data, so without this a league whose results have stopped changing would
+// keep serving the old shape for ever — a finished tournament would never get
+// the bracket wiring that makes its matches clickable.
+const PAYLOAD_VERSION = 2;
+
 /**
  * Everything a forecast depends on, in one fingerprint.
  *
@@ -24,7 +30,7 @@ function inputHash(db, leagueId, ratingsModelId) {
                                FROM scheduled_matches WHERE league_id = ?`).get(leagueId);
   return createHash("sha1")
     .update([
-      leagueId, results.n, results.latest, results.maps,
+      leagueId, PAYLOAD_VERSION, results.n, results.latest, results.maps,
       schedule.n, schedule.latest, schedule.times, schedule.filled,
       ratingsModelId ?? "none",
     ].join("|"))

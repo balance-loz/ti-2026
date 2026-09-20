@@ -294,7 +294,12 @@ export function modelPredictions(db, modelKind, { limit = 200, resolvedOnly = fa
         : ((Number(row.probability_a) >= 0.5 ? 1 : 0) === Number(row.outcome)),
       features: parseJson(row.features_json, null),
     };
-    if (row.scope !== "map") return base;
+    if (row.scope !== "map") {
+      // A series prediction has a date too — it just lives on the series rather
+      // than on a map. Without it the whole column reads as dashes.
+      const played = db.prepare("SELECT start_time FROM series WHERE series_key = ?").get(String(row.subject_key));
+      return { ...base, startTime: played?.start_time ?? base.features?.scheduledStart ?? null };
+    }
     const map = db.prepare("SELECT radiant_picks_json, dire_picks_json, patch, start_time FROM maps WHERE match_id = ?")
       .get(Number(row.subject_key));
     // The prediction was made from the picks the live feed showed, and those are

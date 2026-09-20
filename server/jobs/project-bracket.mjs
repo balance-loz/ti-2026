@@ -26,7 +26,7 @@ function seededRandom(seed) {
 /** The bracket as stored, rebuilt into the shape the topology builder wants. */
 export function storedBracket(db, leagueId) {
   const rows = db.prepare(`SELECT slot, stage, lane, best_of, start_time, team_a_id, team_b_id,
-                                  team_a_name, team_b_name, winner_slot
+                                  team_a_name, team_b_name, winner_slot, series_key
                            FROM scheduled_matches
                            WHERE league_id = ? AND slot IS NOT NULL AND lane IN ('upper','lower','final')
                            ORDER BY COALESCE(start_time, 0) ASC`).all(leagueId);
@@ -46,6 +46,8 @@ export function storedBracket(db, leagueId) {
       teamA: row.team_a_name,
       teamB: row.team_b_name,
       winner: row.winner_slot,
+      // Carried so a drawn match can be clicked through to its explanation.
+      seriesKey: row.series_key,
     });
   }
   return { type: null, sections, matches: rows };
@@ -121,6 +123,10 @@ function projectMostLikelyBracket({ topology, bracket, standings, names, seriesP
       lane: node.lane,
       column: node.column,
       section: node.section,
+      // The wiring travels with the row: without it the page has no way to draw
+      // a line from one match to the next, which is what makes it a bracket.
+      sources: node.sources,
+      seriesKey: actual?.seriesKey ?? null,
       bestOf: node.bestOf,
       startTime: actual?.startTime ? Math.floor(Date.parse(actual.startTime) / 1000) : null,
       decided: Boolean(actual?.winner),

@@ -303,3 +303,62 @@ test("a block is recognised as one and stops the client asking again", async () 
   );
   assert.equal(upstreamRequests, 1, "a cooling-down client must send no requests");
 });
+
+// --- group rounds -----------------------------------------------------------
+
+const ROUNDS_FIXTURE = `
+==Group Stage==
+===Round 1===
+{{Match
+|opponent1={{TeamOpponent|NAVI}}
+|opponent2={{TeamOpponent|MOUZ}}
+|date=September 18, 2026 - 12:00 {{Abbr/EEST}}
+|winner=1
+|map1={{Map|winner=1}}
+|map2={{Map|winner=1}}
+}}
+===Round 2===
+{{Matchlist|id=xY|title=Round 2
+|M1={{Match
+|opponent1={{TeamOpponent|Aurora}}
+|opponent2={{TeamOpponent|LGD}}
+|date=September 19, 2026 - 12:00 {{Abbr/EEST}}
+|map1={{Map|winner=2}}
+}}
+|M2={{Match
+|opponent1={{TeamOpponent|Xtreme}}
+|opponent2={{TeamOpponent|Hokori}}
+|date=September 19, 2026 - 15:00 {{Abbr/EEST}}
+|map1={{Map|winner=1}}
+}}
+}}
+==Playoffs==
+{{Match
+|opponent1={{TeamOpponent|NAVI}}
+|opponent2={{TeamOpponent|Aurora}}
+|date=September 24, 2026 - 10:00 {{Abbr/EEST}}
+|map1={{Map|winner=}}
+}}
+`;
+
+test("a group match carries the round it was published under", () => {
+  const schedule = parseScheduledMatches(ROUNDS_FIXTURE);
+  const byTeams = new Map(schedule.map((row) => [`${row.teamA}|${row.teamB}`, row]));
+
+  // Straight from the section heading.
+  assert.equal(byTeams.get("NAVI|MOUZ").round, 1);
+  // And from a match list's own title, for the matches inside it.
+  assert.equal(byTeams.get("Aurora|LGD").round, 2);
+  assert.equal(byTeams.get("Xtreme|Hokori").round, 2);
+  // A section that names no round must not inherit the previous one: these
+  // fixtures are playoff matches and belong to no group round at all.
+  assert.equal(byTeams.get("NAVI|Aurora").round, null);
+});
+
+test("the bracket keeps carrying slots rather than rounds", () => {
+  // Round tracking must not disturb what the bracket parser already reads.
+  for (const row of parseScheduledMatches(BRACKET_FIXTURE)) {
+    assert.equal(row.round, null, "a bracket match is identified by its slot");
+  }
+  assert.equal(parseBracket(BRACKET_FIXTURE).type, "8U4L2DSL1D");
+});

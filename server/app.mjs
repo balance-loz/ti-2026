@@ -10,6 +10,10 @@ import { heroCatalog } from "./core/heroes.mjs";
 import { teamDetail, seriesDetail, modelPredictions } from "./core/detail.mjs";
 import { activitySnapshot } from "./core/activity.mjs";
 import { scheduledMatches } from "./jobs/sync-structure.mjs";
+import { storedBracket } from "./jobs/project-bracket.mjs";
+import { buildTopology } from "./core/bracket-topology.mjs";
+import { layoutBracket, BRACKET_LAYOUT, BRACKET_LAYOUT_COMPACT } from "./core/bracket-layout.mjs";
+import { groupTable } from "./core/group-table.mjs";
 import { accuracySummary, predictSeries, predictDraftMap, modelVersionBreakdown } from "./core/predictions.mjs";
 import { loadRatings } from "./core/ratings.mjs";
 import { readForecast, forecastTournament } from "./jobs/forecast.mjs";
@@ -127,12 +131,37 @@ function tournamentDetail(slug) {
     slot: item.slot,
     stage: item.stage,
     lane: item.lane,
+    round: item.round ?? null,
+    // Without this a played group fixture cannot be joined to its result, and
+    // nothing on the page can link through to the explanation.
+    seriesKey: item.series_key ?? null,
     startTime: item.start_time,
     bestOf: item.best_of,
     winnerSlot: item.winner_slot,
     teamA: item.team_a_id ? { id: String(item.team_a_id), ...naming(item.team_a_id) } : (item.team_a_name ? { id: "", name: item.team_a_name, logoUrl: null } : null),
     teamB: item.team_b_id ? { id: String(item.team_b_id), ...naming(item.team_b_id) } : (item.team_b_name ? { id: "", name: item.team_b_name, logoUrl: null } : null),
   }));
+
+  // The bracket's geometry is computed on the way out rather than stored: the
+  // forecast's cache key is keyed on data, not on code, so a released change to
+  // the layout would never reach a payload written before it.
+  const projection = forecast?.projection ?? null;
+  if (projection?.bracket?.length) {
+    const wiring = projection.bracket.every((slot) => Array.isArray(slot.sources))
+      ? projection.bracket
+      : buildTopology(storedBracket(db, leagueId) ?? { sections: [] })?.nodes ?? [];
+    projection.layout = layoutBracket(wiring, BRACKET_LAYOUT);
+    projection.layoutCompact = layoutBracket(wiring, BRACKET_LAYOUT_COMPACT);
+  }
+
+  let groupStage = null;
+  try {
+    groupStage = groupTable(db, leagueId, { projection, ratings: loadRatings() });
+  } catch (error) {
+    // A tournament whose group stage cannot be assembled still has a page.
+    groupStage = null;
+    console.error("[api] group table failed", leagueId, error?.message || error);
+  }
 
   return {
     tournament: tournamentSummary(row),
@@ -143,6 +172,7 @@ function tournamentDetail(slug) {
       syncedAt: row.structure_synced_at ?? null,
     },
     schedule,
+    groupStage,
     forecast,
     series,
     live,

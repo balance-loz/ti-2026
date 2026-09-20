@@ -54,6 +54,8 @@ export type ScheduleSlot = {
   slot: string | null;
   stage: string | null;
   lane: "upper" | "lower" | "final" | "group" | null;
+  round: number | null;
+  seriesKey: string | null;
   startTime: number | null;
   bestOf: number | null;
   winnerSlot: number | null;
@@ -69,11 +71,31 @@ export type ProjectedStanding = TeamRef & {
   qualifyChance: number;
 };
 
+/** Where one match's two entrants come from. Drawn only for `winner`. */
+export type BracketSource = { from: "seed" | "winner" | "loser"; slot?: string };
+
+export type BracketBox = { slot: string; lane: string; column: number; x: number; y: number; w: number; h: number };
+export type BracketEdge = { from: string; to: string; points: [number, number][] };
+
+export type BracketLayout = {
+  width: number;
+  height: number;
+  columns: number;
+  boxes: BracketBox[];
+  edges: BracketEdge[];
+  headers: { lane: string; column: number; label: string | null; x: number; y: number; w: number }[];
+  lanes: { lane: string; y: number; height: number }[];
+  dividers: number[];
+  metrics: Record<string, number>;
+};
+
 export type ProjectedSlot = {
   slot: string;
   lane: "upper" | "lower" | "final";
   column: number;
   section: string;
+  sources?: BracketSource[];
+  seriesKey?: string | null;
   bestOf: number | null;
   startTime: number | null;
   decided: boolean;
@@ -92,6 +114,50 @@ export type Projection = {
   bracket: ProjectedSlot[];
   columns: number;
   note: string;
+  // Computed per response, so an older stored forecast still gets a picture.
+  layout?: BracketLayout | null;
+  layoutCompact?: BracketLayout | null;
+};
+
+export type GroupCell = {
+  round: number | null;
+  opponent: TeamRef;
+  status: "finished" | "live" | "scheduled";
+  result: "win" | "loss" | "draw" | null;
+  scoreFor: number | null;
+  scoreAgainst: number | null;
+  bestOf: number | null;
+  startTime: number | null;
+  seriesKey: string | null;
+  href: string | null;
+  probability: number | null;
+  probabilitySource: "frozen" | "model" | null;
+};
+
+export type GroupRow = {
+  rank: number;
+  team: TeamRef;
+  seriesWins: number;
+  seriesLosses: number;
+  seriesDraws: number;
+  mapWins: number;
+  mapLosses: number;
+  mapDiff: number;
+  played: number;
+  qualifying: boolean | null;
+  qualifyChance: number | null;
+  expectedPlace: number | null;
+  cells: (GroupCell | null)[];
+};
+
+export type GroupStage = {
+  leagueId: number;
+  source: "published_rounds" | "match_ordinal";
+  stageSource: string;
+  playoffSlots: number | null;
+  rounds: { round: number | null; label: string; startTime: number | null; played: number; total: number }[];
+  rows: GroupRow[];
+  caveat: string;
 };
 
 export type ForecastTeam = {
@@ -485,6 +551,7 @@ export const api = {
       format: TournamentFormat | null;
       structure: { source: string | null; page: string | null; syncedAt: string | null };
       schedule: ScheduleSlot[];
+      groupStage: GroupStage | null;
       forecast: TournamentForecast | null;
       series: SeriesRow[];
       live: LiveGame[];

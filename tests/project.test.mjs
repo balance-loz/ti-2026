@@ -1600,3 +1600,43 @@ test("forecast jobs enforce authorization, idempotency, read models, cancellatio
     await rm(dataDirectory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   }
 });
+
+test("the bracket stylesheet declares each of its classes once", async () => {
+  const css = await readFile("app/predictor.css", "utf8");
+  // Two blocks used to define these, and the later one silently won — which is
+  // how a stray checkmark ended up fighting the odds for the same corner.
+  // Anchored to the start of a line, so a deliberate descendant selector such
+  // as `.dp-bracket-canvas .dp-bracket-match` is not mistaken for a redefinition.
+  for (const name of ["dp-bracket-match", "dp-bracket-side", "dp-running", "dp-prematch"]) {
+    const count = (css.match(new RegExp(`^\\.${name}\\s*\\{`, "gm")) ?? []).length;
+    assert.equal(count, 1, `.${name} is declared ${count} times`);
+  }
+  // Classes no component references any more.
+  assert.doesNotMatch(css, /\.dp-bracket-rounds\b/);
+  assert.doesNotMatch(css, /\.dp-bracket-lane\s*\{/);
+  // The one rule that survived the cleanup is still needed.
+  const modelPage = await readFile("app/model/[kind]/page.tsx", "utf8");
+  assert.match(modelPage, /dp-prematch/);
+});
+
+test("a tournament page reaches both the match explanation and the model's record", async () => {
+  const pages = await Promise.all([
+    readFile("app/t/[slug]/page.tsx", "utf8"),
+    readFile("app/components/group-table.tsx", "utf8"),
+    readFile("app/components/bracket.tsx", "utf8"),
+  ]);
+  const all = pages.join("\n");
+  // The explanation is only worth building if something links to it.
+  assert.match(all, /\/match\/\$\{encodeURIComponent\(/);
+  assert.match(all, /href="\/model\/(draft|team_ratings)"/);
+  // Native navigation only: Link prefetch is broken under vinext.
+  for (const page of pages) assert.doesNotMatch(page, /from ["']next\/link["']/);
+});
+
+test("the model page links a kind from the table that is always populated", async () => {
+  const page = await readFile("app/model/page.tsx", "utf8");
+  // The accuracy tables vanish until a prediction resolves, so the version
+  // table has to carry a way through as well.
+  const versionsTable = page.slice(page.indexOf("Версии моделей"));
+  assert.match(versionsTable, /href=\{`\/model\/\$\{encodeURIComponent\(version\.kind\)\}`\}/);
+});

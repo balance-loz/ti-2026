@@ -160,7 +160,10 @@ export default function ModelPage() {
         <AccuracyTable rows={status.accuracy30d} title="30 дней" />
       </Panel>
 
-      <Panel title="Версии моделей" subtitle="Активная версия отмечена — она и обслуживает прогнозы">
+      {/* The accuracy tables above disappear until a prediction resolves, and
+          they used to hold the only link to a model's own history. This one is
+          populated the moment anything trains, so the way through lives here. */}
+      <Panel title="Версии моделей" subtitle="Активная версия отмечена — она и обслуживает прогнозы. Нажмите на тип, чтобы увидеть каждый прогноз этой модели">
         <div className="dp-table-wrap">
           <table className="dp-table">
             <thead><tr><th>Тип</th><th>Версия</th><th>Обучена</th><th>Примеров</th><th>Статус</th></tr></thead>
@@ -169,7 +172,11 @@ export default function ModelPage() {
                 const state = versionStatus(version.active, version.metrics as VersionMetrics);
                 return (
                   <tr key={`${version.kind}-${version.modelId}`}>
-                    <td>{KIND_LABELS[version.kind] ?? version.kind}</td>
+                    <td>
+                      <a className="dp-link" href={`/model/${encodeURIComponent(version.kind)}`}>
+                        <b>{KIND_LABELS[version.kind] ?? version.kind}</b>
+                      </a>
+                    </td>
                     <td className="dp-mono">{version.modelId}</td>
                     <td className="dp-muted">{relativeTime(version.trainedAt)}</td>
                     <td>{version.samples?.toLocaleString("ru-RU") ?? "—"}</td>

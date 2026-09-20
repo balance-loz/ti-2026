@@ -105,6 +105,12 @@ export function linkScheduledToSeries(db, { nowSeconds = Date.now() / 1000, wind
 
     db.prepare("UPDATE scheduled_matches SET series_key = ?, updated_at = ? WHERE id = ?")
       .run(series.series_key, nowIso(), row.id);
+    // The results feed never says which stage a series belonged to, but the
+    // fixture we just matched it to does. Recording it here is the only moment
+    // both facts are in hand. COALESCE keeps the first answer; rebuildSeries
+    // does not list `stage` in its upsert, so a later resync cannot undo it.
+    db.prepare("UPDATE series SET stage = COALESCE(stage, ?) WHERE series_key = ?")
+      .run(row.lane === "group" ? "group" : "playoff", series.series_key);
     linked += 1;
 
     // Move the pre-match prediction onto the real series, unless that series

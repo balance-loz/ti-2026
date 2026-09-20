@@ -189,6 +189,10 @@ CREATE TABLE IF NOT EXISTS scheduled_matches (
   slot TEXT,
   stage TEXT,
   lane TEXT,
+  -- Which round of the group stage, as the organiser published it. Null for
+  -- bracket matches, which are identified by their slot instead, and for pages
+  -- that number nothing.
+  round INTEGER,
   -- Nullable: a bracket slot exists, with its date, long before anyone knows
   -- who will play in it. Refusing to store it would mean no bracket until the
   -- playoffs had already begun.
@@ -237,6 +241,12 @@ const COLUMN_MIGRATIONS = {
     // An even best-of can finish level. Without this a drawn Bo2 sits forever
     // as an unfinished Bo3 and never reaches training or scoring.
     is_draw: "INTEGER NOT NULL DEFAULT 0",
+  },
+  scheduled_matches: {
+    // The round the organiser published. Counting a team's matches cannot
+    // replace it: a Swiss bye leaves that team a round short, and every later
+    // result would then be shown under the wrong round.
+    round: "INTEGER",
   },
   predictions: {
     // The scoreline is graded apart from the winner: calling 2:1 instead of 2:0

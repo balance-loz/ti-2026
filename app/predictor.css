@@ -292,59 +292,15 @@
 
 .dp-row-qualify td:first-child { box-shadow: inset 2px 0 0 var(--fusion-accent); }
 
-/* --- background activity ---------------------------------------------------- */
-.dp-running { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
-.dp-running-row {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
-  padding: 12px 16px; border-radius: 10px;
-  background: var(--fusion-accent-soft); border: 1px solid var(--fusion-line);
-}
-.dp-spinner {
-  width: 12px; height: 12px; flex: none; border-radius: 50%;
-  border: 2px solid color-mix(in srgb, var(--fusion-accent) 35%, transparent);
-  border-top-color: var(--fusion-accent);
-  animation: dp-spin .8s linear infinite;
-}
-@keyframes dp-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .dp-spinner { animation-duration: 3s; } }
 
-.dp-activity-log { max-height: 460px; overflow-y: auto; }
-.dp-run-error { color: var(--fusion-danger); }
-
-.dp-table input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--fusion-accent); cursor: pointer; }
-
-/* --- format and bracket ----------------------------------------------------- */
-.dp-rules { margin: 0; padding-left: 18px; }
-.dp-rules li { margin: 2px 0; color: var(--fusion-muted); }
-
-.dp-bracket { display: flex; flex-direction: column; gap: 26px; }
-.dp-bracket-lane h3 {
-  margin: 0 0 10px; font-size: 12px; font-weight: 800;
-  letter-spacing: .08em; text-transform: uppercase; color: var(--fusion-muted);
-}
-.dp-bracket-upper h3 { color: var(--fusion-success); }
-.dp-bracket-lower h3 { color: var(--fusion-danger); }
-.dp-bracket-final h3 { color: var(--fusion-accent); }
-
-.dp-bracket-rounds { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 6px; }
-.dp-bracket-round { display: flex; flex-direction: column; gap: 8px; min-width: 210px; }
-.dp-bracket-round-name {
-  font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
-  color: var(--fusion-muted); white-space: nowrap;
-}
-.dp-bracket-match {
-  display: flex; flex-direction: column; gap: 4px; padding: 10px 12px;
-  background: var(--fusion-surface); border: 1px solid var(--fusion-line); border-radius: 10px;
-}
-.dp-bracket-side { display: flex; align-items: center; min-height: 22px; }
-.dp-bracket-won b { color: var(--fusion-success); }
-.dp-bracket-won::after { content: "✓"; margin-left: auto; color: var(--fusion-success); font-size: 11px; }
-.dp-bracket-meta { font-size: 10px; color: var(--fusion-muted); border-top: 1px solid var(--fusion-line); padding-top: 5px; }
+/* The only live rule from the retired duplicate block below: used by the model
+   history page to mark a call that was frozen before the match started. */
 .dp-prematch {
   display: inline-block; padding: 1px 6px; border-radius: 4px;
   background: var(--fusion-accent-soft); color: var(--fusion-accent);
   font-weight: 700; font-size: 9px; letter-spacing: .05em; text-transform: uppercase;
 }
+
 
 /* --- explanations --------------------------------------------------------- */
 .dp-basis { margin: 0 0 14px; font-size: 12px; color: var(--fusion-muted); }
@@ -446,3 +402,61 @@
 .dp-why summary::marker { color: var(--fusion-muted); }
 .dp-why-body { margin-top: 12px; }
 .dp-why-body .dp-influence li { grid-template-columns: 40px minmax(76px, 1fr) minmax(46px, 1.2fr) 72px 68px; gap: 7px; }
+
+/* --- the bracket canvas ------------------------------------------------------
+   Matches are placed by the server (server/core/bracket-layout.mjs); this only
+   provides the surface they sit on and the look of the wires between them. */
+.dp-bracket-scroll {
+  overflow-x: auto; overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity; padding-bottom: 8px;
+}
+.dp-bracket-scroll:focus-visible { outline: 2px solid var(--fusion-accent); outline-offset: 3px; border-radius: 8px; }
+.dp-bracket-canvas { position: relative; }
+.dp-bracket-wires { position: absolute; inset: 0; pointer-events: none; }
+.dp-bracket-wires path {
+  fill: none; stroke: var(--fusion-line); stroke-width: 1.5;
+  stroke-linejoin: round; stroke-linecap: round;
+}
+.dp-bracket-divider { stroke: var(--fusion-line); stroke-dasharray: 4 7; }
+.dp-bracket-head {
+  position: absolute; scroll-snap-align: start;
+  font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--fusion-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dp-bracket-head.dp-bracket-upper { color: var(--fusion-success); }
+.dp-bracket-head.dp-bracket-lower { color: var(--fusion-danger); }
+.dp-bracket-head.dp-bracket-final { color: var(--fusion-accent); }
+.dp-bracket-canvas .dp-bracket-match {
+  box-sizing: border-box; overflow: hidden; gap: 2px; padding: 8px 11px;
+}
+a.dp-bracket-match { text-decoration: none; color: inherit; }
+a.dp-bracket-match:hover { border-color: var(--fusion-accent); }
+
+/* --- the group table --------------------------------------------------------
+   Colour marks a fact. A match still to come carries the model's number in
+   plain grey, so a forecast can never be mistaken for a result. */
+.dp-group-table td { padding: 8px 10px; }
+.dp-group-cell {
+  display: flex; align-items: center; gap: 8px; min-width: 116px;
+  margin: -8px -10px; padding: 8px 10px; color: inherit; text-decoration: none;
+}
+a.dp-group-cell:hover { background: color-mix(in srgb, var(--fusion-accent) 10%, transparent); }
+.dp-group-score { margin-left: auto; font-family: var(--font-geist-mono), monospace; font-size: 13px; }
+.dp-group-odds {
+  margin-left: auto; font-family: var(--font-geist-mono), monospace;
+  font-size: 11px; color: var(--fusion-muted);
+}
+.dp-group-win { background: color-mix(in srgb, var(--fusion-success) 11%, transparent); }
+.dp-group-loss { background: color-mix(in srgb, var(--fusion-danger) 11%, transparent); }
+.dp-group-draw { background: var(--fusion-elevated); }
+.dp-group-win .dp-group-score { color: var(--fusion-success); }
+.dp-group-loss .dp-group-score { color: var(--fusion-danger); }
+.dp-group-live { box-shadow: inset 0 0 0 1px var(--fusion-accent); }
+.dp-group-empty { text-align: center; }
+.dp-group-qualify td:first-child { box-shadow: inset 3px 0 0 var(--fusion-success); }
+.dp-group-out td:first-child { box-shadow: inset 3px 0 0 var(--fusion-danger); }
+.dp-group-forecast { border-left: 1px solid var(--fusion-line); }
+
+/* A cell whose whole body is a link, used where nothing inside it links itself. */
+.dp-cell-link { display: block; color: inherit; text-decoration: none; }
+.dp-cell-link:hover { color: var(--fusion-accent); }
