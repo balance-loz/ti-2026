@@ -52,7 +52,8 @@ export function fitProductionTeamModel(seriesList, targetLineups = [], {
   const ratings = Object.fromEntries([...nodes].map((node) => [node, 0]));
   const weighted = seriesList.map((series) => ({
     ...series,
-    weight: (series.rosterWeight ?? 1) * (series.seriesInformation ?? seriesInformation(series.wins, series.losses, config))
+    weight: (series.rosterWeight ?? 1) * (series.tierWeight ?? 1)
+      * (series.seriesInformation ?? seriesInformation(series.wins, series.losses, config))
       * 0.5 ** (((nowSeconds - series.startTime) / 86400) / config.halfLifeDays),
   }));
   for (let iteration = 0; iteration < config.iterations; iteration += 1) {

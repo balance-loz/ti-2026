@@ -2,7 +2,10 @@
 /* eslint-disable @next/next/no-html-link-for-pages, @next/next/no-img-element -- vinext uses native navigation, and hero art is served from an external CDN. */
 
 import { useCallback } from "react";
-import { api, formatDateTime, percent, probabilityPercent, type HeroCatalog, type TeamSeriesRow } from "../../lib/api";
+import {
+  api, formatDate, formatDateTime, percent, probabilityPercent,
+  type HeroCatalog, type Lineup, type RosterEra, type TeamSeriesRow,
+} from "../../lib/api";
 import { useLastPathSegment, usePolled } from "../../lib/hooks";
 import { Badge, EmptyState, ErrorState, Footer, Panel, ProbabilityBar, Team, TopBar } from "../../components/shell";
 
@@ -82,6 +85,63 @@ function HeroTable({ heroes, catalog }: { heroes: { heroId: number; games: numbe
   );
 }
 
+const names = (era: { players: { accountId: number; name: string | null }[] }) =>
+  era.players.map((player) => player.name ?? `#${player.accountId}`);
+
+/** "1 карта", "3 карты", "18 карт" — a bare count beside a noun reads as output. */
+const maps = (count: number) => {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  const form = mod10 === 1 && mod100 !== 11 ? "карта"
+    : mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20) ? "карты"
+      : "карт";
+  return `${count} ${form}`;
+};
+
+/**
+ * Who plays for this team, and who used to.
+ *
+ * Spells are cut where a map shares fewer than four players with the running
+ * one, so a stand-in does not read as a transfer. Names come from the pro-player
+ * list; the archived history stored account ids without them, so anyone outside
+ * that list is shown by id rather than guessed at.
+ */
+function RosterPanel({ lineup, history }: { lineup: Lineup; history: RosterEra[] }) {
+  if (!lineup) return <EmptyState title="Составы не сохранены" hint="Для этой команды в базе нет карт с идентификаторами игроков." />;
+  const past = history.slice(1);
+  return (
+    <>
+      <div className="dp-roster-now">
+        <p className="dp-roster-five">{names(lineup).join(" · ")}</p>
+        <p className="dp-muted dp-small">
+          {lineup.unchangedThroughout
+            ? `Состав не менялся за все ${maps(lineup.sampledMaps)} в базе.`
+            : `Играет вместе ${maps(lineup.stableMaps)}${lineup.stableSince ? ` — с ${formatDate(lineup.stableSince)}` : ""}.`}
+        </p>
+      </div>
+
+      {past.length ? (
+        <>
+          <h3 className="dp-subhead">Прежние составы</h3>
+          <ul className="dp-roster-history">
+            {past.map((era) => (
+              <li key={`${era.from}-${era.to}`}>
+                <span className="dp-roster-when">{formatDate(era.from)} — {formatDate(era.to)}</span>
+                <span className="dp-roster-players">{names(era).join(" · ")}</span>
+                <span className="dp-roster-maps">{maps(era.maps)}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="dp-caveat">
+            Короткие замены на одну-две карты не показаны — это не смена состава.
+            Результаты, сыгранные прежними составами, при обучении получают меньший вес.
+          </p>
+        </>
+      ) : null}
+    </>
+  );
+}
+
 export default function TeamPage() {
   const teamId = useLastPathSegment();
   const load = useCallback(
@@ -127,6 +187,10 @@ export default function TeamPage() {
           </p>
         )}
       </section>
+
+      <Panel title="Состав" subtitle="Кто играет сейчас и кто играл раньше — по картам, которые есть в базе">
+        <RosterPanel lineup={data.lineup} history={data.rosterHistory} />
+      </Panel>
 
       <Panel title="Матчи" subtitle="Прогноз показан тот, что был зафиксирован до матча">
         {series.length ? <SeriesTable rows={series} /> : <EmptyState title="Матчей пока нет" />}

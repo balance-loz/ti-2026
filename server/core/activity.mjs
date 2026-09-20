@@ -21,6 +21,7 @@ export const JOB_LABELS = {
   collectRecent: ["Свежие матчи", "Добирает завершённые про-матчи"],
   backfill: ["Догрузка истории", "Фоном уходит вглубь по истории матчей"],
   draftDetail: ["Загрузка пиков", "Подтягивает пики и баны по картам"],
+  players: ["Имена игроков", "Обновляет справочник профессиональных игроков"],
   retrain: ["Переобучение моделей", "Заново обучает рейтинги и модель драфта"],
 };
 
@@ -94,6 +95,10 @@ export function describeJobRun(job, detail) {
         : "новых архивов нет";
     case "syncActive":
       return `перезагружено ${count(detail.leagues ?? 0, "турнир", "турнира", "турниров")}`;
+    case "players":
+      return detail.synced
+        ? `известно ${count(detail.synced, "игрок", "игрока", "игроков")}`
+        : "справочник не обновился";
     case "retrain": {
       const parts = [];
       if (detail.ratings?.ok) parts.push(`рейтинги: ${count(detail.ratings.series, "серия", "серии", "серий")}, ${count(detail.ratings.teams, "команда", "команды", "команд")}`);

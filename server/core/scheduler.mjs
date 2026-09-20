@@ -6,6 +6,7 @@ import { budgetStatus } from "./opendota.mjs";
 import { syncLiveGames, currentLiveGames, livePollIntervalSeconds } from "./live.mjs";
 import { discoverFromProMatches, activeTournaments, syncLeague, resolveTournamentNames, untrackOutOfScopeTournaments } from "./tournaments.mjs";
 import { syncHeroes, invalidateHeroCache } from "./heroes.mjs";
+import { syncPlayers } from "./players.mjs";
 import { resolvePredictions } from "./predictions.mjs";
 import { trainRatings, invalidateRatingsCache } from "./ratings.mjs";
 import { trainDraftModel } from "./draft-model.mjs";
@@ -32,6 +33,7 @@ export const JOB_DEFINITIONS = {
   collectRecent: { intervalMs: number(process.env.JOB_COLLECT_HOURS, 3) * HOUR, description: "New finished pro matches" },
   backfill: { intervalMs: number(process.env.JOB_BACKFILL_MINUTES, 30) * MINUTE, description: "Historical match backfill" },
   draftDetail: { intervalMs: number(process.env.JOB_DRAFT_DETAIL_MINUTES, 30) * MINUTE, description: "Fetch missing pick/ban data" },
+  players: { intervalMs: number(process.env.JOB_PLAYERS_HOURS, 24) * HOUR, description: "Refresh professional player names" },
   retrain: { intervalMs: number(process.env.JOB_RETRAIN_HOURS, 24) * HOUR, description: "Retrain ratings and draft model" },
 };
 
@@ -85,6 +87,9 @@ export function createScheduler(db, { enabled = true, logger = console } = {}) {
       if (heroes.synced) invalidateHeroCache();
       return { ...discovered, registered: discovered.registered?.length ?? 0, named, scoped, heroes };
     },
+    // One request returns the whole professional scene, so this is the cheapest
+    // way to turn the account ids on every map into names on a page.
+    players: async () => syncPlayers(db),
     forecast: async () => forecastActiveTournaments(db),
     structure: async () => syncActiveStructures(db),
     collectRecent: async () => collectRecent(db),
@@ -159,7 +164,7 @@ export function createScheduler(db, { enabled = true, logger = console } = {}) {
       }
       // Stagger the first run of each job so a cold start does not fire
       // everything into the API at once.
-      const order = ["importArchive", "live", "discover", "syncActive", "freeze", "resolve", "forecast", "structure", "collectRecent", "draftDetail", "backfill", "retrain"];
+      const order = ["importArchive", "live", "discover", "players", "syncActive", "freeze", "resolve", "forecast", "structure", "collectRecent", "draftDetail", "backfill", "retrain"];
       order.forEach((name, index) => {
         const timer = setTimeout(async () => {
           if (stopped) return;

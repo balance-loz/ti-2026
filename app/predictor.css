@@ -460,3 +460,42 @@ a.dp-group-cell:hover { background: color-mix(in srgb, var(--fusion-accent) 10%,
 /* A cell whose whole body is a link, used where nothing inside it links itself. */
 .dp-cell-link { display: block; color: inherit; text-decoration: none; }
 .dp-cell-link:hover { color: var(--fusion-accent); }
+
+/* --- retrain on demand ------------------------------------------------------- */
+.dp-retrain { margin-bottom: 20px; }
+.dp-button {
+  min-height: 36px; padding: 0 16px; border-radius: 9px; cursor: pointer;
+  background: var(--fusion-accent); color: var(--fusion-canvas);
+  border: 1px solid transparent; font: 700 13px inherit;
+}
+.dp-button:hover:not(:disabled) { filter: brightness(1.08); }
+.dp-button:disabled { opacity: .55; cursor: progress; }
+.dp-button:focus-visible { outline: 2px solid var(--fusion-ink); outline-offset: 2px; }
+.dp-retrain p { margin: 8px 0 0; }
+.dp-retrain-result { margin-top: 14px; }
+.dp-retrain-error {
+  margin-top: 10px; font-size: 12px; color: var(--fusion-danger);
+  padding-left: 11px; border-left: 2px solid var(--fusion-danger);
+}
+
+/* --- team rosters ------------------------------------------------------------ */
+.dp-roster-now {
+  padding: 14px 16px; background: var(--fusion-surface);
+  border: 1px solid var(--fusion-line); border-radius: 11px;
+}
+.dp-roster-five { margin: 0 0 6px; font-size: 16px; font-weight: 700; line-height: 1.5; }
+.dp-roster-now p:last-child { margin: 0; }
+.dp-roster-history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.dp-roster-history li {
+  display: grid; grid-template-columns: 180px 1fr 70px; gap: 12px;
+  align-items: baseline; padding: 8px 0; font-size: 13px;
+  border-bottom: 1px solid var(--fusion-line);
+}
+.dp-roster-history li:last-child { border-bottom: none; }
+.dp-roster-when { font-size: 11px; color: var(--fusion-muted); white-space: nowrap; }
+.dp-roster-players { line-height: 1.5; }
+.dp-roster-maps { font-size: 11px; color: var(--fusion-muted); text-align: right; white-space: nowrap; }
+@media (max-width: 640px) {
+  .dp-roster-history li { grid-template-columns: 1fr auto; }
+  .dp-roster-when { grid-column: 1 / -1; }
+}

@@ -19,8 +19,19 @@ import { loadRatings } from "./core/ratings.mjs";
 import { readForecast, forecastTournament } from "./jobs/forecast.mjs";
 import { createScheduler } from "./core/scheduler.mjs";
 
+// Bumped whenever this API gains a field a page relies on. It is the one thing
+// an open endpoint can say that answers "did my deploy actually land?" — the
+// alternative was inferring it from when the model happened to retrain.
+const API_VERSION = 3;
+const STARTED_AT = nowIso();
+
 const PORT = Number(process.env.API_PORT || 3001);
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
+// The whole site sits behind one password and this service is not published to
+// the host, so a request that reached it through the proxy already carries the
+// only credential there is. Off by default: it is only safe while nothing but
+// the proxy can reach this port.
+const ADMIN_VIA_PROXY = process.env.ADMIN_VIA_PROXY === "true";
 const SCHEDULER_ENABLED = process.env.SCHEDULER_ENABLED !== "false";
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "";
 
@@ -39,6 +50,9 @@ function json(res, status, body, { cacheSeconds = 0 } = {}) {
 }
 
 function isAdmin(req) {
+  // nginx sets this from $remote_user and, because proxy_set_header replaces
+  // rather than appends, a client cannot supply its own.
+  if (ADMIN_VIA_PROXY && String(req.headers["x-site-user"] || "").trim()) return true;
   if (!ADMIN_TOKEN) return false;
   const header = req.headers.authorization || "";
   const provided = header.startsWith("Bearer ") ? header.slice(7) : "";
@@ -203,6 +217,8 @@ const server = createServer(async (req, res) => {
       return json(res, 200, {
         ok: true,
         at: nowIso(),
+        apiVersion: API_VERSION,
+        startedAt: STARTED_AT,
         counts,
         ratingsModelId: ratings?.modelId ?? null,
         ratingsGeneratedAt: ratings?.generatedAt ?? null,

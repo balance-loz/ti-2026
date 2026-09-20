@@ -76,9 +76,12 @@ services:
       DRAFT_WINDOW_DAYS: ${DRAFT_WINDOW_DAYS:-800}
       FORECAST_ITERATIONS: ${FORECAST_ITERATIONS:-20000}
 
-      # Only needed to trigger a job by hand over the API. Leave empty to
-      # disable the admin endpoints entirely.
+      # Only needed to trigger a job by hand from outside. The site's own
+      # buttons do not use it.
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      # This service has no published port, so the only way in is through the
+      # password-protected proxy. Set to false if you ever expose it directly.
+      ADMIN_VIA_PROXY: ${ADMIN_VIA_PROXY:-true}
     volumes:
       - state:/app/data
       # Bind-mounted so an archive can be dropped in from the host at any time,

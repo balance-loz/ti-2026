@@ -14,6 +14,7 @@ import { loadRatings, ratingPairProbability } from "./ratings.mjs";
 import { loadDraftModel } from "./predictions.mjs";
 import { seriesOutcomeProbabilities } from "./series-outcomes.mjs";
 import { counted } from "./russian.mjs";
+import { rosterEras } from "./rosters.mjs";
 
 const clampProbability = (value) => Math.min(0.99, Math.max(0.01, Number(value)));
 const sigmoid = (value) => 1 / (1 + Math.exp(-Math.min(12, Math.max(-12, value))));
@@ -49,72 +50,25 @@ function walk(start) {
 
 // --- context the model does not read directly -------------------------------
 
-const parseJson = (value, fallback = null) => {
-  if (!value) return fallback;
-  try { return JSON.parse(value); } catch { return fallback; }
-};
-
-const LINEUP_MAPS = 40;
-
 /**
  * The five a team is fielding now, and how far back that five goes.
  *
- * Read from the team's own recent maps rather than from a roster page, so it is
- * the lineup that actually played rather than the one that was announced.
+ * Both answers come from the roster history rather than from a raw frequency
+ * count over the last N maps: counting most-frequent players and then walking
+ * back from the newest map breaks on the first game with a stand-in, which made
+ * an unchanged roster report as "together for 0 maps".
  */
-export function teamLineup(db, teamId, { maps = LINEUP_MAPS } = {}) {
-  const rows = db.prepare(`SELECT radiant_team_id, players_json, start_time FROM maps
-                           WHERE (radiant_team_id = ? OR dire_team_id = ?)
-                             AND players_json IS NOT NULL
-                           ORDER BY start_time DESC LIMIT ?`).all(teamId, teamId, maps);
-  if (!rows.length) return null;
-
-  const sideOf = (row) => {
-    const players = parseJson(row.players_json, []);
-    if (!Array.isArray(players)) return [];
-    const ours = Number(row.radiant_team_id) === Number(teamId);
-    return players.filter((player) => {
-      const radiant = player.isRadiant ?? (Number(player.slot ?? player.player_slot ?? 0) < 128);
-      return radiant === ours;
-    });
-  };
-
-  const counts = new Map();
-  for (const row of rows) {
-    for (const player of sideOf(row)) {
-      const accountId = Number(player.accountId ?? player.account_id ?? 0);
-      if (!accountId) continue;
-      const entry = counts.get(accountId) ?? { accountId, name: player.name || null, maps: 0 };
-      entry.maps += 1;
-      if (!entry.name && player.name) entry.name = player.name;
-      counts.set(accountId, entry);
-    }
-  }
-  const five = [...counts.values()].sort((a, b) => b.maps - a.maps).slice(0, 5);
-  if (!five.length) return null;
-  const current = new Set(five.map((player) => player.accountId));
-
-  // Walk back from the newest map until one was played by a different five.
-  // Four of five is the same team with a stand-in; three is a different team.
-  let stableMaps = 0;
-  let stableSince = null;
-  for (const row of rows) {
-    const played = new Set(sideOf(row).map((player) => Number(player.accountId ?? player.account_id ?? 0)));
-    let shared = 0;
-    for (const accountId of current) if (played.has(accountId)) shared += 1;
-    if (shared < 4) break;
-    stableMaps += 1;
-    stableSince = Number(row.start_time) || stableSince;
-  }
-
+export function teamLineup(db, teamId) {
+  const eras = rosterEras(db, teamId);
+  const current = eras.at(-1);
+  if (!current) return null;
+  const sampled = eras.reduce((total, era) => total + era.maps, 0);
   return {
-    players: five.map((player) => ({ ...player, share: round(player.maps / rows.length, 3) })),
-    sampledMaps: rows.length,
-    stableMaps,
-    stableSince,
-    // True only when nothing in the sample contradicts it; a longer history
-    // could still hold a change we did not look at.
-    unchangedThroughout: stableMaps === rows.length,
+    players: current.players.map((player) => ({ ...player, share: round(player.maps / current.maps, 3) })),
+    sampledMaps: sampled,
+    stableMaps: current.maps,
+    stableSince: current.from,
+    unchangedThroughout: eras.length === 1,
   };
 }
 
@@ -259,11 +213,18 @@ export function explainSeries(db, { teamAId, teamBId, bestOf = 3, ratings = null
       pair.seriesA ? null : "первая команда",
       pair.seriesB ? null : "вторая команда",
     ].filter(Boolean);
+    const byPlayers = pair.playerPartA != null && pair.playerPartB != null;
     chain.add({
       key: "rating",
-      label: "Разница рейтингов",
-      detail: `Рейтинг ${round(pair.ratingA ?? 0, 2)} против ${round(pair.ratingB ?? 0, 2)}. `
-        + "Это единственная величина, из которой модель считает вероятность одной карты."
+      label: "Разница в силе составов",
+      detail: `Сила ${round(pair.ratingA ?? 0, 2)} против ${round(pair.ratingB ?? 0, 2)}. `
+        + (byPlayers
+          ? `Она складывается из пятёрки игроков (${round(pair.playerPartA, 2)} против ${round(pair.playerPartB, 2)}) `
+            + `и того, что добавляет сама организация поверх своих игроков `
+            + `(${round(pair.teamPartA, 2)} против ${round(pair.teamPartB, 2)}). `
+            + "Разделение между ними подобрано на данных, а не назначено; благодаря игрокам команда с новым "
+            + "названием, но знакомым составом не считается неизвестной."
+          : "Это единственная величина, из которой модель считает вероятность одной карты.")
         + (unrated.length
           ? ` При этом ${unrated.join(" и ")} в обучении не встречалась — у неё не рейтинг, а значение по умолчанию.`
           : ""),
@@ -276,9 +237,13 @@ export function explainSeries(db, { teamAId, teamBId, bestOf = 3, ratings = null
       chain.add({
         key: "reliability",
         label: "Поправка на объём данных",
-        detail: `В обучении у первой команды ${counted(pair.seriesA, "серия", "серии", "серий")}, `
-          + `у второй ${counted(pair.seriesB, "серия", "серии", "серий")}. `
-          + `Пока меньшая из величин ниже восьми, разрыв считается частично шумом и оценка притягивается к равной.`,
+        detail: pair.shrinkMethod === "moderated"
+          ? `За первой командой стоит вес ${round(pair.evidenceA, 1)}, за второй ${round(pair.evidenceB, 1)} — `
+            + "это сумма сыгранного её составом с поправкой на давность. Чем меньше вес, тем сильнее разрыв "
+            + "считается шумом и притягивается к равному."
+          : `В обучении у первой команды ${counted(pair.seriesA, "серия", "серии", "серий")}, `
+            + `у второй ${counted(pair.seriesB, "серия", "серии", "серий")}. `
+            + "Пока меньшая из величин ниже восьми, разрыв считается частично шумом и оценка притягивается к равной.",
         to: pair.mapProbabilityA,
         evidence: { seriesA: pair.seriesA, seriesB: pair.seriesB },
       });

@@ -5,7 +5,8 @@
 // published at the time, not a fresh one that would quietly look better.
 import { loadRatings } from "./ratings.mjs";
 import { heroCatalog } from "./heroes.mjs";
-import { explainSeries, explainDraft } from "./explain.mjs";
+import { explainSeries, explainDraft, teamLineup } from "./explain.mjs";
+import { rosterEras } from "./rosters.mjs";
 
 const parseJson = (value, fallback = null) => {
   if (!value) return fallback;
@@ -121,6 +122,9 @@ function headToHead(db, teamId, index) {
     .slice(0, 30);
 }
 
+// A spell shorter than this is a stand-in run, not a roster.
+const MIN_ERA_MAPS = 3;
+
 export function teamDetail(db, teamId) {
   const row = db.prepare("SELECT team_id, name, tag, logo_url FROM teams WHERE team_id = ?").get(teamId);
   if (!row) return null;
@@ -143,6 +147,12 @@ export function teamDetail(db, teamId) {
       losses: Number(totals?.losses || 0),
       draws: Number(totals?.draws || 0),
     },
+    lineup: teamLineup(db, teamId),
+    // Brief stand-in spells are left out: a single substituted game is not a
+    // roster change, and listing it as one would bury the real ones.
+    rosterHistory: rosterEras(db, teamId)
+      .filter((era) => era.maps >= MIN_ERA_MAPS)
+      .reverse(),
     series: teamSeries(db, teamId, index),
     headToHead: headToHead(db, teamId, index),
     heroes: heroRecord(db, teamId),

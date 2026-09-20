@@ -183,6 +183,8 @@ export const opendota = {
   match: (db, matchId, reserve = 0) => openDotaGet(db, `/matches/${matchId}`, { cacheKey: `match-${matchId}`, cacheMaxAgeMs: null, reserve }),
   /** Currently running games. Never cached. */
   live: (db) => openDotaGet(db, "/live"),
+  /** Every known professional player, with their handle. One call, cached a day. */
+  proPlayers: (db) => openDotaGet(db, "/proPlayers", { cacheKey: "proPlayers", cacheMaxAgeMs: 24 * 60 * 60_000 }),
   /** Hero reference data. */
   heroes: (db) => openDotaGet(db, "/heroes", { cacheKey: "heroes", cacheMaxAgeMs: 7 * 24 * 60 * 60_000 }),
   /** Team reference data by id. */

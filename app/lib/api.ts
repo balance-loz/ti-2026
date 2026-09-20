@@ -307,11 +307,20 @@ export type HeadToHeadRow = {
 
 export type HeroRecord = { heroId: number; games: number; wins: number; winRate: number | null };
 
+export type RosterEra = {
+  players: { accountId: number; name: string | null; maps: number }[];
+  maps: number;
+  from: number | null;
+  to: number | null;
+};
+
 export type TeamDetail = {
   team: TeamRef;
   rating: null | { rating: number; series: number; rank: number; of: number };
   ratingsModelId: string | null;
   record: TeamRecord;
+  lineup: Lineup;
+  rosterHistory: RosterEra[];
   series: TeamSeriesRow[];
   headToHead: HeadToHeadRow[];
   heroes: HeroRecord[];
@@ -541,6 +550,41 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/**
+ * Trigger a background job by hand.
+ *
+ * The site is behind one password and the API is not reachable except through
+ * that proxy, so no second credential is asked for here; the server decides.
+ */
+async function post<T>(path: string): Promise<T> {
+  const response = await fetch(`${BASE}${path}`, { method: "POST", headers: { Accept: "application/json" } });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) throw new Error((body as { error?: string })?.error ?? `api_${response.status}`);
+  return body as T;
+}
+
+export type RetrainResult = {
+  job: string;
+  detail: {
+    ratings?: { ok?: boolean; reason?: string; modelId?: string; series?: number; teams?: number; validation?: RatingsValidation };
+    draft?: { ok?: boolean; reason?: string; modelId?: string; maps?: number; validation?: Record<string, unknown> };
+    forecasts?: { leagues?: number; updated?: number };
+  };
+};
+
+export type RatingsValidation = {
+  coinflipLogLoss?: number;
+  beatsCoinflip?: boolean;
+  /** Several refits across the history, scored on the leagues the site publishes. */
+  rollingOrigin?: null | {
+    samples: number;
+    logLoss: number;
+    accuracy: number;
+    standardError: number;
+    thin: null | { samples: number; logLoss: number; accuracy: number };
+  };
+};
+
 export const api = {
   health: (signal?: AbortSignal) => get<HealthStatus>("/api/health", signal),
   tournaments: (status?: string, signal?: AbortSignal) =>
@@ -566,6 +610,7 @@ export const api = {
   modelDetail: (kind: string, versions: string[] = [], signal?: AbortSignal) =>
     get<ModelDetail>(`/api/models/${encodeURIComponent(kind)}?limit=200${versions.length ? `&versions=${encodeURIComponent(versions.join(","))}` : ""}`, signal),
   activity: (signal?: AbortSignal) => get<Activity>("/api/activity", signal),
+  runJob: (name: string) => post<RetrainResult>(`/api/admin/jobs/${encodeURIComponent(name)}`),
 };
 
 export const percent = (value: number | null | undefined, digits = 1) =>

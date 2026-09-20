@@ -149,3 +149,93 @@ export function attachRosterWeights(series, db, {
   }
   return { covered, total: series.length, lineups: lineups.size };
 }
+
+// --- roster history ---------------------------------------------------------
+
+/** The five a team fielded on one map, as account ids with whatever name we saw. */
+function fieldedFive(row, teamId) {
+  const players = parseJson(row.players_json, []);
+  if (!Array.isArray(players)) return [];
+  const ours = Number(row.radiant_team_id) === Number(teamId);
+  const side = [];
+  for (const player of players) {
+    const radiant = player.isRadiant ?? (Number(player.slot ?? player.player_slot ?? 0) < 128);
+    if (radiant !== ours) continue;
+    const accountId = Number(player.accountId ?? player.account_id ?? 0);
+    if (accountId) side.push({ accountId, name: player.name || null });
+  }
+  return side;
+}
+
+/**
+ * A team's roster history, as the spells during which it fielded one lineup.
+ *
+ * A single stand-in is not a new roster, so a map joins the running spell while
+ * it shares at least four players with it — the same four-of-five rule the
+ * training weights already use. Anything less starts a new one.
+ *
+ * Deliberately scoped to one team's maps: `loadMapLineups` parses all 53,000 of
+ * them and takes a third of a second, which is fine for training and far too
+ * much for a page.
+ */
+export function rosterEras(db, teamId, { limit = 4000 } = {}) {
+  const rows = db.prepare(`SELECT match_id, radiant_team_id, players_json, start_time FROM maps
+                           WHERE (radiant_team_id = ? OR dire_team_id = ?)
+                             AND players_json IS NOT NULL
+                           ORDER BY start_time ASC LIMIT ?`).all(teamId, teamId, limit);
+
+  const eras = [];
+  let era = null;
+  for (const row of rows) {
+    const five = fieldedFive(row, teamId);
+    if (!five.length) continue;
+    const ids = new Set(five.map((player) => player.accountId));
+
+    let shared = 0;
+    if (era) for (const accountId of era.core) if (ids.has(accountId)) shared += 1;
+    if (!era || shared < 4) {
+      era = { core: ids, counts: new Map(), maps: 0, from: null, to: null };
+      eras.push(era);
+    }
+
+    era.maps += 1;
+    era.from ??= Number(row.start_time) || null;
+    era.to = Number(row.start_time) || era.to;
+    for (const player of five) {
+      const entry = era.counts.get(player.accountId) ?? { accountId: player.accountId, name: null, maps: 0 };
+      entry.maps += 1;
+      if (!entry.name && player.name) entry.name = player.name;
+      era.counts.set(player.accountId, entry);
+    }
+    // The core follows the five that actually play, so a spell that drifts by
+    // one player at a time stays one spell rather than splitting on the drift.
+    era.core = new Set([...era.counts.values()].sort((a, b) => b.maps - a.maps).slice(0, 5)
+      .map((player) => player.accountId));
+  }
+
+  const shaped = eras.map((entry) => ({
+    players: [...entry.counts.values()].sort((a, b) => b.maps - a.maps).slice(0, 5),
+    maps: entry.maps,
+    from: entry.from,
+    to: entry.to,
+  }));
+
+  const known = resolvePlayerNames(db, shaped.flatMap((entry) => entry.players.map((player) => player.accountId)));
+  for (const entry of shaped) {
+    for (const player of entry.players) player.name = known.get(player.accountId) ?? player.name ?? null;
+  }
+  return shaped;
+}
+
+/**
+ * Names for a set of account ids: the pro-player list first, then whatever the
+ * results feed happened to record, then the bare id. Most archived maps carry
+ * no names at all, so the bare id is a common and honest answer.
+ */
+export function resolvePlayerNames(db, accountIds) {
+  const ids = [...new Set([...accountIds].map(Number).filter(Boolean))];
+  if (!ids.length) return new Map();
+  const rows = db.prepare(`SELECT account_id, name FROM players WHERE account_id IN (${ids.map(() => "?").join(",")})`)
+    .all(...ids);
+  return new Map(rows.map((row) => [Number(row.account_id), row.name]));
+}

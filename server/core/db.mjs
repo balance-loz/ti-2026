@@ -219,6 +219,18 @@ CREATE TABLE IF NOT EXISTS heroes (
   updated_at TEXT NOT NULL
 );
 
+-- Player names. The results feed stores account ids on every map but a name on
+-- almost none of them, and the archive import stored none at all, so the names
+-- come separately from the pro-player list and are joined in when displaying.
+CREATE TABLE IF NOT EXISTS players (
+  account_id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  team_id INTEGER,
+  team_name TEXT,
+  country_code TEXT,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,

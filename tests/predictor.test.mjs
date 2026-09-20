@@ -2,7 +2,7 @@
 // a throwaway database and never touches the network.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -1103,4 +1103,197 @@ test("a rescheduled fixture is shown once, as the row that produced a result", (
   const firstRound = leader.cells.filter((cell) => cell && cell.opponent.id === "702");
   assert.equal(firstRound.length, 1);
   assert.equal(firstRound[0].seriesKey, keyOf(701, 702), "the row that reached a result is the one kept");
+});
+
+// --- strength: players and teams together -----------------------------------
+
+const { trainRatings, invalidateRatingsCache, moderate } = await import("../server/core/ratings.mjs");
+const { fitStrengthModel } = await import("../server/core/player-ratings.mjs");
+const { bestOfProbability } = await import("../server/team-model.mjs");
+
+/** A played map with a named five on each side. */
+function seedMapWithPlayers({ matchId, leagueId, seriesId, radiant, dire, radiantWin, startTime, five, opposingFive }) {
+  const side = (ids, isRadiant) => ids.map((accountId, index) => ({
+    account_id: accountId, hero_id: index + 1, player_slot: isRadiant ? index : index + 128,
+  }));
+  upsertMap(db, {
+    match_id: matchId,
+    series_id: String(seriesId),
+    series_type: 1,
+    radiant_team_id: radiant,
+    dire_team_id: dire,
+    radiant_win: radiantWin,
+    start_time: startTime,
+    duration: 2000,
+    players: [...side(five, true), ...side(opposingFive, false)],
+  }, { leagueId });
+}
+
+/** A 2:0 series, two maps, one lineup a side. */
+function seedSeries({ leagueId, seriesId, winner, loser, winnerFive, loserFive, startTime }) {
+  seedMapWithPlayers({
+    matchId: seriesId * 10 + 1, leagueId, seriesId, radiant: winner, dire: loser,
+    radiantWin: 1, startTime, five: winnerFive, opposingFive: loserFive,
+  });
+  seedMapWithPlayers({
+    matchId: seriesId * 10 + 2, leagueId, seriesId, radiant: winner, dire: loser,
+    radiantWin: 1, startTime: startTime + 1800, five: winnerFive, opposingFive: loserFive,
+  });
+}
+
+test("a thin team beating unknowns in a pub league does not out-rate an established one", () => {
+  const junk = 900200;
+  const pro = 900201;
+  upsertTournament(db, { leagueId: junk, name: "Pub Bracket", tier: "excluded" });
+  upsertTournament(db, { leagueId: pro, name: "Real Circuit", tier: "professional" });
+
+  // The streak: one side wins everything it plays, against opponents whose five
+  // appear nowhere else in the world.
+  const streak = 8101;
+  const streakFive = [81001, 81002, 81003, 81004, 81005];
+  upsertTeam(db, { teamId: streak, name: "Streak" });
+  let seriesId = 92000;
+  let matchDay = 0;
+  for (let round = 0; round < 12; round += 1) {
+    const victim = 8110 + round;
+    upsertTeam(db, { teamId: victim, name: `Victim ${round}` });
+    seedSeries({
+      leagueId: junk, seriesId: seriesId++, winner: streak, loser: victim,
+      winnerFive: streakFive,
+      loserFive: [82000 + round * 5, 82001 + round * 5, 82002 + round * 5, 82003 + round * 5, 82004 + round * 5],
+      startTime: NOW - (60 - matchDay++) * DAY,
+    });
+  }
+
+  // The circuit: six teams of settled rosters playing each other repeatedly, so
+  // their ratings are anchored against one another rather than against nobody.
+  const circuit = [8201, 8202, 8203, 8204, 8205, 8206];
+  circuit.forEach((teamId, index) => upsertTeam(db, { teamId, name: `Circuit ${index}` }));
+  const fiveFor = (teamId) => [1, 2, 3, 4, 5].map((slot) => teamId * 10 + slot);
+  for (let pass = 0; pass < 16; pass += 1) {
+    for (let left = 0; left < circuit.length; left += 1) {
+      for (let right = left + 1; right < circuit.length; right += 1) {
+        // The lower index is the stronger team, and it wins most of the time.
+        const upsetPass = pass % 4 === 3;
+        const winner = upsetPass ? circuit[right] : circuit[left];
+        const loser = upsetPass ? circuit[left] : circuit[right];
+        seedSeries({
+          leagueId: pro, seriesId: seriesId++, winner, loser,
+          winnerFive: fiveFor(winner), loserFive: fiveFor(loser),
+          startTime: NOW - (600 - matchDay++) * HOUR,
+        });
+      }
+    }
+  }
+
+  // One bridge, so the two clusters are on the same scale at all.
+  seedSeries({
+    leagueId: pro, seriesId: seriesId++, winner: circuit[0], loser: streak,
+    winnerFive: fiveFor(circuit[0]), loserFive: streakFive,
+    startTime: NOW - 2 * DAY,
+  });
+
+  rebuildSeries(db, junk);
+  rebuildSeries(db, pro);
+
+  const result = trainRatings(db, { nowSeconds: NOW });
+  assert.equal(result.ok, true, result.reason);
+  invalidateRatingsCache();
+
+  const artifact = JSON.parse(readFileSync(process.env.TEAM_RATINGS_MODEL, "utf8"));
+  assert.equal(artifact.schemaVersion, 2);
+  const streakRating = artifact.ratings[String(streak)];
+  const establishedRating = artifact.ratings[String(circuit[0])];
+  assert.ok(streakRating, "the streak team is rated at all");
+  assert.ok(establishedRating, "the established team is rated");
+
+  // The actual failure: twelve wins over nobody outranking a real record.
+  assert.ok(streakRating.rating < establishedRating.rating,
+    `streak ${streakRating.rating} must not out-rate established ${establishedRating.rating}`);
+  // And less evidence stands behind it, in the units the model uses.
+  assert.ok(streakRating.evidence < establishedRating.evidence);
+
+  const pair = ratingPairProbability(artifact, streak, circuit[0]);
+  assert.ok(pair.mapProbabilityA < 0.5, "the streak team is not the favourite");
+  // The product failure was publishing a near-certainty. A best-of only sharpens
+  // whatever the map probability says, so that is where it has to be caught.
+  assert.ok(bestOfProbability(pair.mapProbabilityA, 3) < 0.6);
+
+  // The fix must not be "flatten everything": two well-connected teams whose
+  // records genuinely differ still have to separate.
+  const known = ratingPairProbability(artifact, circuit[0], circuit[5]);
+  assert.ok(known.mapProbabilityA > 0.55, `well-observed teams stay separated, got ${known.mapProbabilityA}`);
+  assert.equal(known.shrinkMethod, "moderated");
+});
+
+test("a player carries his rating between teams", () => {
+  const rows = [];
+  const five = (base) => [base, base + 1, base + 2, base + 3, base + 4];
+  // One player, 90001, is on the winning side of every series, under two
+  // different team ids. Nothing else is shared between the two halves.
+  for (let index = 0; index < 60; index += 1) {
+    const early = index < 30;
+    rows.push({
+      seriesKey: `carry-${index}`,
+      targetLineup: early ? "9301" : "9302",
+      opponentLineup: `94${String(index % 6).padStart(2, "0")}`,
+      targetScore: 1,
+      startTime: NOW - (200 - index) * DAY,
+      wins: 2, losses: 0, bestOf: 3, isDraw: false,
+      seriesInformation: 1,
+      tierWeight: 1,
+      playerTierWeight: 1,
+      lineupA: early ? [90001, 90002, 90003, 90004, 90005] : [90001, 90011, 90012, 90013, 90014],
+      lineupB: five(95000 + index * 5),
+    });
+  }
+
+  const fit = fitStrengthModel(rows, { nowSeconds: NOW });
+  // The one constant across both halves ends up rated above his team-mates.
+  assert.ok(fit.playerRating(90001) > fit.playerRating(90002));
+  assert.ok(fit.playerRating(90001) > fit.playerRating(90011));
+  // And the brand-new team id is not an unknown quantity, because four of its
+  // five and all of its history are already in the model.
+  assert.ok(fit.strength("9302", [90001, 90011, 90012, 90013, 90014]) > 0);
+});
+
+test("the tier discount moves the organisation but leaves the players alone", () => {
+  const build = (tierWeight) => Array.from({ length: 40 }, (unused, index) => ({
+    seriesKey: `tier-${index}`,
+    targetLineup: "9401",
+    opponentLineup: `95${String(index % 5).padStart(2, "0")}`,
+    targetScore: 1,
+    startTime: NOW - (100 - index) * DAY,
+    wins: 2, losses: 0, bestOf: 3, isDraw: false,
+    seriesInformation: 1,
+    tierWeight,
+    // The user's requirement, made mechanical: a low-tier result barely moves
+    // the badge but still says who the players are.
+    playerTierWeight: 1,
+    lineupA: [96001, 96002, 96003, 96004, 96005],
+    lineupB: [97000 + index * 5, 97001 + index * 5, 97002 + index * 5, 97003 + index * 5, 97004 + index * 5],
+  }));
+
+  const full = fitStrengthModel(build(1), { nowSeconds: NOW });
+  const discounted = fitStrengthModel(build(0.08), { nowSeconds: NOW });
+
+  assert.ok(Math.abs(discounted.teamRating("9401")) < Math.abs(full.teamRating("9401")) * 0.5,
+    "the organisation term shrinks with the tier weight");
+  const player = (fit) => fit.playerRating(96001);
+  assert.ok(player(discounted) > player(full) * 0.8,
+    "the player keeps his rating: that is the whole reason the data is kept");
+});
+
+test("a rating gap is damped by how little stands behind it", () => {
+  // Same gap, less evidence, closer to even — monotonically.
+  const wide = moderate(2, 500, 500, 4);
+  const middling = moderate(2, 20, 20, 4);
+  const thin = moderate(2, 0.5, 0.5, 4);
+  assert.ok(wide > middling && middling > thin);
+  assert.ok(thin > 0.5, "damped toward even, never past it");
+  // Symmetric, and an even matchup stays even whatever the evidence.
+  assert.ok(Math.abs(moderate(2, 10, 3, 4) + moderate(-2, 10, 3, 4) - 1) < 1e-12);
+  assert.equal(moderate(0, 0, 0, 4), 0.5);
+  // With no evidence term at all it is the plain logistic.
+  assert.ok(Math.abs(moderate(1, 1e9, 1e9, 4) - 1 / (1 + Math.exp(-1))) < 1e-6);
 });

@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback } from "react";
-import { api, percent, relativeTime, type AccuracyRow, type Activity } from "../lib/api";
+import { useCallback, useState } from "react";
+import { api, percent, relativeTime, type AccuracyRow, type Activity, type RetrainResult } from "../lib/api";
 import { usePolled } from "../lib/hooks";
 import { Badge, EmptyState, ErrorState, Footer, Panel, TopBar } from "../components/shell";
 
@@ -18,6 +18,86 @@ const SCOPE_LABELS: Record<string, string> = {
 };
 
 type VersionMetrics = { gatePassed?: boolean; beatsCoinflip?: boolean } | null | undefined;
+
+/**
+ * Retrain on demand, and say what came out.
+ *
+ * Retraining happens by itself every day and at every restart; this is for when
+ * a round has just finished and the question is what the fresh data changed.
+ */
+function RetrainButton({ onDone }: { onDone: () => void }) {
+  const [state, setState] = useState<"idle" | "running">("idle");
+  const [result, setResult] = useState<RetrainResult["detail"] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async () => {
+    setState("running");
+    setError(null);
+    setResult(null);
+    try {
+      const response = await api.runJob("retrain");
+      setResult(response.detail ?? null);
+      onDone();
+    } catch (cause) {
+      const message = String((cause as Error)?.message ?? cause);
+      setError(message === "unauthorized"
+        ? "Сервер не принял запрос: переобучение с сайта разрешается только через прокси с паролем."
+        : message);
+    } finally {
+      setState("idle");
+    }
+  };
+
+  const ratings = result?.ratings;
+  const draft = result?.draft;
+  const rolling = ratings?.validation?.rollingOrigin ?? null;
+  return (
+    <div className="dp-retrain">
+      <button type="button" className="dp-button" onClick={run} disabled={state === "running"}>
+        {state === "running" ? "Переобучаю…" : "Переобучить сейчас"}
+      </button>
+      <p className="dp-muted dp-small">
+        Заново обучает рейтинги команд и модель драфта на всех собранных данных и пересчитывает
+        прогнозы турниров. Обычно занимает около двадцати секунд.
+      </p>
+
+      {error ? <p className="dp-retrain-error">{error}</p> : null}
+
+      {result ? (
+        <div className="dp-retrain-result">
+          {ratings?.ok ? (
+            <>
+              <dl className="dp-metrics dp-metrics-tight">
+                <div><dt>рейтинги</dt><dd>{ratings.modelId}</dd></div>
+                <div><dt>серий</dt><dd>{ratings.series?.toLocaleString("ru-RU")}</dd></div>
+                <div><dt>команд</dt><dd>{ratings.teams?.toLocaleString("ru-RU")}</dd></div>
+                <div><dt>log loss</dt><dd>{rolling?.logLoss?.toFixed(4) ?? "—"}</dd></div>
+                <div><dt>монетка</dt><dd>{ratings.validation?.coinflipLogLoss?.toFixed(4) ?? "—"}</dd></div>
+                <div><dt>точность</dt><dd>{percent((rolling?.accuracy ?? 0) * 100)}</dd></div>
+              </dl>
+              {rolling ? (
+                <p className="dp-caveat">
+                  Проверено на {rolling.samples.toLocaleString("ru-RU")} сериях из будущего относительно обучения,
+                  погрешность ±{rolling.standardError.toFixed(4)}
+                  {rolling.thin
+                    ? `. На парах, где хотя бы одну сторону модель почти не видела — log loss ${rolling.thin.logLoss.toFixed(4)} на ${rolling.thin.samples.toLocaleString("ru-RU")} сериях.`
+                    : "."}
+                </p>
+              ) : null}
+            </>
+          ) : <p className="dp-muted dp-small">Рейтинги не переобучены: {ratings?.reason ?? "неизвестно"}.</p>}
+
+          {draft?.ok
+            ? <p className="dp-muted dp-small">Модель драфта: {draft.modelId} на {draft.maps?.toLocaleString("ru-RU")} картах.</p>
+            : <p className="dp-muted dp-small">Модель драфта не переобучена: {draft?.reason ?? "неизвестно"}.</p>}
+          {result.forecasts?.updated
+            ? <p className="dp-muted dp-small">Пересчитано прогнозов турниров: {result.forecasts.updated}.</p>
+            : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * An inactive version is not necessarily a failed one: most are simply older
@@ -149,6 +229,7 @@ export default function ModelPage() {
         title="Что происходит прямо сейчас"
         subtitle="Сбор данных, переобучение и пересчёт идут сами — здесь видно, что именно и с каким результатом"
       >
+        <RetrainButton onDone={reload} />
         <ActivityPanel activity={activity} />
       </Panel>
 
