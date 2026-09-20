@@ -9,6 +9,7 @@ import { currentLiveGames } from "./core/live.mjs";
 import { heroCatalog } from "./core/heroes.mjs";
 import { teamDetail, seriesDetail, modelPredictions } from "./core/detail.mjs";
 import { activitySnapshot } from "./core/activity.mjs";
+import { scheduledMatches } from "./jobs/sync-structure.mjs";
 import { accuracySummary, predictSeries, predictDraftMap, modelVersionBreakdown } from "./core/predictions.mjs";
 import { loadRatings } from "./core/ratings.mjs";
 import { readForecast, forecastTournament } from "./jobs/forecast.mjs";
@@ -117,8 +118,31 @@ function tournamentDetail(slug) {
     direTeam: { id: String(game.direTeamId), ...naming(game.direTeamId) },
   }));
 
+  // The organiser's own structure, when we managed to find it: stages, the
+  // bracket and every slot's official start time.
+  let format = null;
+  try { format = row.format_json ? JSON.parse(row.format_json) : null; } catch { format = null; }
+  const schedule = scheduledMatches(db, leagueId).map((item) => ({
+    id: item.id,
+    slot: item.slot,
+    stage: item.stage,
+    lane: item.lane,
+    startTime: item.start_time,
+    bestOf: item.best_of,
+    winnerSlot: item.winner_slot,
+    teamA: item.team_a_id ? { id: String(item.team_a_id), ...naming(item.team_a_id) } : (item.team_a_name ? { id: "", name: item.team_a_name, logoUrl: null } : null),
+    teamB: item.team_b_id ? { id: String(item.team_b_id), ...naming(item.team_b_id) } : (item.team_b_name ? { id: "", name: item.team_b_name, logoUrl: null } : null),
+  }));
+
   return {
     tournament: tournamentSummary(row),
+    format,
+    structure: {
+      source: row.structure_source ?? null,
+      page: row.liquipedia_page ?? null,
+      syncedAt: row.structure_synced_at ?? null,
+    },
+    schedule,
     forecast,
     series,
     live,

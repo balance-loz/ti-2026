@@ -4,6 +4,7 @@
 // about any specific event.
 import { ratingPairProbability } from "./ratings.mjs";
 import { bestOfProbability } from "../team-model.mjs";
+import { resolveFormat } from "./declared-format.mjs";
 
 const DAY = 86_400;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -19,7 +20,7 @@ function seededRandom(seed) {
 }
 
 /** Standings and structural signals for one league, straight from stored series. */
-export function analyzeTournament(db, leagueId) {
+export function analyzeTournament(db, leagueId, { declaredFormat = undefined } = {}) {
   const series = db.prepare(`SELECT * FROM series WHERE league_id = ? ORDER BY start_time ASC`).all(leagueId);
   const finished = series.filter((row) => row.status === "finished" && row.winner_id);
   const pending = series.filter((row) => row.status !== "finished");
@@ -107,6 +108,15 @@ export function analyzeTournament(db, leagueId) {
     : type === "double_elimination" ? 2
       : modalLosses && modalLosses >= 1 ? modalLosses : null;
 
+  // Prefer what the organiser published over what the results imply. Reading
+  // the format off loss counts is a fallback, and one that looks just as
+  // confident as knowing.
+  let declared = declaredFormat;
+  if (declared === undefined) {
+    const row = db.prepare("SELECT format_json FROM tournaments WHERE league_id = ?").get(leagueId);
+    try { declared = row?.format_json ? JSON.parse(row.format_json) : null; } catch { declared = null; }
+  }
+
   return {
     leagueId,
     teams: list,
@@ -115,13 +125,13 @@ export function analyzeTournament(db, leagueId) {
       seriesKey: row.series_key, teamA: String(row.team_a_id), teamB: String(row.team_b_id),
       bestOf: Number(row.best_of) || 3, startTime: Number(row.start_time) || null,
     })),
-    format: {
+    format: resolveFormat(declared, {
       type, confidence, eliminationThreshold,
       teamCount, pairDensity: Number(pairDensity.toFixed(3)),
       seriesPerTeam: Number(seriesPerTeam.toFixed(2)),
       eliminatedTeams: eliminatedLossCounts.length,
       latestSeriesAt, modalEliminationLosses: modalLosses,
-    },
+    }),
   };
 }
 
@@ -176,6 +186,14 @@ export function simulateTournament(analysis, ratingsArtifact, {
   const random = seededRandom(seed);
   const totals = new Map(teams.map((team) => [team.teamId, { champion: 0, final: 0, top4: 0 }]));
   const aliveIds = alive.map((team) => team.teamId);
+  const aliveById = new Map(alive.map((team) => [team.teamId, team]));
+  const rating = (teamId) => Number(ratingsArtifact?.ratings?.[String(teamId)]?.rating ?? 0);
+
+  // How many teams reach the playoffs, and how many rounds the group stage
+  // needs to separate them. A Swiss field of N is normally resolved in about
+  // log2(N)+1 rounds, which is what real formats use.
+  const playoffSlots = Number(format.playoffSlots) || null;
+  const groupRounds = Math.ceil(Math.log2(Math.max(2, format.teamCount || alive.length))) + 1;
   // A team that is still playing cannot already be out, whatever its record
   // says about a threshold we only guessed. Its losses are capped one short of
   // elimination so past defeats still cost it, but never remove it up front.
@@ -202,7 +220,41 @@ export function simulateTournament(analysis, ratingsArtifact, {
     let remaining = aliveIds.filter((teamId) => (losses.get(teamId) || 0) < threshold);
     if (remaining.length < 2) remaining = [...aliveIds];
 
-    // 2. Knock the rest out at the inferred loss budget. Each round pairs the
+    // 2. Group stage, when the organiser said how many teams leave it.
+    //    Without this the simulation eliminates straight from the full field,
+    //    which is the wrong shape entirely: a team can lose twice in a Swiss
+    //    and still reach the playoffs.
+    if (playoffSlots && remaining.length > playoffSlots) {
+      const record = new Map(remaining.map((teamId) => {
+        const team = aliveById.get(teamId);
+        return [teamId, { wins: team.seriesWins, losses: team.seriesLosses }];
+      }));
+      for (let round = 0; round < groupRounds * 2; round += 1) {
+        const pending = [...record.entries()]
+          .filter(([, value]) => value.wins + value.losses < groupRounds)
+          .map(([teamId]) => teamId);
+        if (pending.length < 2) break;
+        const order = shuffle(pending);
+        for (let index = 0; index + 1 < order.length; index += 2) {
+          const [a, b] = [order[index], order[index + 1]];
+          const winner = random() < seriesProbability(a, b, defaultBestOf) ? a : b;
+          const loser = winner === a ? b : a;
+          record.get(winner).wins += 1;
+          record.get(loser).losses += 1;
+        }
+      }
+      remaining = [...record.entries()]
+        .sort(([leftId, left], [rightId, right]) =>
+          (right.wins - right.losses) - (left.wins - left.losses)
+          || right.wins - left.wins
+          || rating(rightId) - rating(leftId))
+        .slice(0, playoffSlots)
+        .map(([teamId]) => teamId);
+      // The playoff bracket starts clean: group losses do not carry into it.
+      for (const teamId of remaining) losses.set(teamId, 0);
+    }
+
+    // 3. Knock the rest out at the elimination budget. Each round pairs the
     //    survivors at random; an odd team out gets a bye.
     let countedTop4 = false;
     let countedFinal = false;
@@ -257,9 +309,11 @@ export function simulateTournament(analysis, ratingsArtifact, {
     format: { ...format, eliminationThresholdUsed: threshold, thresholdInferred: format.eliminationThreshold != null },
     confidence: format.confidence,
     method: "random_pairing_knockout_with_known_schedule",
-    caveat: format.eliminationThreshold == null
-      ? "Формат турнира не удалось определить по результатам: считаем как double elimination, пары усредняются по случайным жеребьёвкам."
-      : "Сетка и посев неизвестны из фида результатов — пары усредняются по случайным жеребьёвкам.",
+    caveat: format.declared
+      ? `Формат взят у организатора${format.shape ? ` (${format.shape})` : ""}. Посев внутри сетки неизвестен, поэтому пары усредняются по случайным жеребьёвкам.`
+      : format.eliminationThreshold == null
+        ? "Формат турнира не удалось определить по результатам: считаем как double elimination, пары усредняются по случайным жеребьёвкам."
+        : "Формат восстановлен по результатам, а не взят у организатора. Сетка и посев неизвестны — пары усредняются по случайным жеребьёвкам.",
     teams: rows,
   };
 }

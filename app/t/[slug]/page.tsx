@@ -4,7 +4,7 @@
 import { useCallback, useMemo } from "react";
 import {
   api, clock, CONFIDENCE_LABELS, formatDateTime, FORMAT_LABELS, percent, probabilityPercent, relativeTime,
-  type HeroCatalog, type LiveGame, type SeriesRow, type TournamentForecast,
+  type HeroCatalog, type LiveGame, type ScheduleSlot, type SeriesRow, type TournamentForecast, type TournamentFormat,
 } from "../../lib/api";
 import { useLastPathSegment, usePolled } from "../../lib/hooks";
 import { Badge, EmptyState, ErrorState, Footer, HeroStrip, Panel, ProbabilityBar, Team, TopBar } from "../../components/shell";
@@ -46,6 +46,86 @@ function LiveGameCard({ game, heroes }: { game: LiveGame; heroes: HeroCatalog })
   );
 }
 
+
+const LANE_LABELS: Record<string, string> = {
+  upper: "Верхняя сетка",
+  lower: "Нижняя сетка",
+  final: "Гранд-финал",
+  group: "Групповой этап",
+};
+
+function FormatPanel({ format, source, page }: { format: TournamentFormat; source: string | null; page: string | null }) {
+  return (
+    <>
+      <div className="dp-table-wrap">
+        <table className="dp-table">
+          <thead><tr><th>Стадия</th><th>Формат</th><th>Правила</th></tr></thead>
+          <tbody>
+            {format.stages.map((stage) => (
+              <tr key={stage.name}>
+                <td><b>{stage.name}</b></td>
+                <td>{stage.bestOf ? `Bo${stage.bestOf}` : "—"}</td>
+                <td>
+                  <ul className="dp-rules">
+                    {stage.rules.map((rule) => <li key={rule}>{rule}</li>)}
+                  </ul>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="dp-caveat">
+        {source === "liquipedia"
+          ? <>Формат взят со страницы организатора{page ? <> (<span className="dp-mono">{page}</span>)</> : null}, а не восстановлен по результатам.</>
+          : "Формат восстановлен по сыгранным матчам."}
+      </p>
+    </>
+  );
+}
+
+function Bracket({ slots }: { slots: ScheduleSlot[] }) {
+  const lanes = ["upper", "lower", "final"] as const;
+  const byLane = lanes
+    .map((lane) => ({ lane, rows: slots.filter((slot) => slot.lane === lane) }))
+    .filter((entry) => entry.rows.length);
+  if (!byLane.length) return null;
+
+  return (
+    <div className="dp-bracket">
+      {byLane.map(({ lane, rows }) => {
+        const stages = [...new Set(rows.map((row) => row.stage ?? ""))];
+        return (
+          <div key={lane} className={`dp-bracket-lane dp-bracket-${lane}`}>
+            <h3>{LANE_LABELS[lane]}</h3>
+            <div className="dp-bracket-rounds">
+              {stages.map((stage) => (
+                <div key={stage} className="dp-bracket-round">
+                  <span className="dp-bracket-round-name">{stage}</span>
+                  {rows.filter((row) => (row.stage ?? "") === stage).map((row) => (
+                    <div key={row.id} className="dp-bracket-match">
+                      <div className={row.winnerSlot === 1 ? "dp-bracket-side dp-bracket-won" : "dp-bracket-side"}>
+                        {row.teamA ? <Team team={row.teamA} compact /> : <span className="dp-muted dp-small">не определена</span>}
+                      </div>
+                      <div className={row.winnerSlot === 2 ? "dp-bracket-side dp-bracket-won" : "dp-bracket-side"}>
+                        {row.teamB ? <Team team={row.teamB} compact /> : <span className="dp-muted dp-small">не определена</span>}
+                      </div>
+                      <div className="dp-bracket-meta">
+                        {row.bestOf ? `Bo${row.bestOf}` : null}
+                        {row.startTime ? ` · ${formatDateTime(row.startTime)}` : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ForecastTable({ forecast }: { forecast: TournamentForecast }) {
   const alive = forecast.teams.filter((team) => !team.eliminated);
   const out = forecast.teams.filter((team) => team.eliminated);
@@ -53,8 +133,11 @@ function ForecastTable({ forecast }: { forecast: TournamentForecast }) {
   return (
     <>
       <div className="dp-forecast-meta">
-        <span><b>{FORMAT_LABELS[forecast.format.type] ?? forecast.format.type}</b></span>
-        <span className="dp-muted">достоверность формата: {CONFIDENCE_LABELS[forecast.confidence] ?? forecast.confidence}</span>
+        <span><b>{forecast.format.shape ?? FORMAT_LABELS[forecast.format.type] ?? forecast.format.type}</b></span>
+        {forecast.format.declared
+          ? <Badge tone="good">формат от организатора</Badge>
+          : <span className="dp-muted">достоверность формата: {CONFIDENCE_LABELS[forecast.confidence] ?? forecast.confidence}</span>}
+        {forecast.format.playoffSlots ? <span className="dp-muted">в плейофф выходят {forecast.format.playoffSlots}</span> : null}
         <span className="dp-muted">{forecast.iterations.toLocaleString("ru-RU")} симуляций</span>
       </div>
       <div className="dp-table-wrap">
@@ -179,7 +262,8 @@ export default function TournamentPage() {
     );
   }
 
-  const { tournament, forecast, series, live } = detail;
+  const { tournament, forecast, series, live, format, structure, schedule } = detail;
+  const bracketSlots = (schedule ?? []).filter((slot) => slot.lane && slot.lane !== "group");
   const finished = series.filter((row) => row.status === "finished");
   const upcoming = series.filter((row) => row.status !== "finished");
 
@@ -204,6 +288,21 @@ export default function TournamentPage() {
           <div className="dp-live-grid">
             {live.map((game) => <LiveGameCard key={game.matchId} game={game} heroes={detail.heroes ?? {}} />)}
           </div>
+        </Panel>
+      ) : null}
+
+      {format?.stages?.length ? (
+        <Panel title="Формат" subtitle="Как устроен турнир — по данным организатора">
+          <FormatPanel format={format} source={structure.source} page={structure.page} />
+        </Panel>
+      ) : null}
+
+      {bracketSlots.length ? (
+        <Panel
+          title="Сетка плейофф"
+          subtitle="Слоты и их официальное время. Пары подставляются по мере выхода команд"
+        >
+          <Bracket slots={bracketSlots} />
         </Panel>
       ) : null}
 

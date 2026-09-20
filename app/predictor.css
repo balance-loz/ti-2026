@@ -250,3 +250,31 @@
 .dp-run-error { color: var(--fusion-danger); }
 
 .dp-table input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--fusion-accent); cursor: pointer; }
+
+/* --- format and bracket ----------------------------------------------------- */
+.dp-rules { margin: 0; padding-left: 18px; }
+.dp-rules li { margin: 2px 0; color: var(--fusion-muted); }
+
+.dp-bracket { display: flex; flex-direction: column; gap: 26px; }
+.dp-bracket-lane h3 {
+  margin: 0 0 10px; font-size: 12px; font-weight: 800;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--fusion-muted);
+}
+.dp-bracket-upper h3 { color: var(--fusion-success); }
+.dp-bracket-lower h3 { color: var(--fusion-danger); }
+.dp-bracket-final h3 { color: var(--fusion-accent); }
+
+.dp-bracket-rounds { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 6px; }
+.dp-bracket-round { display: flex; flex-direction: column; gap: 8px; min-width: 210px; }
+.dp-bracket-round-name {
+  font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--fusion-muted); white-space: nowrap;
+}
+.dp-bracket-match {
+  display: flex; flex-direction: column; gap: 4px; padding: 10px 12px;
+  background: var(--fusion-surface); border: 1px solid var(--fusion-line); border-radius: 10px;
+}
+.dp-bracket-side { display: flex; align-items: center; min-height: 22px; }
+.dp-bracket-won b { color: var(--fusion-success); }
+.dp-bracket-won::after { content: "✓"; margin-left: auto; color: var(--fusion-success); font-size: 11px; }
+.dp-bracket-meta { font-size: 10px; color: var(--fusion-muted); border-top: 1px solid var(--fusion-line); padding-top: 5px; }

@@ -40,6 +40,27 @@ export type SeriesRow = {
   };
 };
 
+
+export type FormatStage = { name: string; bestOf: number | null; rules: string[] };
+
+export type TournamentFormat = {
+  stages: FormatStage[];
+  bestOf: number | null;
+  bracketType: string | null;
+};
+
+export type ScheduleSlot = {
+  id: number;
+  slot: string | null;
+  stage: string | null;
+  lane: "upper" | "lower" | "final" | "group" | null;
+  startTime: number | null;
+  bestOf: number | null;
+  winnerSlot: number | null;
+  teamA: TeamRef | null;
+  teamB: TeamRef | null;
+};
+
 export type ForecastTeam = {
   teamId: string;
   name: string;
@@ -61,6 +82,12 @@ export type TournamentForecast = {
     type: string;
     confidence: string;
     eliminationThreshold: number | null;
+    eliminationThresholdUsed?: number;
+    playoffSlots?: number | null;
+    shape?: string | null;
+    declared?: boolean;
+    source?: string;
+    bracketType?: string | null;
     teamCount: number;
     pairDensity: number;
     seriesPerTeam: number;
@@ -338,6 +365,9 @@ export const api = {
   tournament: (slug: string, signal?: AbortSignal) =>
     get<{
       tournament: TournamentSummary;
+      format: TournamentFormat | null;
+      structure: { source: string | null; page: string | null; syncedAt: string | null };
+      schedule: ScheduleSlot[];
       forecast: TournamentForecast | null;
       series: SeriesRow[];
       live: LiveGame[];

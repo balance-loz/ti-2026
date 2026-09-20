@@ -246,8 +246,11 @@ export function parseFormat(wikitext) {
     }
     const bullet = /^\*{2,}\s*(.+)$/.exec(line);
     if (bullet && current) {
+      // A template that opens on this line and closes further down leaves its
+      // opening tag behind, so those lines are dropped rather than printed raw.
+      if (/\{\{/.test(bullet[1].replace(/\{\{[^{}]*\}\}/g, ""))) continue;
       const text = stripMarkup(bullet[1]);
-      if (!text || /^click here/i.test(text)) continue;
+      if (!text || /^click here/i.test(text) || /[{}|]/.test(text)) continue;
       current.rules.push(text);
       current.bestOf = current.bestOf ?? bestOfFrom(bullet[1]);
     }
