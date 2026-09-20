@@ -5,7 +5,6 @@ import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { nowIso } from "./db.mjs";
 import { loadRatings, ratingPairProbability } from "./ratings.mjs";
-import { bestOfProbability } from "../team-model.mjs";
 import { seriesOutcomeProbabilities, mostLikelyScore } from "./series-outcomes.mjs";
 import { predictTemporalDraft } from "../draft-inference.mjs";
 import { estimateLiveMap } from "../live-map-prediction.mjs";

@@ -120,9 +120,12 @@ export type AccuracyRow = {
   modelKind: string;
   scope: string;
   count: number;
+  decided?: number;
+  draws?: number;
   brier: number | null;
   logLoss: number | null;
   accuracy: number | null;
+  exactScore?: { count: number; accuracy: number | null };
 };
 
 export type ModelStatus = {
@@ -142,6 +145,137 @@ export type HealthStatus = {
   ratingsGeneratedAt: string | null;
   opendota: { used: number; limit: number; remaining: number; keyed: boolean };
   scheduler: boolean;
+};
+
+
+export type TeamRecord = { wins: number; losses: number; draws: number };
+
+export type TeamSeriesRow = {
+  seriesKey: string;
+  tournament: { slug: string; name: string } | null;
+  opponent: TeamRef;
+  scoreFor: number;
+  scoreAgainst: number;
+  bestOf: number | null;
+  startTime: number | null;
+  status: string;
+  isDraw: boolean;
+  won: boolean | null;
+  prediction: null | {
+    probability: number;
+    capturedAt: string;
+    predictedScore: string | null;
+    actualScore: string | null;
+    scoreCorrect: boolean | null;
+    outcomeKind: string | null;
+    correct: boolean | null;
+  };
+};
+
+export type HeadToHeadRow = {
+  opponent: TeamRef;
+  wins: number; losses: number; draws: number;
+  mapsFor: number; mapsAgainst: number;
+};
+
+export type HeroRecord = { heroId: number; games: number; wins: number; winRate: number | null };
+
+export type TeamDetail = {
+  team: TeamRef;
+  rating: null | { rating: number; series: number; rank: number; of: number };
+  ratingsModelId: string | null;
+  record: TeamRecord;
+  series: TeamSeriesRow[];
+  headToHead: HeadToHeadRow[];
+  heroes: HeroRecord[];
+  heroCatalog: HeroCatalog;
+};
+
+export type SeriesMap = {
+  matchId: number;
+  radiant: TeamRef;
+  dire: TeamRef;
+  radiantWin: boolean | null;
+  startTime: number | null;
+  duration: number | null;
+  patch: string | null;
+  radiantPicks: number[];
+  direPicks: number[];
+  draftPrediction: null | {
+    probabilityRadiant: number;
+    capturedAt: string;
+    modelId: string | null;
+    correct: boolean | null;
+    features: Record<string, unknown> | null;
+  };
+};
+
+export type SeriesDetail = {
+  seriesKey: string;
+  tournament: { slug: string; name: string } | null;
+  teamA: TeamRef;
+  teamB: TeamRef;
+  scoreA: number;
+  scoreB: number;
+  bestOf: number | null;
+  status: string;
+  isDraw: boolean;
+  winnerId: string | null;
+  startTime: number | null;
+  prediction: null | {
+    probabilityA: number;
+    capturedAt: string;
+    modelId: string | null;
+    predictedScore: string | null;
+    predictedScoreProbability: number | null;
+    drawProbability: number | null;
+    actualScore: string | null;
+    scoreCorrect: boolean | null;
+    outcomeKind: string | null;
+    features: Record<string, unknown> | null;
+  };
+  explanation: {
+    mapProbabilityA: number;
+    confidence: string;
+    ratingA: number | null;
+    ratingB: number | null;
+    seriesA: number;
+    seriesB: number;
+  };
+  maps: SeriesMap[];
+  heroCatalog: HeroCatalog;
+};
+
+export type ModelPrediction = {
+  id: number;
+  scope: string;
+  subjectKey: string;
+  tournament: { slug: string; name: string } | null;
+  sideA: TeamRef;
+  sideB: TeamRef;
+  probabilityA: number;
+  bestOf: number | null;
+  capturedAt: string;
+  resolvedAt: string | null;
+  outcome: number | null;
+  outcomeKind: string | null;
+  brier: number | null;
+  logLoss: number | null;
+  predictedScore: string | null;
+  actualScore: string | null;
+  scoreCorrect: boolean | null;
+  correct: boolean | null;
+  picks?: { radiant: number[]; dire: number[] } | null;
+  patch?: string | null;
+  startTime?: number | null;
+};
+
+export type ModelDetail = {
+  modelKind: string;
+  accuracy: AccuracyRow[];
+  predictions: ModelPrediction[];
+  heroes: HeroCatalog;
+  generatedAt: string;
 };
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE || "";
@@ -168,6 +302,9 @@ export const api = {
     }>(`/api/tournaments/${encodeURIComponent(slug)}`, signal),
   live: (signal?: AbortSignal) => get<{ games: LiveGame[]; heroes: HeroCatalog; generatedAt: string }>("/api/live", signal),
   model: (signal?: AbortSignal) => get<ModelStatus>("/api/model", signal),
+  team: (teamId: string, signal?: AbortSignal) => get<TeamDetail>(`/api/teams/${encodeURIComponent(teamId)}`, signal),
+  series: (seriesKey: string, signal?: AbortSignal) => get<SeriesDetail>(`/api/series/${encodeURIComponent(seriesKey)}`, signal),
+  modelDetail: (kind: string, signal?: AbortSignal) => get<ModelDetail>(`/api/models/${encodeURIComponent(kind)}?limit=200`, signal),
 };
 
 export const percent = (value: number | null | undefined, digits = 1) =>

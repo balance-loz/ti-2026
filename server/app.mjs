@@ -7,6 +7,7 @@ import { budgetStatus, OPENDOTA_API_KEY } from "./core/opendota.mjs";
 import { tournamentBySlug, refreshTournamentAggregates, isPlayingNow } from "./core/tournaments.mjs";
 import { currentLiveGames } from "./core/live.mjs";
 import { heroCatalog } from "./core/heroes.mjs";
+import { teamDetail, seriesDetail, modelPredictions } from "./core/detail.mjs";
 import { accuracySummary, predictSeries, predictDraftMap } from "./core/predictions.mjs";
 import { loadRatings } from "./core/ratings.mjs";
 import { readForecast, forecastTournament } from "./jobs/forecast.mjs";
@@ -180,6 +181,34 @@ const server = createServer(async (req, res) => {
         tournament: leagueNames.get(Number(game.leagueId)) ?? null,
       }));
       return json(res, 200, { games, heroes: heroCatalog(db), generatedAt: nowIso() }, { cacheSeconds: 5 });
+    }
+
+    if (req.method === "GET" && url.pathname.startsWith("/api/teams/")) {
+      const teamId = Number(decodeURIComponent(url.pathname.slice("/api/teams/".length)));
+      if (!Number.isInteger(teamId) || teamId <= 0) return json(res, 400, { error: "bad_team_id" });
+      const detail = teamDetail(db, teamId);
+      if (!detail) return json(res, 404, { error: "team_not_found", teamId });
+      return json(res, 200, detail, { cacheSeconds: 30 });
+    }
+
+    if (req.method === "GET" && url.pathname.startsWith("/api/series/")) {
+      const key = decodeURIComponent(url.pathname.slice("/api/series/".length));
+      const detail = seriesDetail(db, key);
+      if (!detail) return json(res, 404, { error: "series_not_found", seriesKey: key });
+      return json(res, 200, detail, { cacheSeconds: 15 });
+    }
+
+    if (req.method === "GET" && url.pathname.startsWith("/api/models/")) {
+      const kind = decodeURIComponent(url.pathname.slice("/api/models/".length)).replace(/\/predictions$/, "");
+      const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit") || 200)));
+      const resolvedOnly = url.searchParams.get("resolved") === "true";
+      return json(res, 200, {
+        modelKind: kind,
+        accuracy: accuracySummary(db).filter((row) => row.modelKind === kind),
+        predictions: modelPredictions(db, kind, { limit, resolvedOnly }),
+        heroes: heroCatalog(db),
+        generatedAt: nowIso(),
+      }, { cacheSeconds: 20 });
     }
 
     if (req.method === "GET" && url.pathname === "/api/model") {

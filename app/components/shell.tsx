@@ -58,13 +58,20 @@ export function TopBar({ live = 0 }: { live?: number }) {
   );
 }
 
-export function Team({ team, compact = false }: { team: TeamRef; compact?: boolean }) {
-  return (
-    <span className={compact ? "dp-team dp-team-compact" : "dp-team"}>
+/**
+ * A team, linked to its own page whenever we know which team it is. Bracket
+ * slots and unresolved names have no id, so those stay plain text.
+ */
+export function Team({ team, compact = false, link = true }: { team: TeamRef; compact?: boolean; link?: boolean }) {
+  const body = (
+    <>
       {team.logoUrl ? <img src={team.logoUrl} alt="" loading="lazy" /> : <span className="dp-team-dot" />}
       <b>{team.name}</b>
-    </span>
+    </>
   );
+  const className = compact ? "dp-team dp-team-compact" : "dp-team";
+  if (!link || !team.id || !/^\d+$/.test(team.id)) return <span className={className}>{body}</span>;
+  return <a className={`${className} dp-team-link`} href={`/team/${team.id}`}>{body}</a>;
 }
 
 /**

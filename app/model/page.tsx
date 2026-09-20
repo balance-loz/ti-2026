@@ -37,17 +37,29 @@ function AccuracyTable({ rows, title }: { rows: AccuracyRow[]; title: string }) 
     <div className="dp-table-wrap">
       <table className="dp-table">
         <thead>
-          <tr><th>Модель</th><th>Область</th><th>Прогнозов</th><th>Точность</th><th>Brier</th><th>Log loss</th></tr>
+          <tr><th>Модель</th><th>Область</th><th>Прогнозов</th><th>Победитель</th><th>Brier</th><th>Log loss</th><th>Точный счёт</th></tr>
         </thead>
         <tbody>
           {rows.map((row) => (
             <tr key={`${row.modelKind}-${row.scope}`}>
-              <td><b>{KIND_LABELS[row.modelKind] ?? row.modelKind}</b></td>
+              <td>
+                <a className="dp-link" href={`/model/${encodeURIComponent(row.modelKind)}`}>
+                  <b>{KIND_LABELS[row.modelKind] ?? row.modelKind}</b>
+                </a>
+              </td>
               <td className="dp-muted">{SCOPE_LABELS[row.scope] ?? row.scope}</td>
-              <td>{row.count}</td>
+              <td>
+                {row.decided ?? row.count}
+                {row.draws ? <span className="dp-muted dp-small"> +{row.draws} нич.</span> : null}
+              </td>
               <td><b>{percent((row.accuracy ?? 0) * 100)}</b></td>
               <td>{row.brier?.toFixed(4) ?? "—"}</td>
               <td>{row.logLoss?.toFixed(4) ?? "—"}</td>
+              <td>
+                {row.exactScore?.count
+                  ? <>{percent((row.exactScore.accuracy ?? 0) * 100)} <span className="dp-muted dp-small">({row.exactScore.count})</span></>
+                  : <span className="dp-muted">—</span>}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -84,7 +96,7 @@ export default function ModelPage() {
         </p>
       </section>
 
-      <Panel title="Точность за всё время" subtitle="По зафиксированным до матча прогнозам">
+      <Panel title="Точность за всё время" subtitle="Модели считаются раздельно — нажмите на название, чтобы увидеть каждый прогноз, матчи и пики">
         <AccuracyTable rows={status.accuracy} title="Всё время" />
       </Panel>
 
