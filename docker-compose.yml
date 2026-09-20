@@ -74,6 +74,10 @@ services:
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
     volumes:
       - state:/app/data
+      # Bind-mounted so an archive can be dropped in from the host at any time,
+      # before or after the container exists. Copying into a named volume would
+      # need a running container and force an order on the operator.
+      - ./import:/app/data/import
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 30s

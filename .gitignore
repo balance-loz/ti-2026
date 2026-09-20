@@ -49,3 +49,8 @@ __pycache__/
 # one would ship another machine's data to a fresh server. The artifacts left
 # in public/ belong to the retired single-tournament pipeline and stay tracked.
 /models/
+
+# Archives dropped in for import are data, not source; the directory itself is
+# tracked so the bind mount has something to attach to.
+/import/*
+!/import/README.md
