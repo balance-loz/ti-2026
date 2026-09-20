@@ -25,7 +25,7 @@
     "legacy:data-update": "node scripts/update-all-stats.mjs",
     "legacy:model-backtest": "node scripts/backtest-model.mjs",
     "legacy:checkpoint-r3": "node scripts/checkpoint-production.mjs",
-    "test": "node --test tests/project.test.mjs tests/predictor.test.mjs",
+    "test": "node --test tests/project.test.mjs tests/predictor.test.mjs tests/liquipedia.test.mjs",
     "test:build": "npm run build && npm test",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .vinext"
   },
