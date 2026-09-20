@@ -36,6 +36,8 @@ services:
       # served from the image. Point it at a missing path to switch it off.
       LIVE_MAP_MODEL: /app/public/live-map-model.json
       OPENDOTA_CACHE_DIR: /app/data/opendota-cache
+      # Anything dropped here is imported once, on its own, then retrained on.
+      IMPORT_DIR: /app/data/import
 
       # Leave empty for the free tier. A key raises the daily allowance and lets
       # the poll interval drop; see OPENDOTA_DAILY_LIMIT below.
@@ -56,6 +58,7 @@ services:
       JOB_BACKFILL_MINUTES: ${JOB_BACKFILL_MINUTES:-30}
       JOB_DRAFT_DETAIL_MINUTES: ${JOB_DRAFT_DETAIL_MINUTES:-30}
       JOB_RETRAIN_HOURS: ${JOB_RETRAIN_HOURS:-24}
+      JOB_IMPORT_MINUTES: ${JOB_IMPORT_MINUTES:-10}
 
       LIVE_DRAFT_INTERVAL_SECONDS: ${LIVE_DRAFT_INTERVAL_SECONDS:-20}
       LIVE_GAME_INTERVAL_SECONDS: ${LIVE_GAME_INTERVAL_SECONDS:-90}

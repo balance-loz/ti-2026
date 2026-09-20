@@ -12,6 +12,7 @@
 //   node scripts/predictor.mjs train [--ratings-only|--draft-only]
 //   node scripts/predictor.mjs forecast [--slug <slug>]
 //   node scripts/predictor.mjs live
+//   node scripts/predictor.mjs import
 //   node scripts/predictor.mjs bootstrap
 
 import { openDb, closeDb, getJsonSetting } from "../server/core/db.mjs";
@@ -27,6 +28,7 @@ import { resolvePredictions, accuracySummary } from "../server/core/predictions.
 import { syncLiveGames, currentLiveGames } from "../server/core/live.mjs";
 import { backfillHistory, collectRecent, fetchMissingDrafts } from "../server/jobs/collect-history.mjs";
 import { forecastActiveTournaments, forecastTournament, readForecast } from "../server/jobs/forecast.mjs";
+import { importPendingArchives, findArchives, alreadyImported, IMPORT_DIR } from "../server/jobs/import-archive.mjs";
 
 const args = process.argv.slice(2);
 const command = args[0] ?? "status";
@@ -69,6 +71,13 @@ function printStatus() {
   if (!rows.length) console.log("  nothing resolved yet");
   for (const row of rows) {
     console.log(`  ${row.modelKind}/${row.scope}: ${row.count} predictions, accuracy ${((row.accuracy ?? 0) * 100).toFixed(1)}%, Brier ${row.brier?.toFixed(4) ?? "—"}, log loss ${row.logLoss?.toFixed(4) ?? "—"}`);
+  }
+
+  const archives = findArchives();
+  console.log(`\narchives in ${IMPORT_DIR}:`);
+  if (!archives.length) console.log("  none — drop a .sqlite there and the server imports it by itself");
+  for (const file of archives) {
+    console.log(`  ${file} — ${alreadyImported(db, file) ? "imported" : "PENDING, picked up on the next pass"}`);
   }
 
   console.log("\nopendota budget:", JSON.stringify(budgetStatus(db)));
@@ -140,6 +149,10 @@ try {
       break;
     }
 
+    case "import":
+      log("import", await importPendingArchives(db));
+      break;
+
     case "rebuild":
       log("rebuild", await rebuildEverything());
       break;
@@ -180,6 +193,7 @@ try {
 
     // Everything a fresh install needs, in the right order.
     case "bootstrap": {
+      log("import", await importPendingArchives(db));
       log("discover", await discoverFromProMatches(db, { pages: 3 }));
       log("collect", await collectRecent(db));
       log("backfill", await backfillHistory(db, { pages: Number(value("--pages", "60")) }));
@@ -194,7 +208,7 @@ try {
 
     default:
       console.error(`unknown command: ${command}`);
-      console.error("commands: status discover backfill collect drafts sync rebuild train resolve forecast live bootstrap");
+      console.error("commands: status import discover backfill collect drafts sync rebuild train resolve forecast live bootstrap");
       process.exitCode = 1;
   }
 } finally {

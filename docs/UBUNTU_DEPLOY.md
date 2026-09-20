@@ -110,21 +110,44 @@ docker compose exec api node scripts/predictor.mjs bootstrap
 серии, обучает модели и строит первые прогнозы. Её можно прервать и запустить
 снова: курсор сбора сохраняется.
 
-Если есть архив пиков из прошлой версии проекта, импорт даёт два года карт с
-драфтами без единого API-запроса:
+### Архив пиков со старой машины (опционально)
+
+Если на вашем компьютере сохранился `work/draft-training.sqlite` из прошлой
+версии проекта, он даёт 53 000 карт с пиками за два года без единого
+API-запроса. Модель драфта тогда обучится в первый же час вместо суток.
+
+Просто положите файл в каталог импорта — **больше ничего делать не нужно**,
+сервер сам его увидит, разберёт и переобучится в течение 10 минут.
+
+С вашего компьютера:
 
 ```bash
-docker compose cp work/draft-training.sqlite api:/app/work/draft-training.sqlite
-docker compose exec api node scripts/migrate-legacy-drafts.mjs
-docker compose exec api node scripts/predictor.mjs rebuild
-docker compose exec api node scripts/predictor.mjs train
+scp work/draft-training.sqlite root@IP_СЕРВЕРА:/tmp/
 ```
 
-Проверить результат:
+На сервере:
+
+```bash
+cd /opt/dota-predictor
+docker compose cp /tmp/draft-training.sqlite api:/app/data/import/
+```
+
+Всё. Проверить, что файл замечен и обработан:
 
 ```bash
 docker compose exec api node scripts/predictor.mjs status
 ```
+
+В блоке `archives in …` будет `PENDING` (ещё не обработан) или `imported`.
+Хотите не ждать десять минут — запустите разбор сразу:
+
+```bash
+docker compose exec api node scripts/predictor.mjs import
+```
+
+Файл импортируется ровно один раз: перезапуск контейнера ничего не повторит.
+Положите туда новый файл — он будет обработан как новый. Архив с непонятной
+схемой система отклонит целиком, а не импортирует наполовину.
 
 ## 6. Что происходит дальше само
 

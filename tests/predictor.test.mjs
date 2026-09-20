@@ -13,6 +13,9 @@ process.env.DATA_DIR = mkdtempSync(path.join(tmpdir(), "predictor-test-"));
 process.env.TEAM_RATINGS_MODEL = path.join(process.env.DATA_DIR, "team-ratings.json");
 process.env.DRAFT_TEMPORAL_MODEL = path.join(process.env.DATA_DIR, "draft-temporal-model.json");
 process.env.LIVE_MAP_MODEL = path.join(process.env.DATA_DIR, "live-map-model.json");
+// Look only inside the temp import directory; the working copy may hold a real
+// archive and the suite must not read it.
+process.env.IMPORT_EXTRA_PATHS = "";
 
 const { openDb, closeDb, getJsonSetting, setJsonSetting } = await import("../server/core/db.mjs");
 const {
@@ -304,6 +307,71 @@ test("live polling speeds up for drafts and backs off when the budget runs low",
   assert.ok(drafting < playing, "a draft in progress is the moment that matters");
   assert.ok(livePollIntervalSeconds([{ phase: "draft" }], { remainingBudget: 100 }) >= 600, "a nearly spent budget must stretch the interval");
   assert.ok(livePollIntervalSeconds([{ phase: "draft" }], { remainingBudget: 300 }) >= 300);
+});
+
+test("a dropped archive is imported once, whatever path it is found through", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { writeFileSync, mkdirSync: makeDir, copyFileSync } = await import("node:fs");
+  const { IMPORT_DIR, findArchives, alreadyImported, importArchive, importPendingArchives } = await import("../server/jobs/import-archive.mjs");
+
+  makeDir(IMPORT_DIR, { recursive: true });
+  const archivePath = path.join(IMPORT_DIR, "legacy.sqlite");
+  writeFileSync(archivePath, "");
+  const archive = new DatabaseSync(archivePath);
+  archive.exec(`
+    CREATE TABLE matches (match_id INTEGER, league_id INTEGER, series_id INTEGER, series_best_of INTEGER,
+      radiant_team_id INTEGER, dire_team_id INTEGER, radiant_win INTEGER, start_time INTEGER,
+      duration INTEGER, subpatch_id TEXT, patch_id INTEGER);
+    CREATE TABLE players (match_id INTEGER, side INTEGER, slot INTEGER, hero_id INTEGER);`);
+  // Two complete maps of one Bo3, plus one map whose draft is incomplete.
+  for (const [matchId, win] of [[990001, 1], [990002, 1]]) {
+    archive.prepare("INSERT INTO matches VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+      .run(matchId, 777, 4242, 3, 91, 92, win, NOW - HOUR, 2000, "7.41e", 60);
+    for (let slot = 0; slot < 5; slot += 1) {
+      archive.prepare("INSERT INTO players VALUES(?,?,?,?)").run(matchId, 0, slot, slot + 1);
+      archive.prepare("INSERT INTO players VALUES(?,?,?,?)").run(matchId, 1, slot, slot + 20);
+    }
+  }
+  archive.prepare("INSERT INTO matches VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+    .run(990003, 777, 4243, 3, 91, 92, 1, NOW, 2000, "7.41e", 60);
+  archive.prepare("INSERT INTO players VALUES(?,?,?,?)").run(990003, 0, 0, 1);
+  archive.close();
+
+  const first = await importArchive(db, archivePath);
+  assert.equal(first.imported, 2);
+  assert.equal(first.skipped, 1, "a map without ten locked heroes is not training data");
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM maps WHERE league_id = 777").get().n, 2);
+  const series = db.prepare("SELECT * FROM series WHERE league_id = 777").get();
+  assert.equal(series.score_a, 2, "the imported maps must fold into one finished series");
+  assert.equal(series.status, "finished");
+
+  // The marker follows the file's content, so a second pass does nothing.
+  assert.equal(alreadyImported(db, archivePath), true);
+  const rerun = await importPendingArchives(db);
+  assert.equal(rerun.imported, 0);
+  assert.equal(rerun.skipped, "nothing_new");
+
+  // The same archive reachable through a second path must not import twice.
+  const duplicate = path.join(IMPORT_DIR, "legacy-copy.sqlite");
+  copyFileSync(archivePath, duplicate);
+  const found = findArchives();
+  assert.equal(found.length, 1, "one archive in two places is still one archive");
+});
+
+test("an archive with an unknown schema is refused rather than half-imported", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { writeFileSync } = await import("node:fs");
+  const { importArchive } = await import("../server/jobs/import-archive.mjs");
+
+  const strangePath = path.join(process.env.DATA_DIR, "strange.sqlite");
+  writeFileSync(strangePath, "");
+  const strange = new DatabaseSync(strangePath);
+  strange.exec("CREATE TABLE something_else (id INTEGER)");
+  strange.close();
+
+  const result = await importArchive(db, strangePath);
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, "unrecognised_schema");
 });
 
 test("settings round-trip json and survive a missing key", () => {

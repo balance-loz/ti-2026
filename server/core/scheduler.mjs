@@ -11,6 +11,7 @@ import { trainRatings, invalidateRatingsCache } from "./ratings.mjs";
 import { trainDraftModel } from "./draft-model.mjs";
 import { backfillHistory, collectRecent, fetchMissingDrafts } from "../jobs/collect-history.mjs";
 import { forecastActiveTournaments } from "../jobs/forecast.mjs";
+import { importPendingArchives } from "../jobs/import-archive.mjs";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -18,6 +19,7 @@ const HOUR = 60 * MINUTE;
 const number = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
 
 export const JOB_DEFINITIONS = {
+  importArchive: { intervalMs: number(process.env.JOB_IMPORT_MINUTES, 10) * MINUTE, description: "Import a dropped match archive" },
   live: { intervalMs: 30_000, adaptive: true, description: "Live games and draft predictions" },
   resolve: { intervalMs: 10 * MINUTE, description: "Score finished predictions" },
   syncActive: { intervalMs: number(process.env.JOB_SYNC_ACTIVE_MINUTES, 15) * MINUTE, description: "Re-pull running tournaments" },
@@ -42,6 +44,17 @@ export function createScheduler(db, { enabled = true, logger = console } = {}) {
       const nextSeconds = livePollIntervalSeconds(open, { remainingBudget: budgetStatus(db).remaining });
       state.get("live").nextIntervalMs = nextSeconds * 1000;
       return { ...result, games: undefined, openGames: open.length, nextPollSeconds: nextSeconds };
+    },
+    // Picking up an archive means a lot of new history at once, so retrain
+    // straight away instead of waiting up to a day for the scheduled pass.
+    importArchive: async () => {
+      const result = await importPendingArchives(db);
+      if (!result.imported) return result;
+      const ratings = trainRatings(db);
+      invalidateRatingsCache();
+      const draft = trainDraftModel(db);
+      const forecasts = forecastActiveTournaments(db, { force: true });
+      return { ...result, ratings, draft, forecasts: { leagues: forecasts.leagues, updated: forecasts.updated } };
     },
     resolve: async () => resolvePredictions(db),
     syncActive: async () => {
@@ -140,7 +153,7 @@ export function createScheduler(db, { enabled = true, logger = console } = {}) {
       }
       // Stagger the first run of each job so a cold start does not fire
       // everything into the API at once.
-      const order = ["live", "discover", "syncActive", "resolve", "forecast", "collectRecent", "draftDetail", "backfill", "retrain"];
+      const order = ["importArchive", "live", "discover", "syncActive", "resolve", "forecast", "collectRecent", "draftDetail", "backfill", "retrain"];
       order.forEach((name, index) => {
         const timer = setTimeout(async () => {
           if (stopped) return;
