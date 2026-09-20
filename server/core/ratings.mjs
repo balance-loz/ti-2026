@@ -12,6 +12,7 @@ import {
   DEFAULT_TEAM_MODEL_CONFIG,
 } from "../team-model.mjs";
 import { nowIso } from "./db.mjs";
+import { attachRosterWeights } from "./rosters.mjs";
 
 const DAY = 86_400;
 // Trained here, never shipped: public/ holds the retired pipeline's artifacts.
@@ -88,7 +89,21 @@ export function trainRatings(db, { nowSeconds = Date.now() / 1000 } = {}) {
   if (series.length < 200) {
     return { ok: false, reason: "insufficient_history", series: series.length };
   }
-  const arena = runRatingArena(series, { nowSeconds });
+  // Roster weighting is applied only if it earns its place. A result from a
+  // lineup that shares two players with today's says less about today's team,
+  // but down-weighting also throws away evidence — so the walk-forward decides,
+  // and the comparison is recorded either way.
+  const plainArena = runRatingArena(series, { nowSeconds });
+  const rosterCoverage = attachRosterWeights(series, db, { nowSeconds });
+  const rosterArena = runRatingArena(series, { nowSeconds });
+
+  const plainBest = plainArena[0] ?? null;
+  const rosterBest = rosterArena[0] ?? null;
+  const rosterHelps = Boolean(plainBest && rosterBest && rosterBest.logLoss < plainBest.logLoss);
+  if (!rosterHelps) {
+    for (const row of series) row.rosterWeight = 1;
+  }
+  const arena = rosterHelps ? rosterArena : plainArena;
   const champion = arena[0] ?? null;
 
   // Production ratings come from the batch Bradley-Terry fit, which is the one
@@ -132,6 +147,14 @@ export function trainRatings(db, { nowSeconds = Date.now() / 1000 } = {}) {
       coinflipLogLoss: COINFLIP_LOG_LOSS,
       champion: champion ? { modelId: champion.modelId, family: champion.family, samples: champion.samples, logLoss: champion.logLoss, brier: champion.brier, accuracy: champion.accuracy } : null,
       beatsCoinflip: champion ? champion.logLoss < COINFLIP_LOG_LOSS : false,
+      rosterWeighting: {
+        applied: rosterHelps,
+        coverage: rosterCoverage,
+        withoutRosters: plainBest ? { logLoss: plainBest.logLoss, accuracy: plainBest.accuracy } : null,
+        withRosters: rosterBest ? { logLoss: rosterBest.logLoss, accuracy: rosterBest.accuracy } : null,
+        // The holdout is small, so this choice is evidence, not proof.
+        samples: champion?.samples ?? 0,
+      },
       arena: arena.slice(0, 8),
     },
     ratings,

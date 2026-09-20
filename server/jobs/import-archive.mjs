@@ -36,7 +36,9 @@ function archiveFingerprint(file) {
 // every pass.
 function markerKey(file) {
   const { size, mtimeMs } = archiveFingerprint(file);
-  return `archive_import_${size}_${mtimeMs}`;
+  // The version is part of the key: an importer that reads more out of the
+  // same file must re-run over archives it has already seen.
+  return `archive_import_v2_${size}_${mtimeMs}`;
 }
 
 /** Archives present on disk, one entry per distinct file. */
@@ -99,16 +101,23 @@ export async function importArchive(db, file, { onProgress = null } = {}) {
     }
 
     const total = source.prepare("SELECT COUNT(*) AS n FROM matches").get().n;
-    const playersFor = source.prepare("SELECT side, slot, hero_id FROM players WHERE match_id = ? ORDER BY slot ASC");
+    // Older archives predate the account_id column. Reading what is there
+    // beats failing the whole import over a column that may not exist.
+    const playerColumns = new Set(source.prepare("PRAGMA table_info(players)").all().map((row) => row.name));
+    const hasAccounts = playerColumns.has("account_id");
+    const playersFor = source.prepare(
+      `SELECT side, slot, hero_id${hasAccounts ? ", account_id" : ""} FROM players WHERE match_id = ? ORDER BY slot ASC`,
+    );
     const insert = db.prepare(`INSERT INTO maps(match_id, league_id, series_id, series_type, radiant_team_id, dire_team_id,
-        radiant_win, start_time, duration, patch, radiant_picks_json, dire_picks_json, detail_fetched, updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,?)
+        radiant_win, start_time, duration, patch, radiant_picks_json, dire_picks_json, players_json, detail_fetched, updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)
       ON CONFLICT(match_id) DO UPDATE SET
         league_id = CASE WHEN excluded.league_id > 0 THEN excluded.league_id ELSE maps.league_id END,
         series_id = COALESCE(maps.series_id, excluded.series_id),
         series_type = COALESCE(maps.series_type, excluded.series_type),
         radiant_picks_json = COALESCE(maps.radiant_picks_json, excluded.radiant_picks_json),
         dire_picks_json = COALESCE(maps.dire_picks_json, excluded.dire_picks_json),
+        players_json = COALESCE(maps.players_json, excluded.players_json),
         patch = COALESCE(maps.patch, excluded.patch),
         detail_fetched = 1,
         updated_at = excluded.updated_at`);
@@ -130,6 +139,11 @@ export async function importArchive(db, file, { onProgress = null } = {}) {
       const players = playersFor.all(match.match_id);
       const radiant = players.filter((row) => Number(row.side) === 0).map((row) => Number(row.hero_id)).filter(Boolean);
       const dire = players.filter((row) => Number(row.side) === 1).map((row) => Number(row.hero_id)).filter(Boolean);
+      // Account ids are what make a lineup identifiable, so a squad that
+      // changed players is not credited with the old squad's results.
+      const roster = (hasAccounts ? players : [])
+        .filter((row) => Number(row.account_id) > 0)
+        .map((row) => ({ accountId: Number(row.account_id), heroId: Number(row.hero_id) || null, isRadiant: Number(row.side) === 0 }));
       if (radiant.length !== 5 || dire.length !== 5 || new Set([...radiant, ...dire]).size !== 10) {
         skipped += 1;
         continue;
@@ -143,7 +157,8 @@ export async function importArchive(db, file, { onProgress = null } = {}) {
         match.radiant_win ? 1 : 0,
         Number(match.start_time) || null, Number(match.duration) || null,
         match.subpatch_id ? String(match.subpatch_id) : (match.patch_id != null ? String(match.patch_id) : null),
-        JSON.stringify(radiant), JSON.stringify(dire), at,
+        JSON.stringify(radiant), JSON.stringify(dire),
+        roster.length ? JSON.stringify(roster) : null, at,
       );
       if (leagueId) leagues.add(leagueId);
       imported += 1;

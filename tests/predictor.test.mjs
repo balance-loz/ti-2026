@@ -322,19 +322,19 @@ test("a dropped archive is imported once, whatever path it is found through", as
     CREATE TABLE matches (match_id INTEGER, league_id INTEGER, series_id INTEGER, series_best_of INTEGER,
       radiant_team_id INTEGER, dire_team_id INTEGER, radiant_win INTEGER, start_time INTEGER,
       duration INTEGER, subpatch_id TEXT, patch_id INTEGER);
-    CREATE TABLE players (match_id INTEGER, side INTEGER, slot INTEGER, hero_id INTEGER);`);
+    CREATE TABLE players (match_id INTEGER, side INTEGER, slot INTEGER, hero_id INTEGER, account_id INTEGER);`);
   // Two complete maps of one Bo3, plus one map whose draft is incomplete.
   for (const [matchId, win] of [[990001, 1], [990002, 1]]) {
     archive.prepare("INSERT INTO matches VALUES(?,?,?,?,?,?,?,?,?,?,?)")
       .run(matchId, 777, 4242, 3, 91, 92, win, NOW - HOUR, 2000, "7.41e", 60);
     for (let slot = 0; slot < 5; slot += 1) {
-      archive.prepare("INSERT INTO players VALUES(?,?,?,?)").run(matchId, 0, slot, slot + 1);
-      archive.prepare("INSERT INTO players VALUES(?,?,?,?)").run(matchId, 1, slot, slot + 20);
+      archive.prepare("INSERT INTO players VALUES(?,?,?,?,?)").run(matchId, 0, slot, slot + 1, 7000 + slot);
+      archive.prepare("INSERT INTO players VALUES(?,?,?,?,?)").run(matchId, 1, slot, slot + 20, 8000 + slot);
     }
   }
   archive.prepare("INSERT INTO matches VALUES(?,?,?,?,?,?,?,?,?,?,?)")
     .run(990003, 777, 4243, 3, 91, 92, 1, NOW, 2000, "7.41e", 60);
-  archive.prepare("INSERT INTO players VALUES(?,?,?,?)").run(990003, 0, 0, 1);
+  archive.prepare("INSERT INTO players VALUES(?,?,?,?,?)").run(990003, 0, 0, 1, 7001);
   archive.close();
 
   const first = await importArchive(db, archivePath);
@@ -356,6 +356,41 @@ test("a dropped archive is imported once, whatever path it is found through", as
   copyFileSync(archivePath, duplicate);
   const found = findArchives();
   assert.equal(found.length, 1, "one archive in two places is still one archive");
+
+  // Lineups come across, which is what lets ratings tell one squad from another.
+  const stored = db.prepare("SELECT players_json FROM maps WHERE match_id = 990001").get();
+  const lineup = JSON.parse(stored.players_json);
+  assert.equal(lineup.length, 10);
+  assert.ok(lineup.every((player) => Number(player.accountId) > 0));
+});
+
+test("an archive written before account ids existed still imports", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { writeFileSync } = await import("node:fs");
+  const { importArchive, IMPORT_DIR } = await import("../server/jobs/import-archive.mjs");
+
+  const legacyPath = path.join(IMPORT_DIR, "ancient.sqlite");
+  writeFileSync(legacyPath, "");
+  const archive = new DatabaseSync(legacyPath);
+  archive.exec(`
+    CREATE TABLE matches (match_id INTEGER, league_id INTEGER, series_id INTEGER, series_best_of INTEGER,
+      radiant_team_id INTEGER, dire_team_id INTEGER, radiant_win INTEGER, start_time INTEGER,
+      duration INTEGER, subpatch_id TEXT, patch_id INTEGER);
+    CREATE TABLE players (match_id INTEGER, side INTEGER, slot INTEGER, hero_id INTEGER);`);
+  archive.prepare("INSERT INTO matches VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+    .run(991001, 778, 4444, 3, 93, 94, 1, NOW - HOUR, 2000, "7.30", 50);
+  for (let slot = 0; slot < 5; slot += 1) {
+    archive.prepare("INSERT INTO players VALUES(?,?,?,?)").run(991001, 0, slot, slot + 1);
+    archive.prepare("INSERT INTO players VALUES(?,?,?,?)").run(991001, 1, slot, slot + 20);
+  }
+  archive.close();
+
+  // A missing column must not cost us the maps, only the lineups.
+  const result = await importArchive(db, legacyPath);
+  assert.equal(result.imported, 1);
+  const stored = db.prepare("SELECT players_json, radiant_picks_json FROM maps WHERE match_id = 991001").get();
+  assert.ok(stored.radiant_picks_json, "picks still import");
+  assert.equal(stored.players_json, null, "there were simply no lineups to take");
 });
 
 test("an archive with an unknown schema is refused rather than half-imported", async () => {
@@ -469,4 +504,81 @@ test("a scheduled match is predicted before it starts, then follows its series",
   const scored = getPrediction(db, "series", series.series_key, "team_ratings");
   assert.equal(scored.outcome, 1);
   assert.equal(scored.actual_score, "2:0");
+});
+
+test("patch distance weights maps by how far the balance has moved", async () => {
+  const { attachPatchWeights } = await import("../server/core/draft-model.mjs");
+  const rows = [
+    { patch: "7.39", startTime: 1000, win: 1 },
+    { patch: "7.40", startTime: 2000, win: 1 },
+    { patch: "7.41", startTime: 3000, win: 1 },
+    { patch: "7.41", startTime: 3500, win: 0 },
+  ];
+  const info = attachPatchWeights(rows, { halfLifePatches: 1 });
+  assert.equal(info.patches, 3);
+  assert.equal(info.newest, "7.41");
+  assert.equal(rows[2].patchWeight, 1, "the current patch is worth full weight");
+  assert.equal(rows[3].patchWeight, 1);
+  assert.ok(Math.abs(rows[1].patchWeight - 0.5) < 1e-9, "one patch back halves at a half-life of one");
+  assert.ok(Math.abs(rows[0].patchWeight - 0.25) < 1e-9);
+
+  // Patches are ordered by when they appear, not by parsing version strings:
+  // the feed mixes "7.41e" with bare numeric ids.
+  const mixed = [
+    { patch: "60", startTime: 9000 },
+    { patch: "7.41e", startTime: 8000 },
+  ];
+  attachPatchWeights(mixed, { halfLifePatches: 1 });
+  assert.equal(mixed[0].patchWeight, 1, "the most recent patch wins whatever it is called");
+  assert.ok(mixed[1].patchWeight < 1);
+
+  // Zero means no decay at all, which has to stay available: on this data the
+  // holdout prefers it, because losing sample size costs more than staleness.
+  attachPatchWeights(rows, { halfLifePatches: 0 });
+  for (const row of rows) assert.equal(row.patchWeight, 1);
+});
+
+test("a series played by a different five counts for less", async () => {
+  const { attachRosterWeights, DEFAULT_OVERLAP_WEIGHTS } = await import("../server/core/rosters.mjs");
+
+  const leagueId = 900040;
+  upsertTournament(db, { leagueId, name: "Roster Cup", tier: "professional" });
+  upsertTeam(db, { teamId: 601, name: "Keepers" });
+  upsertTeam(db, { teamId: 602, name: "Rebuilders" });
+
+  const roster = (accounts, isRadiant) => accounts.map((accountId) => ({ accountId, isRadiant }));
+  const seedWithRoster = (matchId, startTime, radiantAccounts, direAccounts) => {
+    upsertMap(db, {
+      match_id: matchId, series_id: `r${matchId}`, series_type: 1,
+      radiant_team_id: 601, dire_team_id: 602, radiant_win: true,
+      start_time: startTime, duration: 2000,
+    }, { leagueId });
+    db.prepare("UPDATE maps SET players_json = ? WHERE match_id = ?")
+      .run(JSON.stringify([...roster(radiantAccounts, true), ...roster(direAccounts, false)]), matchId);
+  };
+
+  const current = [1, 2, 3, 4, 5];
+  const old = [1, 2, 91, 92, 93];
+  const stable = [11, 12, 13, 14, 15];
+  // Recent maps define the current lineup; the older one shares two players.
+  seedWithRoster(970001, NOW - 2 * DAY, current, stable);
+  seedWithRoster(970002, NOW - 3 * DAY, current, stable);
+  seedWithRoster(970003, NOW - 60 * DAY, old, stable);
+  rebuildSeries(db, leagueId);
+
+  const series = db.prepare("SELECT series_key, start_time FROM series WHERE league_id = ? ORDER BY start_time").all(leagueId)
+    .map((row) => ({
+      seriesKey: row.series_key, targetLineup: "601", opponentLineup: "602",
+      startTime: row.start_time, targetScore: 1, rosterWeight: 1,
+    }));
+  const info = attachRosterWeights(series, db, { nowSeconds: NOW });
+  assert.ok(info.covered >= 3);
+
+  const older = series[0];
+  const recent = series.at(-1);
+  assert.equal(recent.rosterWeight, 1, "a series played by the current five is full evidence");
+  assert.ok(older.rosterWeight < recent.rosterWeight, "a lineup that shares two of five must count for less");
+  assert.ok(older.rosterWeight <= DEFAULT_OVERLAP_WEIGHTS[2]);
+  // Never zero: an organisation keeps its coaching and draft habits.
+  assert.ok(older.rosterWeight > 0);
 });

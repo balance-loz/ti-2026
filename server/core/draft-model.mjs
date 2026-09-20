@@ -17,15 +17,18 @@ const LEARNING_RATE = Math.max(0.001, Number(process.env.DRAFT_LEARNING_RATE || 
 // signal in a draft is small, so the fit overfits violently if left alone.
 // Hyperparameters are chosen on a validation slice and judged on a later test
 // slice that selection never touched.
+// patchHalfLife is in patches: 0 disables the decay entirely, which is one of
+// the candidates so the holdout can reject the idea rather than have it assumed.
 const SEARCH_GRID = [
-  { l2: 0.02, epochs: 3, minPairGames: 400 },
-  { l2: 0.05, epochs: 3, minPairGames: 400 },
-  { l2: 0.02, epochs: 6, minPairGames: 200 },
-  { l2: 0.05, epochs: 6, minPairGames: 200 },
-  { l2: 0.1, epochs: 6, minPairGames: 200 },
-  { l2: 0.2, epochs: 6, minPairGames: 150 },
-  { l2: 0.05, epochs: 2, minPairGames: 1e9 },
-  { l2: 0.15, epochs: 4, minPairGames: 1e9 },
+  { l2: 0.05, epochs: 2, minPairGames: 1e9, patchHalfLife: 0 },
+  { l2: 0.05, epochs: 2, minPairGames: 1e9, patchHalfLife: 6 },
+  { l2: 0.05, epochs: 2, minPairGames: 1e9, patchHalfLife: 3 },
+  { l2: 0.05, epochs: 2, minPairGames: 1e9, patchHalfLife: 1.5 },
+  { l2: 0.15, epochs: 4, minPairGames: 1e9, patchHalfLife: 0 },
+  { l2: 0.15, epochs: 4, minPairGames: 1e9, patchHalfLife: 3 },
+  { l2: 0.05, epochs: 3, minPairGames: 400, patchHalfLife: 0 },
+  { l2: 0.05, epochs: 3, minPairGames: 400, patchHalfLife: 3 },
+  { l2: 0.1, epochs: 6, minPairGames: 200, patchHalfLife: 3 },
 ];
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -102,6 +105,36 @@ export function attachStrengthOffsets(rows, { definition = { id: "bt_offset", fa
   return { covered, total: rows.length };
 }
 
+
+/**
+ * Weight every map by how far its patch is from the current one.
+ *
+ * Heroes are rebalanced every patch, so a map from six patches ago describes a
+ * game that no longer exists. Patches are ordered by when they first appear in
+ * the data rather than by parsing version strings, because the feed mixes
+ * formats — "7.41e" from match detail, a bare id like "60" from the match list.
+ */
+export function attachPatchWeights(rows, { halfLifePatches = 3 } = {}) {
+  const firstSeen = new Map();
+  for (const row of rows) {
+    const patch = row.patch == null ? "" : String(row.patch);
+    const seen = firstSeen.get(patch);
+    if (seen === undefined || row.startTime < seen) firstSeen.set(patch, row.startTime);
+  }
+  const order = [...firstSeen.entries()].sort((a, b) => a[1] - b[1]).map(([patch]) => patch);
+  const index = new Map(order.map((patch, position) => [patch, position]));
+  const newest = order.length - 1;
+
+  for (const row of rows) {
+    const position = index.get(row.patch == null ? "" : String(row.patch));
+    const distance = position === undefined ? newest : newest - position;
+    // A half-life in patches, not days: a balance change matters regardless of
+    // how long the patch happened to last.
+    row.patchWeight = halfLifePatches > 0 ? 0.5 ** (distance / halfLifePatches) : 1;
+  }
+  return { patches: order.length, newest: order[newest] ?? null };
+}
+
 const pairKey = (a, b) => [Number(a), Number(b)].sort((left, right) => left - right).join("|");
 
 /**
@@ -169,7 +202,12 @@ function featuresFor(row, index, offsets) {
 function fit(rows, index, offsets, size, { l2, epochs }) {
   const weights = new Float64Array(size);
   const accumulated = new Float64Array(size).fill(1e-8);
-  const prepared = rows.map((row) => ({ features: featuresFor(row, index, offsets), win: row.win, offset: Number(row.offset) || 0 }));
+  const prepared = rows.map((row) => ({
+    features: featuresFor(row, index, offsets),
+    win: row.win,
+    offset: Number(row.offset) || 0,
+    weight: Number(row.patchWeight ?? 1),
+  }));
   for (let epoch = 0; epoch < epochs; epoch += 1) {
     // Deterministic shuffle keeps the run reproducible across retrains.
     let state = (epoch + 1) * 2654435761;
@@ -180,12 +218,13 @@ function fit(rows, index, offsets, size, { l2, epochs }) {
       [order[i], order[j]] = [order[j], order[i]];
     }
     for (const position of order) {
-      const { features, win, offset } = prepared[position];
+      const { features, win, offset, weight } = prepared[position];
       // The team-strength offset is fixed, so the weights only ever explain the
       // part of the result that team strength did not already account for.
       let logit = offset;
       for (const [slot, value] of features) logit += weights[slot] * value;
-      const error = sigmoid(logit) - win;
+      // An old-patch map still teaches, just less.
+      const error = weight * (sigmoid(logit) - win);
       for (const [slot, value] of features) {
         const gradient = error * value + l2 * weights[slot];
         accumulated[slot] += gradient * gradient;
@@ -238,6 +277,7 @@ function offsetsFor(index) {
 }
 
 function trainCandidate(rows, candidate) {
+  attachPatchWeights(rows, { halfLifePatches: candidate.patchHalfLife ?? 0 });
   const index = buildIndex(rows, candidate.minPairGames);
   const offsets = offsetsFor(index);
   const size = offsets.counter + index.counters.length;
