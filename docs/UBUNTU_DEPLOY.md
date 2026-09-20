@@ -4,67 +4,57 @@
 минимум 2 ГБ RAM / 20 ГБ диска. Домен не нужен: сайт будет доступен по
 `http://IP_СЕРВЕРА`.
 
-## 1. Подготовить сервер
+## Установка
+
+Пять команд, по порядку. Ничего между ними править не нужно.
 
 ```bash
-ssh root@IP_СЕРВЕРА
-apt update && apt upgrade -y
-apt install -y ca-certificates curl git ufw
+# 1. Docker. ВАЖНО: 'apt install docker.io' не подходит — в нём нет
+#    'docker compose', и всё дальше сломается. Ставим официальный:
+curl -fsSL https://get.docker.com | sh
+
+# 2. код
+mkdir -p /opt/dota-predictor && cd /opt/dota-predictor
+git clone https://github.com/balance-loz/ti-2026.git .
+
+# 3. конфиг. Обязательных полей нет, редактор открывать не нужно —
+#    достаточно подставить адрес сервера для ссылок:
+cp .env.example .env
+sed -i "s|^SITE_URL=.*|SITE_URL=http://$(curl -s ifconfig.me)|" .env
+
+# 4. запуск (первая сборка идёт несколько минут)
+docker compose up -d --build
+
+# 5. проверка
+curl -s http://127.0.0.1/api/health
 ```
 
-Откройте SSH и HTTP, затем включите firewall:
+Ожидаемый ответ — JSON с `"ok": true`. Счётчики нулевые: база пустая, это
+нормально, наполняется сама.
+
+Если порт 80 закрыт файрволом: `ufw allow 80/tcp`
+
+### Проверка, что Docker встал правильно
 
 ```bash
-ufw allow OpenSSH
-ufw allow 80/tcp
-ufw enable
-ufw status
-```
-
-## 2. Установить Docker Engine и Compose
-
-```bash
-install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-chmod a+r /etc/apt/keyrings/docker.asc
-
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list
-
-apt update
-apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-systemctl enable --now docker
 docker compose version
 ```
 
-## 3. Забрать код и настроить окружение
+Должно напечатать версию. Если пишет `docker: 'compose' is not a docker
+command` — у вас `docker.io` из репозитория Ubuntu, в нём нет плагина:
 
 ```bash
-mkdir -p /opt/dota-predictor
-cd /opt/dota-predictor
-git clone <адрес-репозитория> .
-cp .env.example .env
-nano .env
+apt remove -y docker.io
+curl -fsSL https://get.docker.com | sh
 ```
 
-**Менять обязательно ничего не нужно.** Все значения в `.env.example` рабочие:
-скопировали — можно запускать. Ни один турнир нигде не зашит, система сама
-находит всё, что идёт.
+## Настройки
 
-Стоит поправить только одну строку — публичный адрес, от него зависят ссылки в
-превью:
+**Менять обязательно ничего не нужно** — значения в `.env.example` рабочие,
+команда выше уже подставила `SITE_URL`. Ни один турнир нигде не зашит.
 
-```ini
-SITE_URL=http://IP_СЕРВЕРА
-```
-
-Или подставить IP автоматически, без редактора:
-
-```bash
-sed -i "s|^SITE_URL=.*|SITE_URL=http://$(curl -s ifconfig.me)|" .env
-grep SITE_URL .env
-```
-
-Остальное трогают по желанию:
+Трогают по желанию: `nano /opt/dota-predictor/.env`, затем
+`docker compose up -d`.
 
 | Переменная | Когда менять |
 | --- | --- |
@@ -73,31 +63,9 @@ grep SITE_URL .env
 | `ADMIN_TOKEN` | только если хотите дёргать задачи через HTTP. Пусто — админ-ручки отключены целиком, и это безопаснее |
 | `TOURNAMENT_TIERS` | по умолчанию `premium,professional`. Пусто — попадут все лиги, включая мусорные |
 
-Сгенерировать токен, если он нужен: `openssl rand -hex 32`
+Сгенерировать токен: `openssl rand -hex 32`
 
-Защитите файл:
-
-```bash
-chmod 600 .env
-```
-
-`.env` исключён из Git.
-
-## 4. Запустить
-
-```bash
-docker compose up -d --build
-docker compose ps
-curl -s http://127.0.0.1/api/health
-```
-
-`web` и `api` используют один образ `dota-predictor`, поэтому приложение
-собирается один раз. `.dockerignore` исключает `work/`, `node_modules`, `.git`,
-`dist/.next` и базы из build context, а BuildKit кэширует `npm ci`.
-
-Ожидаемый ответ — JSON с `"ok": true`. Пока база пустая, счётчики будут нулевые.
-
-## 5. Первичное наполнение
+## Что происходит дальше само
 
 Сервер стартует полностью пустым: ни базы, ни моделей. Ничего обученного в
 образе нет — рейтинги и модель драфта он считает сам на матчах, которые сам же
@@ -159,7 +127,7 @@ docker compose exec api node scripts/predictor.mjs import
 Положите туда новый файл — он будет обработан как новый. Архив с непонятной
 схемой система отклонит целиком, а не импортирует наполовину.
 
-## 6. Что происходит дальше само
+## Фоновые задачи
 
 | Задача | Интервал | Что делает |
 | --- | --- | --- |
@@ -182,7 +150,7 @@ docker compose exec api node scripts/predictor.mjs import
 курсор после каждой страницы — прерванный прогон продолжится с того же места.
 Полная догрузка на бесплатном тарифе занимает несколько дней, с ключом — часы.
 
-## 7. Обновление
+## Обновление
 
 ```bash
 cd /opt/dota-predictor
@@ -197,7 +165,7 @@ curl -s http://127.0.0.1/api/health
 
 Контейнеры имеют `restart: unless-stopped` и поднимутся после перезагрузки VPS.
 
-## 8. Ручной запуск задач
+## Ручной запуск задач
 
 Через CLI внутри контейнера:
 
@@ -224,7 +192,7 @@ ssh -L 8080:127.0.0.1:80 root@IP_СЕРВЕРА
 
 Пока сессия открыта, обращайтесь к `http://localhost:8080`.
 
-## 9. Диагностика
+## Диагностика
 
 ```bash
 cd /opt/dota-predictor
@@ -238,7 +206,7 @@ curl -s http://127.0.0.1/api/model
 `/api/model` показывает версии моделей, последний запуск каждой задачи, ошибки и
 остаток дневного бюджета OpenDota.
 
-## 10. Резервная копия
+## Резервная копия
 
 Вся база и модели лежат в одном volume:
 
