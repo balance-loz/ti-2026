@@ -10,9 +10,16 @@ import tseslint from "typescript-eslint";
 const eslintConfig = defineConfig([
   globalIgnores([
     ".next/**",
+    // Generated bundles: linting them exhausts the heap and tells us nothing.
+    ".vinext/**",
     "dist/**",
     "out/**",
     "build/**",
+    "node_modules/**",
+    // Scratch space and the live database directory.
+    "work/**",
+    "data/**",
+    "outputs/**",
     "next-env.d.ts",
   ]),
   eslint.configs.recommended,

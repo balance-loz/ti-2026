@@ -43,3 +43,9 @@ yarn-error.log*
 *.tsbuildinfo
 __pycache__/
 *.pyc
+
+# Models the predictor trains for itself. They are build outputs, not source:
+# every environment fits its own from the matches it collected, so committing
+# one would ship another machine's data to a fresh server. The artifacts left
+# in public/ belong to the retired single-tournament pipeline and stay tracked.
+/models/

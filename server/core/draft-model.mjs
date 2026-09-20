@@ -1,0 +1,364 @@
+// Draft model: hero, synergy and counter coefficients fitted by regularised
+// logistic regression on every stored map with a complete pick/ban record.
+// Produces the artifact shape that draft-inference.mjs already consumes, and is
+// only published when it beats the side-bias-only baseline on a future holdout.
+import { writeFileSync, mkdirSync } from "node:fs";
+import path from "node:path";
+import { nowIso } from "./db.mjs";
+import { createOnlineTeamModel } from "../team-model.mjs";
+
+const MODEL_PATH = path.resolve(process.env.DRAFT_TEMPORAL_MODEL || "models/draft-temporal-model.json");
+const MIN_MAPS = Math.max(500, Number(process.env.DRAFT_MIN_MAPS || 1500));
+const HOLDOUT_FRACTION = Math.min(0.4, Math.max(0.05, Number(process.env.DRAFT_HOLDOUT_FRACTION || 0.15)));
+const VALIDATION_FRACTION = Math.min(0.3, Math.max(0.05, Number(process.env.DRAFT_VALIDATION_FRACTION || 0.15)));
+const LEARNING_RATE = Math.max(0.001, Number(process.env.DRAFT_LEARNING_RATE || 0.08));
+
+// Hero/synergy/counter features number in the tens of thousands while the
+// signal in a draft is small, so the fit overfits violently if left alone.
+// Hyperparameters are chosen on a validation slice and judged on a later test
+// slice that selection never touched.
+const SEARCH_GRID = [
+  { l2: 0.02, epochs: 3, minPairGames: 400 },
+  { l2: 0.05, epochs: 3, minPairGames: 400 },
+  { l2: 0.02, epochs: 6, minPairGames: 200 },
+  { l2: 0.05, epochs: 6, minPairGames: 200 },
+  { l2: 0.1, epochs: 6, minPairGames: 200 },
+  { l2: 0.2, epochs: 6, minPairGames: 150 },
+  { l2: 0.05, epochs: 2, minPairGames: 1e9 },
+  { l2: 0.15, epochs: 4, minPairGames: 1e9 },
+];
+
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const sigmoid = (value) => 1 / (1 + Math.exp(-clamp(value, -20, 20)));
+const logLoss = (probability, outcome) => {
+  const p = clamp(probability, 1e-6, 1 - 1e-6);
+  return -(outcome * Math.log(p) + (1 - outcome) * Math.log(1 - p));
+};
+
+/** Maps with ten locked heroes and a result, oldest first. */
+export function loadDraftRows(db, { windowDays = Number(process.env.DRAFT_WINDOW_DAYS || 800), nowSeconds = Date.now() / 1000 } = {}) {
+  const since = Math.floor(nowSeconds - windowDays * 86_400);
+  const rows = db.prepare(`SELECT match_id, radiant_picks_json, dire_picks_json, radiant_win, start_time, patch,
+                                  radiant_team_id, dire_team_id
+                           FROM maps
+                           WHERE radiant_win IS NOT NULL AND radiant_picks_json IS NOT NULL AND dire_picks_json IS NOT NULL
+                             AND start_time >= ?
+                           ORDER BY start_time ASC`).all(since);
+  const parsed = [];
+  for (const row of rows) {
+    let radiant; let dire;
+    try {
+      radiant = JSON.parse(row.radiant_picks_json);
+      dire = JSON.parse(row.dire_picks_json);
+    } catch { continue; }
+    if (!Array.isArray(radiant) || !Array.isArray(dire)) continue;
+    if (radiant.length !== 5 || dire.length !== 5) continue;
+    if (new Set([...radiant, ...dire]).size !== 10) continue;
+    parsed.push({
+      matchId: Number(row.match_id), radiant, dire,
+      win: row.radiant_win ? 1 : 0,
+      startTime: Number(row.start_time), patch: row.patch,
+      radiantTeamId: Number(row.radiant_team_id) || null,
+      direTeamId: Number(row.dire_team_id) || null,
+      offset: 0,
+    });
+  }
+  return parsed;
+}
+
+/**
+ * Attach a pre-match team-strength offset to every row.
+ *
+ * The draft model must learn what the heroes add *beyond* team strength,
+ * otherwise it just rediscovers that good teams win. The offset is produced by
+ * walking an online rating model forward in time, so each map is scored by a
+ * model that has only seen earlier maps — no future information enters.
+ */
+export function attachStrengthOffsets(rows, { definition = { id: "bt_offset", family: "bradley_terry", learningRate: 0.22, halfLifeDays: 45, l2: 0.004 } } = {}) {
+  const model = createOnlineTeamModel(definition);
+  let covered = 0;
+  for (const row of rows) {
+    if (!row.radiantTeamId || !row.direTeamId || row.radiantTeamId === row.direTeamId) {
+      row.offset = 0;
+      continue;
+    }
+    const evidence = model.evidence(row.radiantTeamId, row.direTeamId);
+    if (evidence >= 4) {
+      const probability = clamp(model.predict(row.radiantTeamId, row.direTeamId, row.startTime), 0.02, 0.98);
+      row.offset = Math.log(probability / (1 - probability));
+      covered += 1;
+    } else {
+      row.offset = 0;
+    }
+    model.update({
+      targetLineup: String(row.radiantTeamId),
+      opponentLineup: String(row.direTeamId),
+      targetScore: row.win,
+      startTime: row.startTime,
+      rosterWeight: 1,
+      seriesInformation: 0.6,
+    });
+  }
+  return { covered, total: rows.length };
+}
+
+const pairKey = (a, b) => [Number(a), Number(b)].sort((left, right) => left - right).join("|");
+
+/**
+ * Build the sparse feature index. Rare pairs are dropped entirely so the fit is
+ * not dominated by combinations seen a handful of times.
+ */
+function buildIndex(rows, minPairGames) {
+  const heroCounts = new Map();
+  const synergyCounts = new Map();
+  const counterCounts = new Map();
+  for (const row of rows) {
+    for (const hero of [...row.radiant, ...row.dire]) heroCounts.set(hero, (heroCounts.get(hero) || 0) + 1);
+    for (const side of [row.radiant, row.dire]) {
+      for (let i = 0; i < side.length; i += 1) for (let j = i + 1; j < side.length; j += 1) {
+        const key = pairKey(side[i], side[j]);
+        synergyCounts.set(key, (synergyCounts.get(key) || 0) + 1);
+      }
+    }
+    for (const r of row.radiant) for (const d of row.dire) {
+      const key = pairKey(r, d);
+      counterCounts.set(key, (counterCounts.get(key) || 0) + 1);
+    }
+  }
+  // Heroes need far less evidence than pairs, so they use their own floor.
+  const minHeroGames = Math.max(20, Math.min(200, Math.floor(rows.length / 200)));
+  const heroes = [...heroCounts.entries()].filter(([, count]) => count >= minHeroGames).map(([hero]) => hero).sort((a, b) => a - b);
+  const synergies = [...synergyCounts.entries()].filter(([, count]) => count >= minPairGames).map(([key]) => key);
+  const counters = [...counterCounts.entries()].filter(([, count]) => count >= minPairGames).map(([key]) => key);
+  return {
+    heroes, synergies, counters,
+    heroIndex: new Map(heroes.map((hero, index) => [hero, index])),
+    synergyIndex: new Map(synergies.map((key, index) => [key, index])),
+    counterIndex: new Map(counters.map((key, index) => [key, index])),
+    heroCounts, synergyCounts, counterCounts,
+  };
+}
+
+/** Sparse feature vector for one map, as [slot, value] pairs into one weight array. */
+function featuresFor(row, index, offsets) {
+  const features = [[offsets.bias, 1]];
+  for (const hero of row.radiant) {
+    const slot = index.heroIndex.get(hero);
+    if (slot !== undefined) features.push([offsets.hero + slot, 1]);
+  }
+  for (const hero of row.dire) {
+    const slot = index.heroIndex.get(hero);
+    if (slot !== undefined) features.push([offsets.hero + slot, -1]);
+  }
+  for (const [side, sign] of [[row.radiant, 1], [row.dire, -1]]) {
+    for (let i = 0; i < side.length; i += 1) for (let j = i + 1; j < side.length; j += 1) {
+      const slot = index.synergyIndex.get(pairKey(side[i], side[j]));
+      if (slot !== undefined) features.push([offsets.synergy + slot, sign]);
+    }
+  }
+  for (const r of row.radiant) for (const d of row.dire) {
+    const key = pairKey(r, d);
+    const slot = index.counterIndex.get(key);
+    if (slot === undefined) continue;
+    // Sign convention: +1 when the lower hero id is on radiant.
+    features.push([offsets.counter + slot, Number(r) < Number(d) ? 1 : -1]);
+  }
+  return features;
+}
+
+function fit(rows, index, offsets, size, { l2, epochs }) {
+  const weights = new Float64Array(size);
+  const accumulated = new Float64Array(size).fill(1e-8);
+  const prepared = rows.map((row) => ({ features: featuresFor(row, index, offsets), win: row.win, offset: Number(row.offset) || 0 }));
+  for (let epoch = 0; epoch < epochs; epoch += 1) {
+    // Deterministic shuffle keeps the run reproducible across retrains.
+    let state = (epoch + 1) * 2654435761;
+    const order = prepared.map((_, position) => position);
+    for (let i = order.length - 1; i > 0; i -= 1) {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      const j = state % (i + 1);
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    for (const position of order) {
+      const { features, win, offset } = prepared[position];
+      // The team-strength offset is fixed, so the weights only ever explain the
+      // part of the result that team strength did not already account for.
+      let logit = offset;
+      for (const [slot, value] of features) logit += weights[slot] * value;
+      const error = sigmoid(logit) - win;
+      for (const [slot, value] of features) {
+        const gradient = error * value + l2 * weights[slot];
+        accumulated[slot] += gradient * gradient;
+        weights[slot] -= LEARNING_RATE * gradient / Math.sqrt(accumulated[slot]);
+      }
+    }
+  }
+  return weights;
+}
+
+function evaluate(rows, index, offsets, weights) {
+  let loss = 0; let brier = 0; let correct = 0;
+  for (const row of rows) {
+    let logit = Number(row.offset) || 0;
+    for (const [slot, value] of featuresFor(row, index, offsets)) logit += weights[slot] * value;
+    const probability = sigmoid(logit);
+    loss += logLoss(probability, row.win);
+    brier += (probability - row.win) ** 2;
+    correct += (probability >= 0.5 ? 1 : 0) === row.win ? 1 : 0;
+  }
+  const n = Math.max(1, rows.length);
+  return { samples: rows.length, logLoss: loss / n, brier: brier / n, accuracy: correct / n };
+}
+
+/** Team strength alone, with no draft information: the bar the draft must clear. */
+function evaluateOffsetOnly(rows) {
+  let loss = 0; let brier = 0; let correct = 0;
+  for (const row of rows) {
+    const probability = sigmoid(Number(row.offset) || 0);
+    loss += logLoss(probability, row.win);
+    brier += (probability - row.win) ** 2;
+    correct += (probability >= 0.5 ? 1 : 0) === row.win ? 1 : 0;
+  }
+  const n = Math.max(1, rows.length);
+  return { samples: rows.length, logLoss: loss / n, brier: brier / n, accuracy: correct / n };
+}
+
+/**
+ * Train and, if it passes the holdout gate, publish the draft artifact.
+ * The baseline is a model that knows only the Radiant side advantage, so a
+ * pass means the hero information itself carried predictive value.
+ */
+function offsetsFor(index) {
+  return {
+    bias: 0,
+    hero: 1,
+    synergy: 1 + index.heroes.length,
+    counter: 1 + index.heroes.length + index.synergies.length,
+  };
+}
+
+function trainCandidate(rows, candidate) {
+  const index = buildIndex(rows, candidate.minPairGames);
+  const offsets = offsetsFor(index);
+  const size = offsets.counter + index.counters.length;
+  return { index, offsets, weights: fit(rows, index, offsets, size, candidate) };
+}
+
+export function trainDraftModel(db, { nowSeconds = Date.now() / 1000, outputPath = MODEL_PATH } = {}) {
+  const rows = loadDraftRows(db, { nowSeconds });
+  if (rows.length < MIN_MAPS) return { ok: false, reason: "insufficient_maps", maps: rows.length, required: MIN_MAPS };
+  const offsetCoverage = attachStrengthOffsets(rows);
+
+  // Chronological three-way split. Validation picks the hyperparameters, the
+  // test slice is only ever read once, for the publish gate.
+  const testAt = Math.floor(rows.length * (1 - HOLDOUT_FRACTION));
+  const validationAt = Math.floor(testAt * (1 - VALIDATION_FRACTION));
+  const train = rows.slice(0, validationAt);
+  const validation = rows.slice(validationAt, testAt);
+  const test = rows.slice(testAt);
+  if (test.length < 100 || validation.length < 100) {
+    return { ok: false, reason: "insufficient_holdout", validation: validation.length, test: test.length };
+  }
+
+  const validationBaselineMetrics = evaluateOffsetOnly(validation);
+  const validationBaseline = validationBaselineMetrics.logLoss;
+
+  const search = [];
+  let best = null;
+  for (const candidate of SEARCH_GRID) {
+    const fitted = trainCandidate(train, candidate);
+    if (fitted.index.heroes.length < 50) continue;
+    const metrics = evaluate(validation, fitted.index, fitted.offsets, fitted.weights);
+    search.push({ ...candidate, validation: metrics, features: { heroes: fitted.index.heroes.length, synergies: fitted.index.synergies.length, counters: fitted.index.counters.length } });
+    if (!best || metrics.logLoss < best.metrics.logLoss) best = { candidate, metrics };
+  }
+  if (!best) return { ok: false, reason: "insufficient_hero_coverage" };
+
+  // Refit the winner on train+validation so the published model uses every row
+  // available before the test slice.
+  const fitRows = [...train, ...validation];
+  const { index, offsets, weights } = trainCandidate(fitRows, best.candidate);
+
+  const trainMetrics = evaluate(fitRows, index, offsets, weights);
+  const holdoutMetrics = evaluate(test, index, offsets, weights);
+  const refitRate = fitRows.reduce((sum, row) => sum + row.win, 0) / fitRows.length;
+  // The gate compares against team strength alone on the same rows: publishing
+  // requires the draft to add information, not merely to be better than a coin.
+  const baselineMetrics = evaluateOffsetOnly(test);
+  const baselineLoss = baselineMetrics.logLoss;
+  const gatePassed = holdoutMetrics.logLoss < baselineLoss;
+
+  const modelId = `draft-${new Date(nowSeconds * 1000).toISOString().slice(0, 10)}-${rows.length}`;
+  const heroes = {};
+  for (const [hero, slot] of index.heroIndex) {
+    heroes[String(hero)] = { coefficient: Number(weights[offsets.hero + slot].toFixed(6)), games: index.heroCounts.get(hero) || 0, roles: {} };
+  }
+  const synergy = {};
+  for (const [key, slot] of index.synergyIndex) {
+    const value = weights[offsets.synergy + slot];
+    if (Math.abs(value) < 1e-4) continue;
+    synergy[key] = { coefficient: Number(value.toFixed(6)), games: index.synergyCounts.get(key) || 0 };
+  }
+  const counters = {};
+  for (const [key, slot] of index.counterIndex) {
+    const value = weights[offsets.counter + slot];
+    if (Math.abs(value) < 1e-4) continue;
+    const [low, high] = key.split("|");
+    // One stored direction; inference reads counters[r>d] - counters[d>r].
+    counters[`${low}>${high}`] = { coefficient: Number(value.toFixed(6)), games: index.counterCounts.get(key) || 0 };
+  }
+
+  const patches = new Set(rows.map((row) => row.patch).filter(Boolean));
+  const artifact = {
+    schemaVersion: 1,
+    modelId,
+    generatedAt: nowIso(),
+    dataset: {
+      matches: rows.length,
+      train: train.length,
+      validation: validation.length,
+      holdout: test.length,
+      patches: patches.size,
+      currentPatchId: rows.at(-1)?.patch ?? null,
+      earliest: rows[0]?.startTime ?? null,
+      latest: rows.at(-1)?.startTime ?? null,
+    },
+    inference: {
+      heroScale: 1, roleScale: 0, synergyScale: 1, counterScale: 1,
+      radiantBias: Number(weights[offsets.bias].toFixed(6)),
+      temperature: 1, dimensions: 0,
+    },
+    validation: {
+      train: trainMetrics,
+      holdout: holdoutMetrics,
+      baselineLogLoss: baselineLoss,
+      radiantBaseRate: refitRate,
+      hyperparameters: best.candidate,
+      validationBaseline,
+      baselineMetrics,
+      strengthOffsetCoverage: offsetCoverage,
+      baselineDescription: "pre-match team strength only, no hero information",
+      search: search.sort((a, b) => a.validation.logLoss - b.validation.logLoss),
+      gatePassed,
+      improvementNats: baselineLoss - holdoutMetrics.logLoss,
+    },
+    features: { heroes: index.heroes.length, synergies: Object.keys(synergy).length, counters: Object.keys(counters).length },
+    heroes, synergy, counters,
+  };
+
+  db.prepare(`INSERT INTO model_versions(kind, model_id, trained_at, samples, metrics_json, artifact_path, active, notes)
+              VALUES('draft',?,?,?,?,?,?,?)
+              ON CONFLICT(kind, model_id) DO UPDATE SET trained_at=excluded.trained_at, samples=excluded.samples,
+                metrics_json=excluded.metrics_json, active=excluded.active, notes=excluded.notes`)
+    .run(modelId, nowIso(), rows.length, JSON.stringify(artifact.validation), outputPath, gatePassed ? 1 : 0,
+      gatePassed ? `holdout logloss ${holdoutMetrics.logLoss.toFixed(4)} vs baseline ${baselineLoss.toFixed(4)}`
+        : `gate failed: ${holdoutMetrics.logLoss.toFixed(4)} >= ${baselineLoss.toFixed(4)}`);
+
+  if (!gatePassed) {
+    return { ok: false, reason: "holdout_gate_failed", modelId, validation: artifact.validation };
+  }
+  db.prepare("UPDATE model_versions SET active = 0 WHERE kind = 'draft' AND model_id != ?").run(modelId);
+  mkdirSync(path.dirname(outputPath), { recursive: true });
+  writeFileSync(outputPath, JSON.stringify(artifact));
+  return { ok: true, modelId, maps: rows.length, validation: artifact.validation, features: artifact.features };
+}

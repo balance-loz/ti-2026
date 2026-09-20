@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./predictor.css";
 
 :root {
   --ink: #10131a;

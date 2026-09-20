@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM node:22-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm,sharing=locked \
@@ -7,23 +7,23 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
 COPY . .
 RUN npm run build
 
-FROM node:22-alpine AS runtime
+FROM node:24-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/public ./public
-COPY --from=build /app/public/draft-stats.json ./model/draft-stats.json
-COPY --from=build /app/public/team-stats.json ./model/team-stats.json
-COPY --from=build /app/public/intel-stats.json ./model/intel-stats.json
-COPY --from=build /app/public/draft-temporal-model.json ./model/draft-temporal-model.json
-COPY --from=build /app/public/all-pro-team-model.json ./model/all-pro-team-model.json
-COPY --from=build /app/public/draft-nextgen-model.json ./model/draft-nextgen-model.json
-COPY --from=build /app/public/nextgen-series-calibration.json ./model/nextgen-series-calibration.json
-COPY --from=build /app/public/live-map-model.json ./model/live-map-model.json
 COPY --from=build /app/scripts ./scripts
 COPY --from=build /app/server ./server
 COPY --from=build /app/.vinext ./.vinext
+# No trained ratings or draft model ship in the image. A fresh server collects
+# its own matches and trains both itself, so nothing another machine computed
+# is ever carried in. The mid-game gold-lead model is the one exception: it is
+# a read-only artifact the pipeline cannot retrain yet, so it is served from
+# the image rather than from the volume.
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 EXPOSE 3000 3001
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["npm", "start"]

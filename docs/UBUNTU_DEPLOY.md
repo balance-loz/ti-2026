@@ -1,10 +1,10 @@
-# Развёртывание TI 2026 Predictor на Ubuntu
+# Развёртывание Dota Predictor на Ubuntu
 
-Инструкция рассчитана на чистый VPS с Ubuntu 22.04 или 24.04, публичным IPv4 и минимум 2 ГБ RAM / 20 ГБ диска. Домен не нужен: сайт будет доступен по `http://IP_СЕРВЕРА`.
+Инструкция рассчитана на чистый VPS с Ubuntu 22.04 или 24.04, публичным IPv4 и
+минимум 2 ГБ RAM / 20 ГБ диска. Домен не нужен: сайт будет доступен по
+`http://IP_СЕРВЕРА`.
 
 ## 1. Подготовить сервер
-
-Подключитесь по SSH и обновите пакеты:
 
 ```bash
 ssh root@IP_СЕРВЕРА
@@ -23,8 +23,6 @@ ufw status
 
 ## 2. Установить Docker Engine и Compose
 
-Команды соответствуют официальному apt-репозиторию Docker:
-
 ```bash
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
@@ -38,153 +36,189 @@ systemctl enable --now docker
 docker compose version
 ```
 
-## 3. Скачать проект и создать секреты
+## 3. Забрать код и настроить окружение
 
 ```bash
-mkdir -p /opt/ti2026
-git clone https://github.com/balance-loz/ti-2026.git /opt/ti2026
-cd /opt/ti2026
+mkdir -p /opt/dota-predictor
+cd /opt/dota-predictor
+git clone <адрес-репозитория> .
 cp .env.example .env
 nano .env
 ```
 
-Заполните `.env`:
+Минимум, который стоит поменять:
 
-```dotenv
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=ВСТАВЬТЕ_СЮДА_СВОЙ_ДЛИННЫЙ_ПАРОЛЬ
-COOKIE_SECURE=false
+```ini
+SITE_URL=http://IP_СЕРВЕРА
 PORT=80
-SITE_URL=http://159.194.202.215
-TI_LEAGUE_ID=19719
-LIVE_SYNC_ENABLED=true
-LIVE_SYNC_INTERVAL_MINUTES=10
-LIVE_DRAFT_SYNC_ENABLED=true
-LIVE_DRAFT_INTERVAL_SECONDS=20
-LIVE_DRAFT_GRACE_SECONDS=120
-LIVE_LEAGUE_MAPS_INTERVAL_SECONDS=120
-MAP_DETAIL_SYNC_LIMIT=2
-SCHEDULE_SYNC_ENABLED=true
-SCHEDULE_SOURCE_URL=https://www.cybersport.ru/tournaments/dota-2/the-international-2026
-SCHEDULE_TIMEZONE_OFFSET=+03:00
-AUTO_SNAPSHOT_ITERATIONS=1000000
-AUTO_SNAPSHOT_MAX_ITERATIONS=1000000
-AUTO_SNAPSHOT_BATCH_SIZE=250000
-AUTO_SNAPSHOT_TOLERANCE_PP=0.10
-FORECAST_JOB_MIN_ITERATIONS=10000
-FORECAST_JOB_MAX_ITERATIONS=1000000
-FORECAST_JOB_LEASE_SECONDS=300
-FORECAST_JOB_POLL_MS=500
-FORECAST_JOB_MAX_ATTEMPTS=3
-FORECAST_SCENARIO_RATE_LIMIT=30
-TI_PLAYIN_START=2026-08-16T00:00:00+08:00
-TI_PLAYOFF_START=2026-08-20T00:00:00+08:00
+
+# Не обязателен, но сильно ускоряет первичный сбор истории.
+OPENDOTA_API_KEY=
+
+# Нужен только чтобы запускать задачи вручную через API. Пусто — админ-ручки
+# отключены полностью.
+ADMIN_TOKEN=
 ```
 
-Защитите файл с паролем:
+Остальные значения в `.env.example` — рабочие по умолчанию. Ни один турнир
+нигде не зашит: система сама находит всё, что идёт.
+
+Защитите файл:
 
 ```bash
 chmod 600 .env
 ```
 
-`.env` исключён из Git. Пароль и база данных не попадут в репозиторий.
+`.env` исключён из Git.
 
 ## 4. Запустить
 
 ```bash
 docker compose up -d --build
 docker compose ps
-curl http://127.0.0.1/api/health
+curl -s http://127.0.0.1/api/health
 ```
 
-`web` и `api` используют один образ `ti2026-app`, поэтому приложение собирается один раз. `.dockerignore` исключает локальные `work/`, `node_modules`, `.git`, старые `dist/.next` и базы из build context. Повторная сборка также использует BuildKit-кэш npm. Обучающие базы и тяжёлые research-пайплайны в image build не запускаются.
+`web` и `api` используют один образ `dota-predictor`, поэтому приложение
+собирается один раз. `.dockerignore` исключает `work/`, `node_modules`, `.git`,
+`dist/.next` и базы из build context, а BuildKit кэширует `npm ci`.
 
-Для диагностики медленной сборки используйте подробный вывод:
+Ожидаемый ответ — JSON с `"ok": true`. Пока база пустая, счётчики будут нулевые.
+
+## 5. Первичное наполнение
+
+Сервер стартует полностью пустым: ни базы, ни моделей. Ничего обученного в
+образе нет — рейтинги и модель драфта он считает сам на матчах, которые сам же
+скачает. Планировщик делает это без ручного вмешательства:
+
+| Когда после старта | Что появляется |
+| --- | --- |
+| ~30 секунд | первые матчи и список идущих турниров |
+| ~1 минута | собственные рейтинги команд, прогнозы серий и турниров |
+| ~сутки | собственная модель драфта (нужно 1500 карт с пиками, по 1 запросу на карту) |
+
+До появления своей модели драфта live-матчи предсказываются по рейтингам — на
+карточке матча это написано прямо.
+
+Разовый bootstrap делает то же самое, но сразу и в правильном порядке:
 
 ```bash
-docker compose build --progress=plain web
+docker compose exec api node scripts/predictor.mjs bootstrap
 ```
 
-Если изменился только исходный код, шаг `npm ci` должен показывать `CACHED`. Без изменения `package-lock.json` повторная сборка обычно тратит время только на `npm run build`.
+Команда находит идущие турниры, добирает свежие матчи, тянет историю, собирает
+серии, обучает модели и строит первые прогнозы. Её можно прервать и запустить
+снова: курсор сбора сохраняется.
 
-Ожидаемый ответ проверки: `{"ok":true}`. После этого откройте в браузере:
+Если есть архив пиков из прошлой версии проекта, импорт даёт два года карт с
+драфтами без единого API-запроса:
 
-```text
-http://IP_СЕРВЕРА/
+```bash
+docker compose cp work/draft-training.sqlite api:/app/work/draft-training.sqlite
+docker compose exec api node scripts/migrate-legacy-drafts.mjs
+docker compose exec api node scripts/predictor.mjs rebuild
+docker compose exec api node scripts/predictor.mjs train
 ```
 
-API раз в 10 минут проверяет два независимых источника. Cybersport.ru даёт опубликованные будущие пары: при первом обнаружении сервер сохраняет соперников, время и pre-match вероятность. OpenDota даёт сыгранные карты лиги `19719`: они объединяются по `series_id`; BO3 записывается после двух побед, BO5 — после трёх. Live-feed OpenDota опрашивается только когда Cybersport.ru в MSK показывает окно матча или LIVE: ~20 секунд на драфте, 2 минуты после пиков. В промежутках без игр `/live` не дергается. Расписание Cybersport обновляется раз в 90 секунд и подхватывает переносы. Суточный бюджет держится ниже 3000 запросов; `LIVE_DRAFT_GRACE_SECONDS` удерживает последнюю карту при кратком пустом ответе провайдера, но завершённая карта удаляется сразу после появления результата. После новых пар, результатов, профиля или модельного артефакта сервер ставит Monte Carlo в SQLite-очередь и сохраняет неизменяемый снимок истории. Пока worker считает, API продолжает отдавать предыдущий ready read-model с признаком `stale`.
+Проверить результат:
 
-`FORECAST_JOB_MAX_ITERATIONS` ограничивает любой ручной/автоматический прогон, `FORECAST_JOB_LEASE_SECONDS` задаёт lease worker, а `FORECAST_JOB_MAX_ATTEMPTS` — число восстановлений после падения процесса. Lease должен быть заметно длиннее обычного максимального прогона; на медленном VPS увеличьте его до `600`. `FORECAST_SCENARIO_RATE_LIMIT` ограничивает публичные enqueue canonical-профилей на один IP в минуту. Manual и conditional jobs доступны только после входа администратора; conditional всегда использует 50 000 прогонов на ветку и общий seed.
+```bash
+docker compose exec api node scripts/predictor.mjs status
+```
 
-Границы стадий заданы во времени Шанхая: с `TI_PLAYIN_START` матчи считаются стыковыми, с `TI_PLAYOFF_START` — плей-офф. Если организаторы изменят расписание, поправьте эти две переменные и выполните `docker compose up -d`.
+## 6. Что происходит дальше само
 
-## 5. Как безопасно входить в админку без домена
+| Задача | Интервал | Что делает |
+| --- | --- | --- |
+| `live` | 20 с — 5 мин | идущие матчи; на драфте опрос учащается |
+| `resolve` | 10 мин | закрывает прогнозы, у которых появился результат |
+| `syncActive` | 15 мин | перезагружает идущие турниры целиком |
+| `forecast` | 20 мин | пересчитывает прогнозы на чемпионство |
+| `discover` | 60 мин | ищет новые турниры и проставляет им имена |
+| `collectRecent` | 3 ч | добирает завершённые матчи |
+| `backfill` | 30 мин | фоновая догрузка исторического окна |
+| `draftDetail` | 30 мин | подтягивает пики/баны |
+| `retrain` | 24 ч | переобучает рейтинги и модель драфта |
 
-Обычный HTTP не шифрует пароль. Публичный просмотр по IP можно оставить, но для входа администратора лучше использовать SSH-туннель:
+Состояние задач видно на `/model` и в `docker compose logs api`.
+
+### Про бесплатный тариф OpenDota
+
+Без ключа доступно около 2000 запросов в сутки с жёстким троттлингом. Клиент
+следит за дневным бюджетом и при 429 отступает целиком, а сбор истории сохраняет
+курсор после каждой страницы — прерванный прогон продолжится с того же места.
+Полная догрузка на бесплатном тарифе занимает несколько дней, с ключом — часы.
+
+## 7. Обновление
+
+```bash
+cd /opt/dota-predictor
+git pull --ff-only
+docker compose up -d --build
+docker compose ps
+curl -s http://127.0.0.1/api/health
+```
+
+Обученные модели лежат в volume `state` по пути `/app/data/models`, а не внутри
+образа: пересборка контейнера их не затирает и не подменяет чужими.
+
+Контейнеры имеют `restart: unless-stopped` и поднимутся после перезагрузки VPS.
+
+## 8. Ручной запуск задач
+
+Через CLI внутри контейнера:
+
+```bash
+docker compose exec api node scripts/predictor.mjs status
+docker compose exec api node scripts/predictor.mjs discover
+docker compose exec api node scripts/predictor.mjs train
+docker compose exec api node scripts/predictor.mjs forecast --force
+```
+
+Либо через API, если задан `ADMIN_TOKEN`:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  http://127.0.0.1/api/admin/jobs/retrain
+```
+
+Публичного HTTP достаточно для просмотра сайта, но токен по нему передавать
+не стоит. Для админ-запросов используйте SSH-туннель:
 
 ```bash
 ssh -L 8080:127.0.0.1:80 root@IP_СЕРВЕРА
 ```
 
-Пока SSH-сессия открыта, заходите в админку через `http://localhost:8080`, а не через публичный IP. Более удобный постоянный вариант — приватная сеть Tailscale/WireGuard. Если позже появится HTTPS, установите `COOKIE_SECURE=true` и перезапустите контейнеры.
+Пока сессия открыта, обращайтесь к `http://localhost:8080`.
 
-## 6. Обновление сайта
-
-```bash
-cd /opt/ti2026
-git pull --ff-only
-docker compose up -d --build
-docker compose ps
-curl -s http://127.0.0.1/api/models/nextgen
-```
-
-Next-generation model artifacts are copied into the immutable `/app/model` directory, so the persistent `/app/public` volume cannot hide a newly built artifact. The endpoint above exposes them for production smoke tests, but they remain diagnostic-only: shadow CatBoost/Deep Sets and experimental BO3/BO5 calibration do not alter live forecasts.
-
-Контейнеры имеют `restart: unless-stopped`, поэтому автоматически поднимутся после перезагрузки VPS. Именованные Docker volumes сохраняют SQLite, статистику и OpenDota-кэш при пересборке.
-
-## 7. Диагностика
+## 9. Диагностика
 
 ```bash
-cd /opt/ti2026
+cd /opt/dota-predictor
 docker compose ps
 docker compose logs --tail=200 api
 docker compose logs --tail=200 web
 docker compose logs --tail=200 proxy
+curl -s http://127.0.0.1/api/model
 ```
 
-Проверить автосинхронизацию можно публичным запросом состояния:
+`/api/model` показывает версии моделей, последний запуск каждой задачи, ошибки и
+остаток дневного бюджета OpenDota.
+
+## 10. Резервная копия
+
+Вся база и модели лежат в одном volume:
 
 ```bash
-curl -s http://127.0.0.1/api/state
-```
-
-В поле `liveSync.lastSync` будут время, число найденных будущих пар (`scheduledFound`), число карт и завершённых серий. Ошибка одного источника записывается отдельно в `scheduleError` или `resultError` и не мешает второму источнику обновиться.
-
-## 8. Резервная копия данных
-
-Для контрольной точки после третьего раунда предпочтительна согласованная online-копия с автоматической проверкой:
-
-```bash
-cd /opt/ti2026
-docker compose exec -e CHECKPOINT_EXPECT_COMPLETED=24 api npm run checkpoint:r3
-```
-
-Команда не останавливает API и откажется создавать контрольную точку, если SQLite повреждён, число завершённых серий отличается от ожидаемого, найдены дубликаты или отсутствуют frozen pre-match вероятности. Результат появляется в persistent volume внутри `/app/data/checkpoints`: база SQLite, JSON-отчёт, модельные артефакты и SHA-256. Скопируйте весь каталог контрольной точки за пределы VPS после проверки отчёта.
-
-Следующий вариант остаётся аварийной копией всего volume с короткой остановкой API.
-
-Создайте каталог и на несколько секунд остановите API, чтобы получить согласованную копию SQLite:
-
-```bash
-cd /opt/ti2026
+cd /opt/dota-predictor
 mkdir -p backups
 docker compose stop api
-docker run --rm -v ti2026_state:/data -v /opt/ti2026/backups:/backup alpine sh -c 'tar czf /backup/state.tar.gz -C /data .'
+docker run --rm -v dota-predictor_state:/data -v /opt/dota-predictor/backups:/backup \
+  alpine sh -c 'tar czf /backup/state.tar.gz -C /data .'
 docker compose start api
 ls -lh backups/state.tar.gz
 ```
 
-Если Compose создал volume с другим префиксом, узнайте точное имя командой `docker volume ls` и замените `ti2026_state`.
-
-Восстановление лучше выполнять только на остановленном API и после сохранения ещё одной копии текущего volume.
+Если Compose создал volume с другим префиксом, узнайте точное имя через
+`docker volume ls`. Восстановление выполняйте только при остановленном API и
+сохранив ещё одну копию текущего volume.

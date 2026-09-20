@@ -1,3 +1,7 @@
+// Two tests that pinned the homepage to the retired single-tournament view
+// ("app/page.tsx re-exports combined/page") were removed when the site became a
+// multi-tournament index. The International 2026 now lives in the archive like
+// any other event; its page is /t/the-international-2026-19719.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer as createNetServer } from "node:net";
@@ -149,75 +153,6 @@ test("production gate keeps adaptive forecasts in shadow when proper scores get 
   const betterAdaptive = { count: 24, correct: 19, brier: 0.201, logLoss: 0.59 };
   assert.deepEqual(selectProductionVariant(staticScore, worseAdaptive), { selected: "static", reason: "adaptive_failed_production_gate" });
   assert.deepEqual(selectProductionVariant(staticScore, betterAdaptive), { selected: "adaptive", reason: "adaptive_improves_accuracy_and_proper_scores" });
-});
-
-test("combined page and API persist map truth and explain the no-double-count policy", async () => {
-  const [api, page, tournamentPage, styles, checkpoint, modelGate, liveSeries] = await Promise.all([
-    readFile("server/api.mjs", "utf8"), readFile("app/combined/page.tsx", "utf8"), readFile("app/page.tsx", "utf8"), readFile("app/globals.css", "utf8"), readFile("scripts/checkpoint-production.mjs", "utf8"), readFile("server/model-gate.mjs", "utf8"), readFile("server/live-series.mjs", "utf8"),
-  ]);
-  assert.match(api, /CREATE TABLE IF NOT EXISTS tournament_maps/);
-  assert.match(api, /CREATE TABLE IF NOT EXISTS bet_locks/);
-  assert.match(api, /UNIQUE\(scope,subject_id\)/);
-  assert.match(api, /bet_already_locked/);
-  assert.match(api, /\/api\/combined/);
-  assert.match(api, /ready\.readModel\?\.inputHash !== combinedInputHash\(opinionWeight\)/);
-  assert.match(api, /\/api\/admin\/bet-locks/);
-  assert.match(api, /hydrateTournamentMapDetails/);
-  assert.match(api, /decisionHistory/);
-  assert.match(page, /Я поставил по рекомендации/);
-  assert.match(page, /СТАВКА ЗАФИКСИРОВАНА/);
-  assert.match(page, /История команд и матчи по раундам/);
-  assert.match(page, /setViewMode\("teams"\)/);
-  assert.match(page, /setViewMode\("rounds"\)/);
-  assert.match(page, /ПРОГНОЗ СБЫЛСЯ/);
-  assert.match(page, /ПРОГНОЗ НЕ СБЫЛСЯ/);
-  assert.match(page, /MAIN \/ СТАВКА/);
-  assert.match(page, /buildMatchStandings/);
-  assert.match(page, /function seriesPresentation/);
-  assert.match(page, /const source = betLock \? "bet" : hasHistorical \? "historical" : "main"/);
-  assert.match(page, /row\.decision\.historicalProbabilityA/);
-  assert.match(page, /ИСТОРИЧЕСКИЙ SNAPSHOT/);
-  assert.match(page, /snapshotId/);
-  assert.match(api, /baselineProbabilities/);
-  assert.match(api, /url\.searchParams\.get\("run"\)/);
-  assert.match(api, /snapshotDecisionEvaluation/);
-  assert.match(api, /match\.winner && historicalProbabilityA !== null/);
-  assert.match(api, /projectedMatchupState/);
-  assert.match(api, /combined_matchup_distribution/);
-  assert.match(api, /simulation,/);
-  assert.match(page, /function TournamentProjection/);
-  assert.match(page, /MONTE CARLO · SWISS → СТЫКИ → PLAYOFF/);
-  assert.match(page, /simulation\.iterations\.toLocaleString/);
-  assert.match(page, /БУДУЩИЕ ПАРЫ SWISS/);
-  assert.match(page, /ELIMINATION ROUND · 5 СЛОТОВ/);
-  assert.match(page, /Строится новая миллионная ревизия/);
-  assert.match(modelGate, /adaptive_failed_production_gate/);
-  assert.match(page, /MAIN = \{comparison\.selected\.toUpperCase\(\)\}/);
-  assert.match(page, /const \[expandedMatches, setExpandedMatches\]/);
-  assert.match(page, /fusion-series-row/);
-  assert.match(page, /ДВА ПОНЯТНЫХ СРЕЗА/);
-  assert.match(page, /const isOpen = Boolean\(expanded\[String\(row\.match\.id\)\]\)/);
-  assert.match(page, /fusion-matrix-progress/);
-  assert.match(page, /function seriesPredictionCorrect/);
-  assert.match(page, /seriesMisses/);
-  assert.match(page, /em className=\{row\.live \? "is-live" : predictionCorrect === true \? "is-correct" : predictionCorrect === false \? "is-wrong" : "is-pending"\}/);
-  assert.match(page, /из \{rows\.length\} матчей/);
-  assert.match(styles, /@media\(min-width:1100px\)/);
-  assert.match(styles, /\.fusion-swiss-layout\{/);
-  assert.match(page, /function RouletteRisk/);
-  assert.match(page, /const isLowConfidence = .* < \.58/);
-  assert.match(tournamentPage, /export \{ default \} from "\.\/combined\/page"/);
-  assert.match(page, /UPPER_PLACEMENT/);
-  assert.match(page, /LOWER_PLACEMENT/);
-  assert.match(page, /Точный счёт/);
-  assert.match(page, /ТЕКУЩАЯ КАРТА/);
-  assert.match(liveSeries, /Number\.POSITIVE_INFINITY/);
-  assert.match(page, /observedScore\(row, maps\)\.winsA \+ observedScore\(row, maps\)\.winsB \+ 1/);
-  assert.match(page, /Draft-прогноз ещё не сохранён/);
-  assert.match(page, /ПО ПИКАМ/);
-  assert.match(page, /онлайн-состояние карты/);
-  assert.match(checkpoint, /Checkpoint refused/);
-  assert.match(checkpoint, /backup\(source/);
 });
 
 test("active draft prediction is server-calculated, validates picks and preserves partial completeness", async () => {
@@ -461,18 +396,6 @@ test("tournament calibration replays the production updater before every outcome
   assert.match(calibration, /evaluator: "server\/live-team-update\.mjs#evaluateLiveSeriesChronologically"/);
 });
 
-test("current TI results have one shared update path and appear in team history", async () => {
-  const [page, api] = await Promise.all([readFile("app/page.tsx", "utf8"), readFile("server/api.mjs", "utf8")]);
-  const engine = await readFile("server/forecast-engine.mjs", "utf8");
-  const stats = JSON.parse(await readFile("public/team-stats.json", "utf8"));
-  assert.equal(stats.methodology.liveLeagueExcludedFromBaseline, 19719);
-  assert.match(page, /combined\/page/);
-  assert.match(engine, /updateProbabilitiesWithLiveSeries\(base, matches/);
-  assert.match(api, /currentForecast/);
-  assert.match(api, /onlineSeriesCount/);
-  assert.doesNotMatch(engine, /strength\[match\.team_a\].*surprise/);
-});
-
 test("saved forecast diagnostics freeze coefficients, pair decomposition and live-series influence", () => {
   const stats = {
     generatedAt: "2026-08-10T00:00:00.000Z",
@@ -506,28 +429,33 @@ test("snapshot history offers a detailed diagnostic export endpoint", async () =
   assert.match(api, /buildSnapshotCalculationTrace/);
 });
 
-test("temporal artifact is compact and gated by future-patch evaluation", async () => {
-  const raw = await readFile("public/draft-temporal-model.json", "utf8");
+test("draft artifact is compact and gated against a team-strength baseline", async (t) => {
+  // The predictor trains this for itself into an untracked directory, so a
+  // clean checkout has none. When one exists it must meet the contract.
+  // (public/draft-temporal-model.json is the retired pipeline's own artifact.)
+  const raw = await readFile(process.env.DRAFT_TEMPORAL_MODEL || "models/draft-temporal-model.json", "utf8").catch(() => null);
+  if (raw === null) return t.skip("no draft model trained in this checkout");
   const model = JSON.parse(raw);
   assert.equal(model.schemaVersion, 1);
-  assert.equal(model.modelFamily, "walk-forward-draft-ensemble-v1");
   assert.ok(model.dataset.matches >= 1000);
-  assert.ok(model.dataset.patches >= 5);
-  assert.equal(model.arena.leaderboard.length, 9);
-  assert.ok(model.ensemble.members.length >= 1 && model.ensemble.members.length <= 4);
-  assert.equal(model.backtest.validatedObject, "fixed four-member production stack");
-  assert.equal(model.deployment.incrementalToActiveValidated, false);
-  assert.ok(["candidate", "shadow", "insufficient_data"].includes(model.deployment.status));
-  assert.ok(Number.isFinite(model.backtest.aggregate.model.logLoss));
-  assert.ok(Number.isFinite(model.backtest.aggregate.neutral.logLoss));
-  assert.equal(model.backtest.aggregate.seriesClusterBootstrap.cluster, "series_id");
-  assert.ok(Number.isFinite(model.backtest.aggregate.seriesClusterBootstrap.upper95));
-  assert.ok(Buffer.byteLength(raw) < 1_000_000);
-  const heroIds = Object.keys(model.ensemble.members[0].model.heroes).slice(0, 10).map(Number);
+  assert.ok(Object.keys(model.heroes).length >= 50);
+  assert.ok(Buffer.byteLength(raw) < 5_000_000);
+  // The published artifact must have beaten pre-match team strength on a test
+  // slice that hyperparameter selection never saw.
+  assert.equal(model.validation.gatePassed, true);
+  assert.ok(model.validation.holdout.logLoss < model.validation.baselineLogLoss);
+  assert.equal(model.validation.baselineDescription, "pre-match team strength only, no hero information");
+  assert.ok(model.validation.holdout.samples >= 100);
+  const heroIds = Object.keys(model.heroes).slice(0, 10).map(Number);
   const sideA = predictTemporalDraft(model, { picksA: heroIds.slice(0, 5), picksB: heroIds.slice(5, 10), radiant: "a" });
   const sideB = predictTemporalDraft(model, { picksA: heroIds.slice(0, 5), picksB: heroIds.slice(5, 10), radiant: "b" });
-  assert.ok(Math.abs(sideA.probabilityA - sideB.probabilityA) < 1e-12);
-  if (model.backtest.aggregate.logLossDelta >= 0) assert.equal(model.deployment.recommendedWeight, 0);
+  // Hero evidence must be side-independent, while the Radiant advantage is not:
+  // swapping sides has to move the logit by exactly twice the side term.
+  assert.ok(Math.abs(sideA.components.heroes - sideB.components.heroes) < 1e-12);
+  assert.ok(Math.abs((sideA.rawLogitA - sideB.rawLogitA) - 2 * model.inference.radiantBias) < 1e-9);
+  // A real Radiant edge exists in Dota but is small; anything large means the
+  // side term has absorbed something it should not have.
+  assert.ok(model.inference.radiantBias > 0 && model.inference.radiantBias < 0.25);
 });
 
 test("two-year patch research uses exact versions and honest patch-note ablation", async () => {
@@ -678,12 +606,18 @@ test("draft refresh discovers live TI league maps before training", async () => 
   assert.ok(Number.isInteger(draftStats.methodology.latestOpenDotaPatchId));
 });
 
-test("deployment files do not contain the administrator password", async () => {
+test("deployment files carry no secrets of their own", async () => {
   const compose = await readFile("docker-compose.yml", "utf8");
   const example = await readFile(".env.example", "utf8");
-  assert.match(compose, /ADMIN_PASSWORD/);
-  assert.match(example, /replace-with-a-long-random-password/);
-  assert.doesNotMatch(compose, /test-password/);
+  // Every secret must come from the environment, never from a committed file.
+  assert.match(compose, /ADMIN_TOKEN: \$\{ADMIN_TOKEN:-\}/);
+  assert.match(compose, /OPENDOTA_API_KEY: \$\{OPENDOTA_API_KEY:-\}/);
+  assert.match(example, /^ADMIN_TOKEN=$/m, "the example must ship with an empty token");
+  assert.match(example, /^OPENDOTA_API_KEY=$/m);
+  for (const pattern of [/test-password/, /replace-with-a-long/, /Bearer [A-Za-z0-9]{8}/]) {
+    assert.doesNotMatch(compose, pattern);
+    assert.doesNotMatch(example, pattern);
+  }
 });
 
 test("OpenDota maps become a completed series only after two wins", () => {
@@ -1023,12 +957,20 @@ test("Tundra schedule name resolves to transferred 1w roster", () => {
   ]);
 });
 
-test("Ubuntu deployment documents automatic live sync", async () => {
+test("Ubuntu deployment documents the unattended pipeline", async () => {
   const guide = await readFile("docs/UBUNTU_DEPLOY.md", "utf8");
   const compose = await readFile("docker-compose.yml", "utf8");
-  assert.match(guide, /TI_LEAGUE_ID=19719/);
-  assert.match(guide, /ssh -L 8080/);
-  assert.match(compose, /LIVE_SYNC_INTERVAL_MINUTES/);
+  // The guide must cover first-run bootstrapping and the free-tier limitation,
+  // which is the single thing most likely to confuse a fresh install.
+  assert.match(guide, /predictor:bootstrap|predictor\.mjs bootstrap/);
+  assert.match(guide, /OPENDOTA_API_KEY/);
+  assert.match(guide, /docker compose up -d --build/);
+  // The scheduler is what makes the system unattended, so it must be wired.
+  assert.match(compose, /SCHEDULER_ENABLED/);
+  assert.match(compose, /JOB_RETRAIN_HOURS/);
+  assert.match(compose, /LIVE_DRAFT_INTERVAL_SECONDS/);
+  // No tournament may be hardcoded anywhere in the deployment.
+  assert.doesNotMatch(compose, /TI_LEAGUE_ID|19719/);
 });
 
 test("all sixteen local team logos are present", async () => {
@@ -1237,9 +1179,9 @@ test("pages read live artifacts from API and the admin refresh runs the full pro
   assert.match(api, /sendLiveJsonArtifact/);
   assert.match(api, /publicArtifactFreshness/);
   assert.match(api, /artifacts: publicArtifactFreshness\(\)/);
-  assert.match(nginx, /location = \/intel-stats\.json/);
-  assert.match(nginx, /location = \/team-stats\.json/);
-  assert.match(nginx, /location = \/draft-stats\.json/);
+  // The per-artifact nginx routes belonged to the retired single-tournament
+  // API; the proxy now forwards the whole /api/ prefix instead.
+  assert.match(nginx, /location \/api\//);
   assert.match(combined, /\/api\/artifacts\/draft-stats\.json/);
   assert.match(refresh, /calibrate-tournament-variance\.mjs/);
   assert.match(api, /Турнирная online-калибровка/);
@@ -1345,19 +1287,33 @@ test("next-generation artifacts enforce chronological gates and keep weak challe
   assert.ok(series.holdout.calibratedLogLoss >= series.holdout.rawLogLoss);
 });
 
-test("production image exposes next-generation artifacts without activating shadows", async () => {
+test("a fresh server inherits no trained model and keeps the ones it trains", async () => {
   const dockerfile = await readFile("Dockerfile", "utf8");
   const compose = await readFile("docker-compose.yml", "utf8");
-  const api = await readFile("server/api.mjs", "utf8");
-  for (const file of ["all-pro-team-model.json", "draft-nextgen-model.json", "nextgen-series-calibration.json", "live-map-model.json", "draft-stats.json", "team-stats.json", "intel-stats.json"]) assert.match(dockerfile, new RegExp(file.replaceAll(".", "\\.")));
-  assert.match(compose, /DRAFT_STATS: \/app\/model\/draft-stats\.json/);
-  assert.match(compose, /TEAM_STATS: \/app\/model\/team-stats\.json/);
-  assert.match(compose, /INTEL_STATS: \/app\/model\/intel-stats\.json/);
-  assert.match(compose, /ALL_PRO_TEAM_MODEL: \/app\/model\/all-pro-team-model\.json/);
-  assert.match(compose, /LIVE_MAP_MODEL: \/app\/model\/live-map-model\.json/);
-  assert.match(api, /\/api\/models\/nextgen/);
-  assert.match(api, /\/api\/draft\/live\/model/);
-  assert.match(api, /activeForecastUnchanged: true/);
+  const entrypoint = await readFile("docker-entrypoint.sh", "utf8");
+  const gitignore = await readFile(".gitignore", "utf8");
+
+  // The two models that drive every prediction must be trained on the machine
+  // that serves them, and must survive a container rebuild.
+  for (const variable of ["TEAM_RATINGS_MODEL", "DRAFT_TEMPORAL_MODEL"]) {
+    assert.match(compose, new RegExp(`${variable}: /app/data/models/`), `${variable} must resolve inside the volume`);
+  }
+  assert.match(compose, /DATA_DIR: \/app\/data/);
+  assert.match(compose, /- state:\/app\/data/);
+
+  // Nothing another machine trained may be carried into the image or the repo.
+  assert.doesNotMatch(dockerfile, /seed-models/, "the image must not ship trained models");
+  assert.doesNotMatch(entrypoint, /cp /, "the entrypoint must not copy models into the volume");
+  assert.match(entrypoint, /mkdir -p/);
+  assert.match(entrypoint, /exec "\$@"/);
+  assert.ok(gitignore.includes("/models/"), "the directory the predictor trains into must stay out of git");
+
+  // The defaults must agree with the ignore rule, or a local run would write a
+  // trained model straight into a tracked path and it would be committed.
+  const ratings = await readFile("server/core/ratings.mjs", "utf8");
+  const draft = await readFile("server/core/draft-model.mjs", "utf8");
+  assert.match(ratings, /TEAM_RATINGS_MODEL \|\| "models\/team-ratings\.json"/);
+  assert.match(draft, /DRAFT_TEMPORAL_MODEL \|\| "models\/draft-temporal-model\.json"/);
 });
 
 test("docker build keeps research data out of context and shares one app image", async () => {
@@ -1368,7 +1324,7 @@ test("docker build keeps research data out of context and shares one app image",
   for (const directory of ["node_modules*", "work", "data", ".git", "dist", ".vinext"]) assert.ok(ignoredLines.has(directory));
   assert.match(dockerfile, /--mount=type=cache,target=\/root\/\.npm/);
   assert.match(dockerfile, /npm ci --no-audit --no-fund/);
-  assert.match(compose, /image: ti2026-app:\$\{IMAGE_TAG:-local\}/);
+  assert.match(compose, /image: dota-predictor:\$\{IMAGE_TAG:-local\}/);
   assert.equal((compose.match(/<<: \*app-image/g) ?? []).length, 2);
   assert.equal((compose.match(/^\s+build:/gm) ?? []).length, 1);
 });

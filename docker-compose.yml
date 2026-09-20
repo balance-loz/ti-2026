@@ -1,5 +1,5 @@
 x-app-image: &app-image
-  image: ti2026-app:${IMAGE_TAG:-local}
+  image: dota-predictor:${IMAGE_TAG:-local}
 
 services:
   web:
@@ -9,68 +9,74 @@ services:
     command: npm start -- --hostname 0.0.0.0 --port 3000
     restart: unless-stopped
     environment:
-      SITE_URL: ${SITE_URL:-http://159.194.202.215}
-    volumes:
-      - stats:/app/public
+      SITE_URL: ${SITE_URL:-http://localhost}
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>{if(!r.ok)process.exit(1)})"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
+
+  # Same image as web; only the command differs, so it is built once.
   api:
     <<: *app-image
-    command: node server/api.mjs
+    command: node server/app.mjs
     restart: unless-stopped
     environment:
       API_PORT: 3001
       DATA_DIR: /app/data
-      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
-      COOKIE_SECURE: ${COOKIE_SECURE:-false}
-      TI_LEAGUE_ID: ${TI_LEAGUE_ID:-19719}
-      LIVE_SYNC_ENABLED: ${LIVE_SYNC_ENABLED:-true}
-      LIVE_SYNC_INTERVAL_MINUTES: ${LIVE_SYNC_INTERVAL_MINUTES:-10}
-      LIVE_DRAFT_SYNC_ENABLED: ${LIVE_DRAFT_SYNC_ENABLED:-true}
-      LIVE_DRAFT_INTERVAL_SECONDS: ${LIVE_DRAFT_INTERVAL_SECONDS:-20}
-      LIVE_DRAFT_GRACE_SECONDS: ${LIVE_DRAFT_GRACE_SECONDS:-120}
-      LIVE_LEAGUE_MAPS_INTERVAL_SECONDS: ${LIVE_LEAGUE_MAPS_INTERVAL_SECONDS:-120}
-      MAP_DETAIL_SYNC_LIMIT: ${MAP_DETAIL_SYNC_LIMIT:-2}
+      MODEL_DIR: /app/data/models
+
+      # The server trains these two itself from the matches it collects, and
+      # writes them to the data volume so a container rebuild keeps them.
+      # Nothing is pre-seeded: a fresh install starts with no model and has its
+      # own ratings within a minute of the first collection pass.
+      TEAM_RATINGS_MODEL: /app/data/models/team-ratings.json
+      DRAFT_TEMPORAL_MODEL: /app/data/models/draft-temporal-model.json
+      # Read-only: the mid-game gold-lead layer has no retrainer yet, so it is
+      # served from the image. Point it at a missing path to switch it off.
+      LIVE_MAP_MODEL: /app/public/live-map-model.json
+      OPENDOTA_CACHE_DIR: /app/data/opendota-cache
+
+      # Leave empty for the free tier. A key raises the daily allowance and lets
+      # the poll interval drop; see OPENDOTA_DAILY_LIMIT below.
       OPENDOTA_API_KEY: ${OPENDOTA_API_KEY:-}
-      SCHEDULE_SYNC_ENABLED: ${SCHEDULE_SYNC_ENABLED:-true}
-      SCHEDULE_SOURCE_URL: ${SCHEDULE_SOURCE_URL:-https://www.cybersport.ru/tournaments/dota-2/the-international-2026}
-      SCHEDULE_TIMEZONE_OFFSET: ${SCHEDULE_TIMEZONE_OFFSET:-+03:00}
-      AUTO_SNAPSHOT_ITERATIONS: ${AUTO_SNAPSHOT_ITERATIONS:-1000000}
-      AUTO_SNAPSHOT_MAX_ITERATIONS: ${AUTO_SNAPSHOT_MAX_ITERATIONS:-1000000}
-      AUTO_SNAPSHOT_BATCH_SIZE: ${AUTO_SNAPSHOT_BATCH_SIZE:-250000}
-      AUTO_SNAPSHOT_TOLERANCE_PP: ${AUTO_SNAPSHOT_TOLERANCE_PP:-0.10}
-      FORECAST_JOB_MIN_ITERATIONS: ${FORECAST_JOB_MIN_ITERATIONS:-10000}
-      FORECAST_JOB_MAX_ITERATIONS: ${FORECAST_JOB_MAX_ITERATIONS:-1000000}
-      FORECAST_JOB_LEASE_SECONDS: ${FORECAST_JOB_LEASE_SECONDS:-300}
-      FORECAST_JOB_POLL_MS: ${FORECAST_JOB_POLL_MS:-500}
-      FORECAST_JOB_MAX_ATTEMPTS: ${FORECAST_JOB_MAX_ATTEMPTS:-3}
-      FORECAST_SCENARIO_RATE_LIMIT: ${FORECAST_SCENARIO_RATE_LIMIT:-30}
-      DRAFT_MAX_NEW_MATCHES: ${DRAFT_MAX_NEW_MATCHES:-0}
-      REFRESH_CHILD_MAX_OLD_SPACE_MB: ${REFRESH_CHILD_MAX_OLD_SPACE_MB:-384}
-      DRAFT_DB_PATH: /app/data/draft-model.sqlite
-      DRAFT_STATS: /app/model/draft-stats.json
-      TEAM_STATS: /app/model/team-stats.json
-      INTEL_STATS: /app/model/intel-stats.json
-      DRAFT_TEMPORAL_MODEL: /app/model/draft-temporal-model.json
-      LIVE_MAP_MODEL: /app/model/live-map-model.json
-      ALL_PRO_TEAM_MODEL: /app/model/all-pro-team-model.json
-      DRAFT_NEXTGEN_MODEL: /app/model/draft-nextgen-model.json
-      NEXTGEN_SERIES_CALIBRATION: /app/model/nextgen-series-calibration.json
-      TI_PLAYIN_START: ${TI_PLAYIN_START:-2026-08-16T00:00:00+08:00}
-      TI_PLAYOFF_START: ${TI_PLAYOFF_START:-2026-08-20T00:00:00+08:00}
+      OPENDOTA_DAILY_LIMIT: ${OPENDOTA_DAILY_LIMIT:-}
+      OPENDOTA_REQUEST_GAP_MS: ${OPENDOTA_REQUEST_GAP_MS:-}
+
+      # Which tournaments get a page. Empty means every tier.
+      TOURNAMENT_TIERS: ${TOURNAMENT_TIERS:-premium,professional}
+      TOURNAMENT_LIVE_WINDOW_HOURS: ${TOURNAMENT_LIVE_WINDOW_HOURS:-24}
+      TOURNAMENT_ACTIVE_WINDOW_DAYS: ${TOURNAMENT_ACTIVE_WINDOW_DAYS:-7}
+
+      SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
+      JOB_DISCOVER_MINUTES: ${JOB_DISCOVER_MINUTES:-60}
+      JOB_SYNC_ACTIVE_MINUTES: ${JOB_SYNC_ACTIVE_MINUTES:-15}
+      JOB_FORECAST_MINUTES: ${JOB_FORECAST_MINUTES:-20}
+      JOB_COLLECT_HOURS: ${JOB_COLLECT_HOURS:-3}
+      JOB_BACKFILL_MINUTES: ${JOB_BACKFILL_MINUTES:-30}
+      JOB_DRAFT_DETAIL_MINUTES: ${JOB_DRAFT_DETAIL_MINUTES:-30}
+      JOB_RETRAIN_HOURS: ${JOB_RETRAIN_HOURS:-24}
+
+      LIVE_DRAFT_INTERVAL_SECONDS: ${LIVE_DRAFT_INTERVAL_SECONDS:-20}
+      LIVE_GAME_INTERVAL_SECONDS: ${LIVE_GAME_INTERVAL_SECONDS:-90}
+      LIVE_IDLE_INTERVAL_SECONDS: ${LIVE_IDLE_INTERVAL_SECONDS:-300}
+
+      HISTORY_DAYS: ${HISTORY_DAYS:-540}
+      RATINGS_WINDOW_DAYS: ${RATINGS_WINDOW_DAYS:-540}
+      DRAFT_WINDOW_DAYS: ${DRAFT_WINDOW_DAYS:-800}
+      FORECAST_ITERATIONS: ${FORECAST_ITERATIONS:-20000}
+
+      # Only needed to trigger a job by hand over the API. Leave empty to
+      # disable the admin endpoints entirely.
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
     volumes:
       - state:/app/data
-      - stats:/app/public
-      - opendota-cache:/app/work/opendota-cache
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r=>{if(!r.ok)process.exit(1)})"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
+
   proxy:
     image: nginx:1.27-alpine
     restart: unless-stopped
@@ -79,7 +85,6 @@ services:
     volumes:
       - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on: [web, api]
+
 volumes:
   state:
-  stats:
-  opendota-cache:
