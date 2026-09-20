@@ -278,3 +278,8 @@
 .dp-bracket-won b { color: var(--fusion-success); }
 .dp-bracket-won::after { content: "✓"; margin-left: auto; color: var(--fusion-success); font-size: 11px; }
 .dp-bracket-meta { font-size: 10px; color: var(--fusion-muted); border-top: 1px solid var(--fusion-line); padding-top: 5px; }
+.dp-prematch {
+  display: inline-block; padding: 1px 6px; border-radius: 4px;
+  background: var(--fusion-accent-soft); color: var(--fusion-accent);
+  font-weight: 700; font-size: 9px; letter-spacing: .05em; text-transform: uppercase;
+}

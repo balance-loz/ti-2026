@@ -293,6 +293,7 @@ export type ModelPrediction = {
   actualScore: string | null;
   scoreCorrect: boolean | null;
   correct: boolean | null;
+  features: Record<string, unknown> | null;
   picks?: { radiant: number[]; dire: number[] } | null;
   patch?: string | null;
   startTime?: number | null;

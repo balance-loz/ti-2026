@@ -36,6 +36,7 @@ function PredictionRow({ row, heroes }: { row: ModelPrediction; heroes: HeroCata
           <Team team={row.sideB} compact />
         </div>
         <span className="dp-muted dp-small">
+          {row.features?.frozenBeforeStart ? <><span className="dp-prematch">до старта</span> · </> : null}
           {formatDateTime(row.startTime ?? null)}
           {row.tournament ? <> · <a className="dp-link" href={`/t/${row.tournament.slug}`}>{row.tournament.name}</a></> : null}
           {link ? <> · <a className="dp-link" href={link}>разбор</a></> : null}

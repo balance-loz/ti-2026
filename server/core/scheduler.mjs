@@ -13,6 +13,7 @@ import { backfillHistory, collectRecent, fetchMissingDrafts } from "../jobs/coll
 import { forecastActiveTournaments } from "../jobs/forecast.mjs";
 import { importPendingArchives } from "../jobs/import-archive.mjs";
 import { syncActiveStructures } from "../jobs/sync-structure.mjs";
+import { freezeAndLink } from "../jobs/freeze-scheduled.mjs";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -23,6 +24,7 @@ export const JOB_DEFINITIONS = {
   importArchive: { intervalMs: number(process.env.JOB_IMPORT_MINUTES, 10) * MINUTE, description: "Import a dropped match archive" },
   live: { intervalMs: 30_000, adaptive: true, description: "Live games and draft predictions" },
   resolve: { intervalMs: 10 * MINUTE, description: "Score finished predictions" },
+  freeze: { intervalMs: number(process.env.JOB_FREEZE_MINUTES, 5) * MINUTE, description: "Freeze predictions before scheduled matches start" },
   syncActive: { intervalMs: number(process.env.JOB_SYNC_ACTIVE_MINUTES, 15) * MINUTE, description: "Re-pull running tournaments" },
   discover: { intervalMs: number(process.env.JOB_DISCOVER_MINUTES, 60) * MINUTE, description: "Find new tournaments" },
   forecast: { intervalMs: number(process.env.JOB_FORECAST_MINUTES, 20) * MINUTE, description: "Tournament outlook Monte Carlo" },
@@ -58,6 +60,7 @@ export function createScheduler(db, { enabled = true, logger = console } = {}) {
       const forecasts = forecastActiveTournaments(db, { force: true });
       return { ...result, ratings, draft, forecasts: { leagues: forecasts.leagues, updated: forecasts.updated } };
     },
+    freeze: async () => freezeAndLink(db),
     resolve: async () => resolvePredictions(db),
     syncActive: async () => {
       const leagues = activeTournaments(db).slice(0, number(process.env.JOB_SYNC_MAX_LEAGUES, 12));
@@ -156,7 +159,7 @@ export function createScheduler(db, { enabled = true, logger = console } = {}) {
       }
       // Stagger the first run of each job so a cold start does not fire
       // everything into the API at once.
-      const order = ["importArchive", "live", "discover", "syncActive", "resolve", "forecast", "structure", "collectRecent", "draftDetail", "backfill", "retrain"];
+      const order = ["importArchive", "live", "discover", "syncActive", "freeze", "resolve", "forecast", "structure", "collectRecent", "draftDetail", "backfill", "retrain"];
       order.forEach((name, index) => {
         const timer = setTimeout(async () => {
           if (stopped) return;

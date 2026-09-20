@@ -407,3 +407,66 @@ test("background work is described in words, with the right plural form", async 
     assert.ok(JOB_TITLES[job], `${job} must have a readable title`);
   }
 });
+
+test("a scheduled match is predicted before it starts, then follows its series", async () => {
+  const { freezeScheduledMatches, linkScheduledToSeries, scheduledSubjectKey } =
+    await import("../server/jobs/freeze-scheduled.mjs");
+  const { writeFileSync, mkdirSync: makeDir } = await import("node:fs");
+  const nodePath = await import("node:path");
+  const { RATINGS_PATH, invalidateRatingsCache } = await import("../server/core/ratings.mjs");
+
+  makeDir(nodePath.dirname(RATINGS_PATH), { recursive: true });
+  writeFileSync(RATINGS_PATH, JSON.stringify({
+    modelId: "test-ratings",
+    ratings: { 501: { rating: 1.4, series: 50 }, 502: { rating: -0.3, series: 50 } },
+  }));
+  invalidateRatingsCache();
+
+  const leagueId = 900030;
+  upsertTournament(db, { leagueId, name: "Scheduled Cup", tier: "professional" });
+  upsertTeam(db, { teamId: 501, name: "Alpha" });
+  upsertTeam(db, { teamId: 502, name: "Beta" });
+
+  const startTime = NOW + 30 * 60;
+  db.prepare(`INSERT INTO scheduled_matches(league_id, source, external_key, slot, stage, lane,
+      team_a_name, team_b_name, team_a_id, team_b_id, best_of, start_time, updated_at)
+    VALUES(?, 'liquipedia', 'bracket:R1M1', 'R1M1', 'Upper Bracket', 'upper', 'Alpha', 'Beta', 501, 502, 3, ?, ?)`)
+    .run(leagueId, startTime, new Date().toISOString());
+
+  // Too early: nothing is written until the match is close enough to start.
+  assert.equal(freezeScheduledMatches(db, { nowSeconds: NOW - 10 * 3600 }).frozen, 0);
+
+  const result = freezeScheduledMatches(db, { nowSeconds: NOW });
+  assert.equal(result.frozen, 1);
+
+  const key = scheduledSubjectKey(leagueId, "bracket:R1M1");
+  const frozen = getPrediction(db, "series", key, "team_ratings");
+  assert.ok(frozen, "the prediction must exist before a single map is played");
+  const features = JSON.parse(frozen.features_json);
+  assert.equal(features.frozenBeforeStart, true);
+  assert.ok(features.minutesBeforeStart > 0, "it must be recorded as ahead of the start");
+  assert.ok(frozen.predicted_score, "a scoreline is published alongside the winner");
+  assert.ok(Number(frozen.probability_a) > 0.5, "the stronger side must be favoured");
+
+  // Running again must not write a second one.
+  assert.equal(freezeScheduledMatches(db, { nowSeconds: NOW }).frozen, 0);
+
+  // The series then happens and the prediction follows it, keeping its number.
+  seedMap({ matchId: 950001, leagueId, seriesId: "9500", radiant: 501, dire: 502, radiantWin: true, startTime: startTime + 120 });
+  seedMap({ matchId: 950002, leagueId, seriesId: "9500", radiant: 501, dire: 502, radiantWin: true, startTime: startTime + 3600 });
+  rebuildSeries(db, leagueId);
+
+  const linked = linkScheduledToSeries(db, { nowSeconds: startTime + 7200 });
+  assert.equal(linked.linked, 1);
+  assert.equal(getPrediction(db, "series", key, "team_ratings"), undefined, "it must no longer sit on the schedule key");
+
+  const series = db.prepare("SELECT series_key FROM series WHERE league_id = ?").get(leagueId);
+  const moved = getPrediction(db, "series", series.series_key, "team_ratings");
+  assert.ok(moved, "the same prediction now belongs to the series that happened");
+  assert.equal(moved.probability_a, frozen.probability_a, "its number must not change on the way");
+
+  resolvePredictions(db);
+  const scored = getPrediction(db, "series", series.series_key, "team_ratings");
+  assert.equal(scored.outcome, 1);
+  assert.equal(scored.actual_score, "2:0");
+});

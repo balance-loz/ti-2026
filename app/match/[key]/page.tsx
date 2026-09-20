@@ -125,8 +125,12 @@ export default function MatchPage() {
               </div>
             </dl>
             <p className="dp-caveat">
+              {prediction.features?.frozenBeforeStart
+                ? <><b>Записано до начала матча</b>, за {String(prediction.features.minutesBeforeStart ?? "—")} мин до официального старта.{" "}</>
+                : prediction.features?.scoreAtFreeze
+                  ? <>Серия была обнаружена уже при счёте {prediction.features.scoreAtFreeze as string} — раньше её в данных не существовало.{" "}</>
+                  : null}
               Зафиксировано {relativeTime(prediction.capturedAt)}
-              {prediction.features?.scoreAtFreeze ? ` при счёте ${prediction.features.scoreAtFreeze as string}` : null}
               {prediction.modelId ? ` · модель ${prediction.modelId}` : null}.
               Счёт и победитель оцениваются отдельно: ошибиться в счёте гораздо легче, и это не должно
               портить показатель по победителю.
