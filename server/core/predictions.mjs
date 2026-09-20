@@ -205,12 +205,19 @@ export function resolvePredictions(db) {
 }
 
 /** Accuracy over resolved predictions, optionally narrowed to one league. */
-export function accuracySummary(db, { leagueId = null, modelKind = null, sinceDays = null } = {}) {
+export function accuracySummary(db, { leagueId = null, modelKind = null, sinceDays = null, modelIds = null } = {}) {
   const filters = ["resolved_at IS NOT NULL"];
   const params = [];
   if (leagueId != null) { filters.push("league_id = ?"); params.push(leagueId); }
   if (modelKind) { filters.push("model_kind = ?"); params.push(modelKind); }
   if (sinceDays) { filters.push("created_at >= ?"); params.push(new Date(Date.now() - sinceDays * 86_400_000).toISOString()); }
+  // Narrowing to chosen versions answers "is the new model actually better",
+  // which the combined figure cannot: a good version is diluted by every older
+  // one that ever made a call.
+  if (Array.isArray(modelIds) && modelIds.length) {
+    filters.push(`model_id IN (${modelIds.map(() => "?").join(",")})`);
+    params.push(...modelIds);
+  }
   // Winner and scoreline are aggregated apart, and drawn series are counted but
   // kept out of the winner figures: there was no winner to call.
   const rows = db.prepare(`SELECT model_kind, scope,
@@ -283,4 +290,32 @@ export function freezeUpcomingSeries(db, leagueId) {
     if (result.inserted) frozen += 1;
   }
   return { frozen };
+}
+
+/**
+ * Model versions that have actually made calls, with how many are closed.
+ * A version with nothing resolved yet is still listed: it is running, and the
+ * page should say so rather than hide it.
+ */
+export function modelVersionBreakdown(db, modelKind) {
+  return db.prepare(`SELECT model_id,
+      COUNT(*) AS total,
+      SUM(CASE WHEN resolved_at IS NOT NULL THEN 1 ELSE 0 END) AS resolved,
+      MIN(created_at) AS first_used,
+      MAX(created_at) AS last_used,
+      AVG(CASE WHEN outcome IS NULL THEN NULL
+               WHEN (probability_a >= 0.5 AND outcome = 1) OR (probability_a < 0.5 AND outcome = 0) THEN 1.0
+               ELSE 0.0 END) AS accuracy,
+      AVG(brier) AS brier
+    FROM predictions WHERE model_kind = ? AND model_id IS NOT NULL
+    GROUP BY model_id ORDER BY MAX(created_at) DESC`).all(modelKind)
+    .map((row) => ({
+      modelId: row.model_id,
+      total: Number(row.total),
+      resolved: Number(row.resolved || 0),
+      firstUsed: row.first_used,
+      lastUsed: row.last_used,
+      accuracy: row.accuracy == null ? null : Number(row.accuracy),
+      brier: row.brier == null ? null : Number(row.brier),
+    }));
 }

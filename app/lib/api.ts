@@ -256,6 +256,7 @@ export type ModelPrediction = {
   probabilityA: number;
   bestOf: number | null;
   capturedAt: string;
+  modelId: string | null;
   resolvedAt: string | null;
   outcome: number | null;
   outcomeKind: string | null;
@@ -273,9 +274,53 @@ export type ModelPrediction = {
 export type ModelDetail = {
   modelKind: string;
   accuracy: AccuracyRow[];
+  versions: ModelVersion[];
+  selectedVersions: string[];
   predictions: ModelPrediction[];
   heroes: HeroCatalog;
   generatedAt: string;
+};
+
+
+export type JobState = {
+  job: string;
+  title: string;
+  description: string;
+  running: boolean;
+  intervalSeconds: number;
+  lastRunAt: string | null;
+  lastStatus: string | null;
+  lastError: string | null;
+  summary: string | null;
+  startedAt?: string | null;
+};
+
+export type JobRun = {
+  id: number;
+  job: string;
+  title: string;
+  startedAt: string;
+  finishedAt: string | null;
+  status: string;
+  durationMs: number | null;
+  summary: string | null;
+};
+
+export type Activity = {
+  running: JobState[];
+  jobs: JobState[];
+  runs: JobRun[];
+  generatedAt: string;
+};
+
+export type ModelVersion = {
+  modelId: string;
+  total: number;
+  resolved: number;
+  firstUsed: string;
+  lastUsed: string;
+  accuracy: number | null;
+  brier: number | null;
 };
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE || "";
@@ -304,7 +349,9 @@ export const api = {
   model: (signal?: AbortSignal) => get<ModelStatus>("/api/model", signal),
   team: (teamId: string, signal?: AbortSignal) => get<TeamDetail>(`/api/teams/${encodeURIComponent(teamId)}`, signal),
   series: (seriesKey: string, signal?: AbortSignal) => get<SeriesDetail>(`/api/series/${encodeURIComponent(seriesKey)}`, signal),
-  modelDetail: (kind: string, signal?: AbortSignal) => get<ModelDetail>(`/api/models/${encodeURIComponent(kind)}?limit=200`, signal),
+  modelDetail: (kind: string, versions: string[] = [], signal?: AbortSignal) =>
+    get<ModelDetail>(`/api/models/${encodeURIComponent(kind)}?limit=200${versions.length ? `&versions=${encodeURIComponent(versions.join(","))}` : ""}`, signal),
+  activity: (signal?: AbortSignal) => get<Activity>("/api/activity", signal),
 };
 
 export const percent = (value: number | null | undefined, digits = 1) =>

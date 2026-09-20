@@ -2,7 +2,7 @@
 /* eslint-disable @next/next/no-html-link-for-pages -- vinext uses native navigation here. */
 
 import { useCallback, useMemo, useState } from "react";
-import { api, formatDateTime, percent, relativeTime, type HeroCatalog, type ModelPrediction } from "../../lib/api";
+import { api, formatDateTime, percent, relativeTime, type HeroCatalog, type ModelPrediction, type ModelVersion } from "../../lib/api";
 import { useLastPathSegment, usePolled } from "../../lib/hooks";
 import { Badge, EmptyState, ErrorState, Footer, HeroStrip, Panel, ProbabilityBar, Team, TopBar } from "../../components/shell";
 
@@ -62,6 +62,7 @@ function PredictionRow({ row, heroes }: { row: ModelPrediction; heroes: HeroCata
           </>
         ) : "—"}
       </td>
+      <td className="dp-mono dp-small">{row.modelId ?? "—"}</td>
       <td className="dp-mono">{row.brier === null ? "—" : row.brier.toFixed(3)}</td>
     </tr>
   );
@@ -70,12 +71,19 @@ function PredictionRow({ row, heroes }: { row: ModelPrediction; heroes: HeroCata
 export default function ModelDetailPage() {
   const kind = useLastPathSegment();
   const [filter, setFilter] = useState<"all" | "resolved" | "wrong">("all");
+  // Empty means every version combined, which is the honest default: it is the
+  // record of the system as a whole, not of whichever version looks best.
+  const [versions, setVersions] = useState<string[]>([]);
+  const versionKey = versions.join(",");
 
   const load = useCallback(
-    (signal: AbortSignal) => (kind ? api.modelDetail(kind, signal) : Promise.reject(new Error("no_model"))),
-    [kind],
+    (signal: AbortSignal) => (kind ? api.modelDetail(kind, versions, signal) : Promise.reject(new Error("no_model"))),
+    [kind, versions],
   );
-  const { data, error, reload } = usePolled(load, 60_000, kind);
+  const { data, error, reload } = usePolled(load, 60_000, `${kind}|${versionKey}`);
+
+  const toggleVersion = (modelId: string) => setVersions((current) =>
+    current.includes(modelId) ? current.filter((entry) => entry !== modelId) : [...current, modelId]);
 
   const shown = useMemo(() => {
     const rows = data?.predictions ?? [];
@@ -119,6 +127,55 @@ export default function ModelDetailPage() {
       </section>
 
       <Panel
+        title="Версии модели"
+        subtitle={versions.length
+          ? `Показана ${versions.length === 1 ? "одна версия" : `сводка по ${versions.length} версиям`}`
+          : "Показаны все версии вместе. Отметьте версии, чтобы сравнить их между собой."}
+        actions={versions.length
+          ? <button type="button" className="dp-filter" onClick={() => setVersions([])}>сбросить</button>
+          : null}
+      >
+        {data.versions.length ? (
+          <div className="dp-table-wrap">
+            <table className="dp-table">
+              <thead>
+                <tr><th></th><th>Версия</th><th>Прогнозов</th><th>Закрыто</th><th>Точность</th><th>Brier</th><th>Работала</th></tr>
+              </thead>
+              <tbody>
+                {data.versions.map((version: ModelVersion) => {
+                  const active = versions.includes(version.modelId);
+                  return (
+                    <tr key={version.modelId} className={versions.length && !active ? "dp-row-out" : undefined}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={active}
+                          onChange={() => toggleVersion(version.modelId)}
+                          aria-label={`Включить версию ${version.modelId}`}
+                        />
+                      </td>
+                      <td className="dp-mono">{version.modelId}</td>
+                      <td>{version.total}</td>
+                      <td>{version.resolved}</td>
+                      <td>
+                        {version.resolved
+                          ? <b>{percent((version.accuracy ?? 0) * 100)}</b>
+                          : <span className="dp-muted dp-small">ещё нет итогов</span>}
+                      </td>
+                      <td className="dp-mono">{version.brier === null ? "—" : version.brier.toFixed(3)}</td>
+                      <td className="dp-muted dp-small">{relativeTime(version.lastUsed)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <EmptyState title="Версий пока нет" hint="Версия появится, как только модель сделает первый прогноз." />
+        )}
+      </Panel>
+
+      <Panel
         title="Каждый прогноз"
         subtitle="Ничьи не входят в точность по победителю: угадывать было нечего"
         actions={
@@ -140,7 +197,7 @@ export default function ModelDetailPage() {
           <div className="dp-table-wrap">
             <table className="dp-table">
               <thead>
-                <tr><th>Матч</th><th>Прогноз</th><th>Итог</th><th>Счёт</th><th>Brier</th></tr>
+                <tr><th>Матч</th><th>Прогноз</th><th>Итог</th><th>Счёт</th><th>Версия</th><th>Brier</th></tr>
               </thead>
               <tbody>
                 {shown.map((row) => <PredictionRow key={row.id} row={row} heroes={data.heroes} />)}

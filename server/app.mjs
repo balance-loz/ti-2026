@@ -8,7 +8,8 @@ import { tournamentBySlug, refreshTournamentAggregates, isPlayingNow } from "./c
 import { currentLiveGames } from "./core/live.mjs";
 import { heroCatalog } from "./core/heroes.mjs";
 import { teamDetail, seriesDetail, modelPredictions } from "./core/detail.mjs";
-import { accuracySummary, predictSeries, predictDraftMap } from "./core/predictions.mjs";
+import { activitySnapshot } from "./core/activity.mjs";
+import { accuracySummary, predictSeries, predictDraftMap, modelVersionBreakdown } from "./core/predictions.mjs";
 import { loadRatings } from "./core/ratings.mjs";
 import { readForecast, forecastTournament } from "./jobs/forecast.mjs";
 import { createScheduler } from "./core/scheduler.mjs";
@@ -198,14 +199,22 @@ const server = createServer(async (req, res) => {
       return json(res, 200, detail, { cacheSeconds: 15 });
     }
 
+    if (req.method === "GET" && url.pathname === "/api/activity") {
+      return json(res, 200, { ...activitySnapshot(db, scheduler), generatedAt: nowIso() });
+    }
+
     if (req.method === "GET" && url.pathname.startsWith("/api/models/")) {
       const kind = decodeURIComponent(url.pathname.slice("/api/models/".length)).replace(/\/predictions$/, "");
       const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit") || 200)));
       const resolvedOnly = url.searchParams.get("resolved") === "true";
+      const versions = (url.searchParams.get("versions") || "").split(",").map((entry) => entry.trim()).filter(Boolean);
+      const modelIds = versions.length ? versions : null;
       return json(res, 200, {
         modelKind: kind,
-        accuracy: accuracySummary(db).filter((row) => row.modelKind === kind),
-        predictions: modelPredictions(db, kind, { limit, resolvedOnly }),
+        accuracy: accuracySummary(db, { modelKind: kind, modelIds }),
+        versions: modelVersionBreakdown(db, kind),
+        selectedVersions: versions,
+        predictions: modelPredictions(db, kind, { limit, resolvedOnly, modelIds }),
         heroes: heroCatalog(db),
         generatedAt: nowIso(),
       }, { cacheSeconds: 20 });

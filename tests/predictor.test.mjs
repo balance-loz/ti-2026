@@ -381,3 +381,29 @@ test("settings round-trip json and survive a missing key", () => {
   setJsonSetting(db, "cursor", { at: 9, done: true });
   assert.deepEqual(getJsonSetting(db, "cursor", null), { at: 9, done: true });
 });
+
+test("background work is described in words, with the right plural form", async () => {
+  const { describeJobRun, JOB_TITLES } = await import("../server/core/activity.mjs");
+
+  // Russian needs three forms, and the counts here land on all of them.
+  assert.match(describeJobRun("collectRecent", { stored: 1, leagues: 1 }), /1 карта из 1 лиги/);
+  assert.match(describeJobRun("collectRecent", { stored: 3, leagues: 2 }), /3 карты/);
+  assert.match(describeJobRun("collectRecent", { stored: 25, leagues: 9 }), /25 карт/);
+  assert.match(describeJobRun("collectRecent", { stored: 21, leagues: 1 }), /21 карта/, "21 takes the singular form");
+  assert.match(describeJobRun("collectRecent", { stored: 11, leagues: 1 }), /11 карт/, "11 is an exception to that");
+
+  assert.equal(describeJobRun("collectRecent", { stored: 0 }), "новых матчей нет");
+  assert.match(describeJobRun("live", { openGames: 1, predicted: 1 }), /1 матч идёт/);
+  assert.match(describeJobRun("live", { openGames: 2, predicted: 0 }), /2 матча идут/);
+  assert.match(describeJobRun("backfill", { stored: 500, oldestSeen: 1_760_000_000, done: true }), /окно закрыто полностью/);
+  assert.match(describeJobRun("retrain", { ratings: { ok: true, series: 17_000, teams: 1_300 } }), /рейтинги/);
+
+  // A failure must say so rather than look like a quiet success.
+  assert.match(describeJobRun("live", { error: "opendota_throttled" }), /^ошибка: /);
+  assert.match(describeJobRun("structure", { skipped: true, reason: "fresh" }), /пропущено/);
+  assert.equal(describeJobRun("live", null), null);
+
+  for (const job of ["live", "retrain", "backfill", "structure"]) {
+    assert.ok(JOB_TITLES[job], `${job} must have a readable title`);
+  }
+});

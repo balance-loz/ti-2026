@@ -41,6 +41,11 @@ services:
       # Anything dropped here is imported once, on its own, then retrained on.
       IMPORT_DIR: /app/data/import
 
+      # The whole site sits behind one password. Required: without it the proxy
+      # has no password file and would refuse every request.
+      SITE_USER: ${SITE_USER:-admin}
+      SITE_PASSWORD: ${SITE_PASSWORD:?set SITE_PASSWORD in .env — the site is private}
+
       # Leave empty for the free tier. A key raises the daily allowance and lets
       # the poll interval drop; see OPENDOTA_DAILY_LIMIT below.
       OPENDOTA_API_KEY: ${OPENDOTA_API_KEY:-}
@@ -93,6 +98,8 @@ services:
       - "${PORT:-80}:80"
     volumes:
       - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Read-only view of the data volume, for the password file the api writes.
+      - state:/srv/state:ro
     depends_on: [web, api]
 
 volumes:

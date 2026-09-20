@@ -229,3 +229,24 @@
 .dp-filter-on { background: var(--fusion-accent); border-color: var(--fusion-accent); color: var(--fusion-canvas); }
 
 .dp-table td .dp-team { margin-bottom: 2px; }
+
+/* --- background activity ---------------------------------------------------- */
+.dp-running { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+.dp-running-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+  padding: 12px 16px; border-radius: 10px;
+  background: var(--fusion-accent-soft); border: 1px solid var(--fusion-line);
+}
+.dp-spinner {
+  width: 12px; height: 12px; flex: none; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--fusion-accent) 35%, transparent);
+  border-top-color: var(--fusion-accent);
+  animation: dp-spin .8s linear infinite;
+}
+@keyframes dp-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .dp-spinner { animation-duration: 3s; } }
+
+.dp-activity-log { max-height: 460px; overflow-y: auto; }
+.dp-run-error { color: var(--fusion-danger); }
+
+.dp-table input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--fusion-accent); cursor: pointer; }

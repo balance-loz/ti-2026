@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
-import { api, percent, relativeTime, type AccuracyRow } from "../lib/api";
+import { api, percent, relativeTime, type AccuracyRow, type Activity } from "../lib/api";
 import { usePolled } from "../lib/hooks";
 import { Badge, EmptyState, ErrorState, Footer, Panel, TopBar } from "../components/shell";
 
@@ -68,9 +68,58 @@ function AccuracyTable({ rows, title }: { rows: AccuracyRow[]; title: string }) 
   );
 }
 
+function duration(ms: number | null) {
+  if (ms === null) return "идёт";
+  if (ms < 1000) return `${ms} мс`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} с`;
+  return `${Math.round(ms / 60_000)} мин`;
+}
+
+function ActivityPanel({ activity }: { activity: Activity | null }) {
+  if (!activity) return <EmptyState title="Загрузка…" />;
+  return (
+    <>
+      {activity.running.length ? (
+        <div className="dp-running">
+          {activity.running.map((job) => (
+            <div key={job.job} className="dp-running-row">
+              <span className="dp-spinner" />
+              <b>{job.title}</b>
+              <span className="dp-muted dp-small">{job.description}</span>
+              <span className="dp-muted dp-small">{job.startedAt ? `с ${relativeTime(job.startedAt)}` : null}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="dp-muted dp-small">Сейчас ничего не выполняется — все задачи ждут своего интервала.</p>
+      )}
+
+      <div className="dp-table-wrap dp-activity-log">
+        <table className="dp-table">
+          <thead><tr><th>Когда</th><th>Задача</th><th>Длительность</th><th>Что сделано</th></tr></thead>
+          <tbody>
+            {activity.runs.map((run) => (
+              <tr key={run.id}>
+                <td className="dp-muted dp-small">{relativeTime(run.startedAt)}</td>
+                <td><b>{run.title}</b></td>
+                <td className="dp-mono dp-small">{duration(run.durationMs)}</td>
+                <td className={run.status === "error" ? "dp-run-error" : undefined}>
+                  {run.summary ?? (run.status === "running" ? "выполняется…" : "—")}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
 export default function ModelPage() {
   const load = useCallback((signal: AbortSignal) => api.model(signal), []);
   const { data: status, error, reload } = usePolled(load, 30_000);
+  const loadActivity = useCallback((signal: AbortSignal) => api.activity(signal), []);
+  const { data: activity } = usePolled(loadActivity, 5_000);
 
   if (error) {
     return (
@@ -95,6 +144,13 @@ export default function ModelPage() {
           на отложенной выборке из будущих матчей.
         </p>
       </section>
+
+      <Panel
+        title="Что происходит прямо сейчас"
+        subtitle="Сбор данных, переобучение и пересчёт идут сами — здесь видно, что именно и с каким результатом"
+      >
+        <ActivityPanel activity={activity} />
+      </Panel>
 
       <Panel title="Точность за всё время" subtitle="Модели считаются раздельно — нажмите на название, чтобы увидеть каждый прогноз, матчи и пики">
         <AccuracyTable rows={status.accuracy} title="Всё время" />
@@ -121,31 +177,6 @@ export default function ModelPage() {
                   </tr>
                 );
               })}
-            </tbody>
-          </table>
-        </div>
-      </Panel>
-
-      <Panel title="Фоновые задачи" subtitle="Сбор данных, переобучение и пересчёт прогнозов идут сами">
-        <div className="dp-table-wrap">
-          <table className="dp-table">
-            <thead><tr><th>Задача</th><th>Что делает</th><th>Интервал</th><th>Последний запуск</th><th>Итог</th></tr></thead>
-            <tbody>
-              {status.scheduler.map((job) => (
-                <tr key={job.job}>
-                  <td className="dp-mono">{job.job}</td>
-                  <td className="dp-muted">{job.description}</td>
-                  <td>{job.intervalSeconds < 120 ? `${job.intervalSeconds} с` : `${Math.round(job.intervalSeconds / 60)} мин`}</td>
-                  <td className="dp-muted">{relativeTime(job.lastRunAt)}</td>
-                  <td>
-                    {job.running ? <Badge tone="live">идёт</Badge>
-                      : job.lastStatus === "ok" ? <Badge tone="good">ок</Badge>
-                        : job.lastStatus === "error" ? <Badge tone="bad">ошибка</Badge>
-                          : <Badge tone="neutral">не запускалась</Badge>}
-                    {job.lastError ? <div className="dp-small dp-muted">{job.lastError}</div> : null}
-                  </td>
-                </tr>
-              ))}
             </tbody>
           </table>
         </div>

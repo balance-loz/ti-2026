@@ -233,12 +233,16 @@ export function seriesDetail(db, seriesKey) {
 }
 
 /** Every call one model has made, newest first, with how it turned out. */
-export function modelPredictions(db, modelKind, { limit = 200, resolvedOnly = false } = {}) {
+export function modelPredictions(db, modelKind, { limit = 200, resolvedOnly = false, modelIds = null } = {}) {
   const index = teamIndex(db);
+  const versionFilter = Array.isArray(modelIds) && modelIds.length
+    ? `AND p.model_id IN (${modelIds.map(() => "?").join(",")})`
+    : "";
   const rows = db.prepare(`SELECT p.*, t.name AS tournament_name, t.slug AS tournament_slug
                            FROM predictions p LEFT JOIN tournaments t ON t.league_id = p.league_id
-                           WHERE p.model_kind = ? ${resolvedOnly ? "AND p.resolved_at IS NOT NULL" : ""}
-                           ORDER BY p.created_at DESC LIMIT ?`).all(modelKind, limit);
+                           WHERE p.model_kind = ? ${resolvedOnly ? "AND p.resolved_at IS NOT NULL" : ""} ${versionFilter}
+                           ORDER BY p.created_at DESC LIMIT ?`)
+    .all(modelKind, ...(modelIds ?? []), limit);
 
   return rows.map((row) => {
     const sideA = namedTeam(index, row.side_a);
@@ -252,6 +256,7 @@ export function modelPredictions(db, modelKind, { limit = 200, resolvedOnly = fa
       probabilityA: Number(row.probability_a),
       bestOf: row.best_of,
       capturedAt: row.created_at,
+      modelId: row.model_id,
       resolvedAt: row.resolved_at,
       outcome: row.outcome,
       outcomeKind: row.outcome_kind,
