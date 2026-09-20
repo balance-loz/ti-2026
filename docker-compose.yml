@@ -1,11 +1,14 @@
+# Both services run the same image and differ only by command. Each declares
+# the build so neither is ever treated as a registry pull; the context and
+# Dockerfile are identical, so the second build is a cache hit, not a rebuild.
 x-app-image: &app-image
   image: dota-predictor:${IMAGE_TAG:-local}
+  build:
+    context: .
 
 services:
   web:
     <<: *app-image
-    build:
-      context: .
     command: npm start -- --hostname 0.0.0.0 --port 3000
     restart: unless-stopped
     environment:
@@ -16,7 +19,6 @@ services:
       timeout: 5s
       retries: 3
 
-  # Same image as web; only the command differs, so it is built once.
   api:
     <<: *app-image
     command: node server/app.mjs

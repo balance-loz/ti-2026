@@ -1332,7 +1332,18 @@ test("docker build keeps research data out of context and shares one app image",
   assert.match(dockerfile, /npm ci --no-audit --no-fund/);
   assert.match(compose, /image: dota-predictor:\$\{IMAGE_TAG:-local\}/);
   assert.equal((compose.match(/<<: \*app-image/g) ?? []).length, 2);
-  assert.equal((compose.match(/^\s+build:/gm) ?? []).length, 1);
+  // Both app services must end up with a build section. A service that declares
+  // only an image is pulled, not built, so on a machine where the tag does not
+  // exist yet compose fails with "pull access denied" before the other service
+  // has finished building it. The shared anchor carries the build, which keeps
+  // it one image while making neither service a registry pull.
+  const anchorBlock = compose.slice(compose.indexOf("x-app-image:"), compose.indexOf("services:"));
+  assert.match(anchorBlock, /image: dota-predictor:/, "the anchor must set the shared image tag");
+  assert.match(anchorBlock, /build:/, "the anchor must carry the build so both services inherit it");
+  assert.match(anchorBlock, /context: \./);
+  const servicesBlock = compose.slice(compose.indexOf("services:"));
+  assert.equal((servicesBlock.match(/^\s{4}build:/gm) ?? []).length, 0,
+    "no service may redeclare the build; that would build the same image twice");
 });
 
 test("cross-page navigation does not depend on broken Vinext Link prefetch", async () => {
