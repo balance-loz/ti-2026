@@ -51,7 +51,17 @@ export function predictSeries(db, { teamAId, teamBId, bestOf = 3, ratings = null
     exactScore: score,
     scoreDistribution: outcome.distribution,
     confidence: pair.confidence,
-    evidence: { seriesA: pair.seriesA, seriesB: pair.seriesB, ratingA: pair.ratingA ?? null, ratingB: pair.ratingB ?? null },
+    evidence: {
+      seriesA: pair.seriesA, seriesB: pair.seriesB,
+      ratingA: pair.ratingA ?? null, ratingB: pair.ratingB ?? null,
+      evidenceA: pair.evidenceA ?? null, evidenceB: pair.evidenceB ?? null,
+      teamPartA: pair.teamPartA ?? null, teamPartB: pair.teamPartB ?? null,
+      playerPartA: pair.playerPartA ?? null, playerPartB: pair.playerPartB ?? null,
+      lineupA: pair.lineupA ?? null, lineupB: pair.lineupB ?? null,
+      shrinkMethod: pair.shrinkMethod ?? null,
+      ratingsSchemaVersion: artifact?.schemaVersion ?? 1,
+      moderation: artifact?.config?.moderation ?? null,
+    },
   };
 }
 
@@ -120,16 +130,19 @@ export function freezePrediction(db, {
   scope, subjectKey, leagueId = null, modelKind, modelId = null,
   sideA, sideB, probabilityA, bestOf = null, features = null,
   predictedScore = null, predictedScoreProbability = null, drawProbability = null,
+  evaluationEligible = true, timingClass = "unverified",
 }) {
   const probability = probabilityClamp(probabilityA);
   const info = db.prepare(`INSERT INTO predictions(scope, subject_key, league_id, model_kind, model_id, side_a, side_b,
                              probability_a, best_of, features_json, created_at,
-                             predicted_score, predicted_score_probability, draw_probability)
-                           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                             predicted_score, predicted_score_probability, draw_probability,
+                             evaluation_eligible, timing_class)
+                           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                            ON CONFLICT(scope, subject_key, model_kind) DO NOTHING`)
     .run(scope, String(subjectKey), leagueId, modelKind, modelId, String(sideA), String(sideB),
       probability, bestOf, features ? JSON.stringify(features) : null, nowIso(),
-      predictedScore ?? null, predictedScoreProbability ?? null, drawProbability ?? null);
+      predictedScore ?? null, predictedScoreProbability ?? null, drawProbability ?? null,
+      evaluationEligible ? 1 : 0, timingClass);
   return { inserted: Number(info.changes) > 0, probabilityA: probability };
 }
 
@@ -205,8 +218,9 @@ export function resolvePredictions(db) {
 }
 
 /** Accuracy over resolved predictions, optionally narrowed to one league. */
-export function accuracySummary(db, { leagueId = null, modelKind = null, sinceDays = null, modelIds = null } = {}) {
+export function accuracySummary(db, { leagueId = null, modelKind = null, sinceDays = null, modelIds = null, includeIneligible = false } = {}) {
   const filters = ["resolved_at IS NOT NULL"];
+  if (!includeIneligible) filters.push("evaluation_eligible = 1");
   const params = [];
   if (leagueId != null) { filters.push("league_id = ?"); params.push(leagueId); }
   if (modelKind) { filters.push("model_kind = ?"); params.push(modelKind); }
@@ -286,6 +300,8 @@ export function freezeUpcomingSeries(db, leagueId) {
         mapsPlayedAtFreeze: Number(series.score_a || 0) + Number(series.score_b || 0),
         ...prediction.evidence,
       },
+      evaluationEligible: false,
+      timingClass: "in_play_fallback",
     });
     if (result.inserted) frozen += 1;
   }
@@ -300,19 +316,21 @@ export function freezeUpcomingSeries(db, leagueId) {
 export function modelVersionBreakdown(db, modelKind) {
   return db.prepare(`SELECT model_id,
       COUNT(*) AS total,
-      SUM(CASE WHEN resolved_at IS NOT NULL THEN 1 ELSE 0 END) AS resolved,
+      SUM(CASE WHEN resolved_at IS NOT NULL AND evaluation_eligible = 1 THEN 1 ELSE 0 END) AS resolved,
+      SUM(CASE WHEN evaluation_eligible = 1 THEN 1 ELSE 0 END) AS eligible,
       MIN(created_at) AS first_used,
       MAX(created_at) AS last_used,
-      AVG(CASE WHEN outcome IS NULL THEN NULL
+      AVG(CASE WHEN evaluation_eligible != 1 OR outcome IS NULL THEN NULL
                WHEN (probability_a >= 0.5 AND outcome = 1) OR (probability_a < 0.5 AND outcome = 0) THEN 1.0
                ELSE 0.0 END) AS accuracy,
-      AVG(brier) AS brier
+      AVG(CASE WHEN evaluation_eligible = 1 THEN brier ELSE NULL END) AS brier
     FROM predictions WHERE model_kind = ? AND model_id IS NOT NULL
     GROUP BY model_id ORDER BY MAX(created_at) DESC`).all(modelKind)
     .map((row) => ({
       modelId: row.model_id,
       total: Number(row.total),
       resolved: Number(row.resolved || 0),
+      eligible: Number(row.eligible || 0),
       firstUsed: row.first_used,
       lastUsed: row.last_used,
       accuracy: row.accuracy == null ? null : Number(row.accuracy),

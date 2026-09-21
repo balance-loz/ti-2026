@@ -131,6 +131,9 @@ async function writeMetaCache(name, body) {
   await writeFile(path.join(META_CACHE, `${name}.json`), `${JSON.stringify({ fetchedAt: new Date().toISOString(), body })}\n`);
 }
 
+// Kept as the standard stale-cache path for bulk metadata callers. Some
+// refresh modes currently use the more specialized loadMetadataArray below.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function apiJsonCached(endpoint, name, { preferAgeMs, staleAgeMs }) {
   const fresh = await readMetaCache(name, preferAgeMs);
   if (fresh != null) return fresh;
@@ -146,12 +149,6 @@ async function apiJsonCached(endpoint, name, { preferAgeMs, staleAgeMs }) {
     }
     throw error;
   }
-}
-
-async function apiJsonArray(endpoint, name, cache) {
-  const payload = name ? await apiJsonCached(endpoint, name, cache) : await apiJson(endpoint);
-  if (!Array.isArray(payload)) throw new Error(`${endpoint}: expected an array, got ${typeof payload}`);
-  return payload;
 }
 
 async function readJsonIfExists(file) {

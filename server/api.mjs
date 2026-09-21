@@ -581,7 +581,9 @@ function existingFile(candidates) {
     const fullPath = path.resolve(candidate);
     try {
       if (statSync(fullPath).isFile()) return fullPath;
-    } catch {}
+    } catch {
+      // Missing candidates are expected; the next configured path is tried.
+    }
   }
   return null;
 }
@@ -924,7 +926,6 @@ function snapshotDecisionEvaluation(requestedId) {
   if (!requested) return null;
   const rootId = Number(requested.root_snapshot_id ?? requested.id);
   const rows = db.prepare("SELECT * FROM prediction_snapshots WHERE root_snapshot_id=? OR id=? ORDER BY created_at,id").all(rootId, rootId).map(parsedSnapshotRow);
-  const root = rows.find((row) => Number(row.id) === rootId) ?? requested;
   const matches = db.prepare("SELECT * FROM matches WHERE winner IS NOT NULL ORDER BY COALESCE(scheduled_at, created_at), round, id").all();
   const evaluated = matches.flatMap((match) => {
     const cutoff = Date.parse(match.scheduled_at || match.created_at);
@@ -981,7 +982,6 @@ function snapshotExportBundle(requestedId) {
   if (!requested) return null;
   const rootId = Number(requested.root_snapshot_id ?? requested.id);
   const rows = db.prepare("SELECT * FROM prediction_snapshots WHERE root_snapshot_id=? OR id=? ORDER BY created_at,id").all(rootId, rootId).map(parsedSnapshotRow);
-  const root = rows.find((row) => Number(row.id) === rootId) ?? requested;
   const allMatches = db.prepare("SELECT * FROM matches ORDER BY round,id").all();
   const stats = loadJson(resolvePublicArtifact("team-stats.json"));
   const forecasts = rows.map((snapshot) => {
@@ -2038,6 +2038,7 @@ function projectedMatchupState(simulationResult, matches) {
 }
 
 async function combinedForecastState(opinionWeight = DEFAULT_OPINION_WEIGHT, requestedSnapshotId = null, { refreshLive = false } = {}) {
+  void opinionWeight; // retained for API compatibility; production weight is server-owned.
   const weight = DEFAULT_OPINION_WEIGHT;
   const mode = weight >= 100 ? "personal" : weight > 0 ? "mixed" : "stats";
   const { matches, probabilities } = currentForecast({ ...OFFICIAL_FORECAST_CONFIG, forecastMode: mode, opinionWeight: weight });

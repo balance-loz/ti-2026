@@ -10,6 +10,7 @@ import { predictDraftMap, predictLiveState, freezePrediction, loadDraftModel } f
 
 const MAX_FEED_AGE_SECONDS = Math.max(120, Number(process.env.LIVE_MAX_AGE_SECONDS || 420));
 const CLOSE_AFTER_SECONDS = Math.max(300, Number(process.env.LIVE_CLOSE_AFTER_SECONDS || 900));
+export const DRAFT_FREEZE_MAX_SECONDS = Math.max(0, Number(process.env.DRAFT_FREEZE_MAX_SECONDS || 180));
 
 const sideHeroes = (players, side) => (players || [])
   .filter((player) => Number(player.team) === side && Number(player.hero_id) > 0)
@@ -86,7 +87,8 @@ export async function syncLiveGames(db, { leagueFilter = null, nowSeconds = Date
         radiantPicks: game.radiantPicks, direPicks: game.direPicks,
         ratings, draftModel,
       });
-      const frozen = freezePrediction(db, {
+      const freezeOnTime = game.gameTime <= DRAFT_FREEZE_MAX_SECONDS;
+      const frozen = freezeOnTime ? freezePrediction(db, {
         scope: "map", subjectKey: game.matchId, leagueId: game.leagueId,
         modelKind: "draft", modelId: draft.modelId,
         sideA: game.radiantTeamId, sideB: game.direTeamId,
@@ -96,9 +98,14 @@ export async function syncLiveGames(db, { leagueFilter = null, nowSeconds = Date
           prior: draft.priorProbabilityRadiant, draftDelta: draft.draftDelta,
           available: draft.available, gameTimeAtFreeze: game.gameTime,
         },
-      });
+        evaluationEligible: true,
+        timingClass: "draft_on_time",
+      }) : { inserted: false, skipped: "draft_too_late" };
       if (frozen.inserted) predicted += 1;
       liveState = predictLiveState({ draftProbabilityRadiant: draft.probabilityRadiant, game });
+      draft.freeze = freezeOnTime
+        ? { eligible: true, timingClass: "draft_on_time" }
+        : { eligible: false, timingClass: "draft_late", maxGameTimeSeconds: DRAFT_FREEZE_MAX_SECONDS };
     }
 
     const payload = { ...game, draft, liveState };

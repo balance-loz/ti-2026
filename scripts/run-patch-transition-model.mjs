@@ -15,8 +15,6 @@ const LAMBDAS = [.1, 1, 10, 100];
 const NO_NOTES_FEATURES = [0, 1, 10, 11];
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const logit = (p) => Math.log(clamp(p, .02, .98) / (1 - clamp(p, .02, .98)));
-const pairKey = (a, b) => [Number(a), Number(b)].sort((x, y) => x - y).join("|");
-
 function solve(matrix, vector) {
   const n = vector.length; const a = matrix.map((row, i) => [...row, vector[i]]);
   for (let col = 0; col < n; col += 1) {

@@ -2,6 +2,7 @@
 // Nothing here is tournament specific: a team keeps one rating across events,
 // which is what lets a brand new league be forecast on day one.
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   createOnlineTeamModel,
@@ -30,13 +31,13 @@ const MIN_PLAYER_EVIDENCE = 0.5;
 // it scores 0.6632 against 0.6851 for the team-only model it replaces, and
 // 0.6731 against 0.7047 on thinly observed pairs, while picking the right
 // winner 59.5% of the time against 55%.
-const STRENGTH_CONFIG = Object.freeze({
+export const STRENGTH_CONFIG = Object.freeze({
   ...DEFAULT_STRENGTH_CONFIG,
   halfLifeDays: Number(process.env.RATINGS_HALF_LIFE_DAYS || 180),
   teamL2: Number(process.env.RATINGS_TEAM_L2 || 1),
   playerL2: Number(process.env.RATINGS_PLAYER_L2 || 8),
 });
-const MODERATION = Number(process.env.RATINGS_MODERATION || 4);
+export const MODERATION = Number(process.env.RATINGS_MODERATION || 4);
 // Weight behind the thinner side, in the units the fit uses. A side of five
 // established players carries far more than an organisation ever did alone, so
 // these are not the old series counts under another name.
@@ -228,7 +229,7 @@ export function evaluateStrengthConfig(series, db, {
 }
 
 /** One pair through the published path: strength, moderation, probability. */
-function strengthPair(fit, fives, teamAId, teamBId, moderation) {
+export function strengthPair(fit, fives, teamAId, teamBId, moderation = MODERATION) {
   const fiveA = fives.get(String(teamAId))?.players ?? [];
   const fiveB = fives.get(String(teamBId))?.players ?? [];
   const evidence = (teamId, five) => fit.teamWeight(teamId)
@@ -277,7 +278,7 @@ function writePlayerArtifact(db, strength, nowSeconds) {
   } catch { /* the team artifact is what the site needs; this one is extra */ }
 }
 
-export function trainRatings(db, { nowSeconds = Date.now() / 1000 } = {}) {
+export function trainRatings(db, { nowSeconds = Date.now() / 1000, forcePromotion = false } = {}) {
   const series = loadTrainingSeries(db, { nowSeconds });
   if (series.length < 200) {
     return { ok: false, reason: "insufficient_history", series: series.length };
@@ -301,6 +302,18 @@ export function trainRatings(db, { nowSeconds = Date.now() / 1000 } = {}) {
   const arena = runRatingArena(series, { nowSeconds });
   const champion = arena[0] ?? null;
   const rolling = evaluateStrengthConfig(series, db, { nowSeconds, config: STRENGTH_CONFIG });
+  const loadedIncumbent = loadRatings({ maxAgeMs: 0 });
+  const activeVersion = db.prepare("SELECT model_id FROM model_versions WHERE kind='team_ratings' AND active=1 ORDER BY trained_at DESC LIMIT 1").get();
+  // A loose file can be a fixture, a manually copied artifact or a remnant from
+  // another database. It is an incumbent only when this database says it is.
+  const incumbent = activeVersion && activeVersion.model_id === loadedIncumbent?.modelId ? loadedIncumbent : null;
+  const incumbentRolling = incumbent?.validation?.rollingOrigin ?? null;
+  const minimumImprovement = Math.max(0, Number(process.env.RATINGS_MIN_LOGLOSS_IMPROVEMENT || 0));
+  const gatePassed = forcePromotion || Boolean(rolling && rolling.logLoss < COINFLIP_LOG_LOSS
+    && (!incumbentRolling || (
+      rolling.logLoss <= Number(incumbentRolling.logLoss) - minimumImprovement
+      && rolling.brier <= Number(incumbentRolling.brier)
+    )));
 
   const appearances = new Map();
   for (const row of series) {
@@ -338,9 +351,11 @@ export function trainRatings(db, { nowSeconds = Date.now() / 1000 } = {}) {
     };
   }
 
-  writePlayerArtifact(db, strength, nowSeconds);
-
-  const modelId = `ratings-${new Date(nowSeconds * 1000).toISOString().slice(0, 10)}-${Object.keys(ratings).length}`;
+  const fingerprint = createHash("sha256").update(JSON.stringify({
+    trainedThroughSeconds: Math.floor(nowSeconds), config: STRENGTH_CONFIG,
+    dataset: [series.length, series[0]?.startTime, series.at(-1)?.startTime], ratings,
+  })).digest("hex").slice(0, 12);
+  const modelId = `ratings-${new Date(nowSeconds * 1000).toISOString().slice(0, 10)}-${fingerprint}`;
   const artifact = {
     // 2: `rating` is now a lineup's strength, and `evidence` carries the weight
     // behind it. Readers of version 1 fall back to the old shrink, so an
@@ -365,6 +380,20 @@ export function trainRatings(db, { nowSeconds = Date.now() / 1000 } = {}) {
       // pairs kept in and reported on their own.
       rollingOrigin: rolling,
       beatsCoinflip: rolling ? rolling.logLoss < COINFLIP_LOG_LOSS : false,
+      promotionGate: {
+        passed: gatePassed,
+        forced: forcePromotion,
+        minimumImprovement,
+        incumbentModelId: incumbent?.modelId ?? null,
+        incumbent: incumbentRolling ? { logLoss: incumbentRolling.logLoss, brier: incumbentRolling.brier } : null,
+        candidate: rolling ? { logLoss: rolling.logLoss, brier: rolling.brier } : null,
+        reason: forcePromotion ? "forced_for_offline_analysis"
+          : !rolling ? "rolling_origin_unavailable"
+          : rolling.logLoss >= COINFLIP_LOG_LOSS ? "does_not_beat_coinflip"
+            : incumbentRolling && rolling.logLoss > Number(incumbentRolling.logLoss) - minimumImprovement ? "logloss_not_better_than_incumbent"
+              : incumbentRolling && rolling.brier > Number(incumbentRolling.brier) ? "brier_worse_than_incumbent"
+                : "passed",
+      },
       lineupCoverage,
       // Kept, clearly labelled, decides nothing. Two hundred samples cannot
       // separate models that differ by thousandths of a nat.
@@ -379,18 +408,29 @@ export function trainRatings(db, { nowSeconds = Date.now() / 1000 } = {}) {
     ratings,
   };
 
-  mkdirSync(path.dirname(RATINGS_PATH), { recursive: true });
-  writeFileSync(RATINGS_PATH, JSON.stringify(artifact));
+  const versionPath = path.join(path.dirname(RATINGS_PATH), "versions", `${modelId}.json`);
+  mkdirSync(path.dirname(versionPath), { recursive: true });
+  if (!existsSync(versionPath)) writeFileSync(versionPath, JSON.stringify(artifact));
 
   db.prepare(`INSERT INTO model_versions(kind, model_id, trained_at, samples, metrics_json, artifact_path, active, notes)
-              VALUES('team_ratings',?,?,?,?,?,1,?)
+              VALUES('team_ratings',?,?,?,?,?,?,?)
               ON CONFLICT(kind, model_id) DO UPDATE SET trained_at=excluded.trained_at, samples=excluded.samples,
-                metrics_json=excluded.metrics_json, active=1`)
-    .run(modelId, nowIso(), series.length, JSON.stringify(artifact.validation), RATINGS_PATH,
-      champion ? `champion ${champion.modelId} logloss ${champion.logLoss.toFixed(4)}` : "no arena champion");
-  db.prepare("UPDATE model_versions SET active = 0 WHERE kind = 'team_ratings' AND model_id != ?").run(modelId);
+                metrics_json=excluded.metrics_json, artifact_path=excluded.artifact_path,
+                active=excluded.active, notes=excluded.notes`)
+    .run(modelId, nowIso(), series.length, JSON.stringify(artifact.validation), versionPath, gatePassed ? 1 : 0,
+      gatePassed ? "promotion gate passed" : `promotion gate failed: ${artifact.validation.promotionGate.reason}`);
+  if (!gatePassed) {
+    return { ok: false, reason: "promotion_gate_failed", modelId, candidatePath: versionPath,
+      series: series.length, teams: Object.keys(ratings).length, validation: artifact.validation };
+  }
 
-  return { ok: true, modelId, series: series.length, teams: Object.keys(ratings).length, validation: artifact.validation };
+  writePlayerArtifact(db, strength, nowSeconds);
+  mkdirSync(path.dirname(RATINGS_PATH), { recursive: true });
+  writeFileSync(RATINGS_PATH, JSON.stringify(artifact));
+  db.prepare("UPDATE model_versions SET active = 0 WHERE kind = 'team_ratings' AND model_id != ?").run(modelId);
+  invalidateRatingsCache();
+
+  return { ok: true, modelId, artifactPath: versionPath, series: series.length, teams: Object.keys(ratings).length, validation: artifact.validation };
 }
 
 let cachedArtifact = null;

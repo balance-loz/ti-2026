@@ -66,7 +66,6 @@ const TEAMS: Record<string, { name: string; short: string; logo: string }> = {
 };
 const SWISS_GROUPS = { A: ["parivision", "nigma", "falcons", "og", "betboom", "lgd", "1w", "resilience"], B: ["yandex", "xtreme", "liquid", "vg", "aurora", "gamerlegion", "spirit", "l1ga"] } as const;
 const SWISS_GROUP_BY_TEAM = Object.fromEntries(Object.entries(SWISS_GROUPS).flatMap(([group, ids]) => ids.map((id) => [id, group]))) as Record<string, "A" | "B">;
-const pairKey = (a: string, b: string) => [a, b].sort().join("|");
 const team = (id: string) => TEAMS[id] ?? { name: id, short: id.toUpperCase(), logo: "" };
 const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
 const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.max(0, seconds % 60)).padStart(2, "0")}`;

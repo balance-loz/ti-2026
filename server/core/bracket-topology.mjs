@@ -141,7 +141,7 @@ export function playBracket(topology, seeds, decide) {
     entrants.set(node.slot, sides);
     const [a, b] = sides;
     if (!a || !b) continue;
-    const winner = decide(a, b, node.bestOf ?? 3);
+    const winner = decide(a, b, node.bestOf ?? 3, node);
     winners.set(node.slot, winner);
     losers.set(node.slot, winner === a ? b : a);
   }

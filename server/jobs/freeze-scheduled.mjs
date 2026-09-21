@@ -74,6 +74,8 @@ export function freezeScheduledMatches(db, { nowSeconds = Date.now() / 1000 } = 
         slot: row.slot,
         ...prediction.evidence,
       },
+      evaluationEligible: true,
+      timingClass: "pre_match",
     });
     if (result.inserted) frozen += 1;
   }

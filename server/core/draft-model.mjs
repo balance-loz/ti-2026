@@ -2,10 +2,13 @@
 // logistic regression on every stored map with a complete pick/ban record.
 // Produces the artifact shape that draft-inference.mjs already consumes, and is
 // only published when it beats the side-bias-only baseline on a future holdout.
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { nowIso } from "./db.mjs";
 import { createOnlineTeamModel } from "../team-model.mjs";
+import { loadTrainingSeries, strengthPair, STRENGTH_CONFIG, MODERATION } from "./ratings.mjs";
+import { attachSeriesLineups, currentFives, fitStrengthModel, loadSeriesLineups } from "./player-ratings.mjs";
 
 const MODEL_PATH = path.resolve(process.env.DRAFT_TEMPORAL_MODEL || "models/draft-temporal-model.json");
 const MIN_MAPS = Math.max(500, Number(process.env.DRAFT_MIN_MAPS || 1500));
@@ -41,7 +44,7 @@ const logLoss = (probability, outcome) => {
 /** Maps with ten locked heroes and a result, oldest first. */
 export function loadDraftRows(db, { windowDays = Number(process.env.DRAFT_WINDOW_DAYS || 800), nowSeconds = Date.now() / 1000 } = {}) {
   const since = Math.floor(nowSeconds - windowDays * 86_400);
-  const rows = db.prepare(`SELECT match_id, radiant_picks_json, dire_picks_json, radiant_win, start_time, patch,
+  const rows = db.prepare(`SELECT match_id, league_id, series_id, radiant_picks_json, dire_picks_json, radiant_win, start_time, patch,
                                   radiant_team_id, dire_team_id
                            FROM maps
                            WHERE radiant_win IS NOT NULL AND radiant_picks_json IS NOT NULL AND dire_picks_json IS NOT NULL
@@ -59,6 +62,7 @@ export function loadDraftRows(db, { windowDays = Number(process.env.DRAFT_WINDOW
     if (new Set([...radiant, ...dire]).size !== 10) continue;
     parsed.push({
       matchId: Number(row.match_id), radiant, dire,
+      seriesKey: row.series_id != null ? `${row.league_id}:${row.series_id}` : `map:${row.match_id}`,
       win: row.radiant_win ? 1 : 0,
       startTime: Number(row.start_time), patch: row.patch,
       radiantTeamId: Number(row.radiant_team_id) || null,
@@ -103,6 +107,48 @@ export function attachStrengthOffsets(rows, { definition = { id: "bt_offset", fa
     });
   }
   return { covered, total: rows.length };
+}
+
+/**
+ * Cross-fitted offsets from the same team+player strength model used in
+ * production. Each block is scored by a fit whose cutoff precedes every map in
+ * the block, so the draft validation measures the feature stack actually
+ * served without leaking later roster/results into it.
+ */
+export function attachProductionStrengthOffsets(rows, db, { folds = 8 } = {}) {
+  if (!rows.length) return { covered: 0, total: 0, folds: 0, kind: "production_strength_crossfit" };
+  const allSeries = loadTrainingSeries(db, {
+    nowSeconds: rows.at(-1).startTime + 1,
+    windowDays: Number(process.env.DRAFT_WINDOW_DAYS || 800),
+  });
+  attachSeriesLineups(allSeries, db);
+  for (const row of allSeries) row.playerTierWeight = 1;
+  const lineups = loadSeriesLineups(db);
+  const blockSize = Math.max(1, Math.ceil(rows.length / Math.max(2, folds)));
+  let covered = 0; let fittedFolds = 0;
+  for (let start = 0; start < rows.length; start += blockSize) {
+    const block = rows.slice(start, start + blockSize);
+    const asOf = block[0].startTime;
+    const history = allSeries.filter((series) => series.startTime < asOf);
+    if (history.length < 200) {
+      for (const row of block) row.offset = 0;
+      continue;
+    }
+    const fit = fitStrengthModel(history, { nowSeconds: asOf, config: STRENGTH_CONFIG });
+    const fives = currentFives(db, { beforeSeconds: asOf, lineups });
+    fittedFolds += 1;
+    for (const row of block) {
+      if (!row.radiantTeamId || !row.direTeamId || row.radiantTeamId === row.direTeamId) {
+        row.offset = 0; continue;
+      }
+      const pair = strengthPair(fit, fives, row.radiantTeamId, row.direTeamId, MODERATION);
+      if (Math.min(pair.evidenceA, pair.evidenceB) <= 0) { row.offset = 0; continue; }
+      const probability = clamp(pair.probability, 0.02, 0.98);
+      row.offset = Math.log(probability / (1 - probability));
+      covered += 1;
+    }
+  }
+  return { covered, total: rows.length, folds: fittedFolds, kind: "production_strength_crossfit" };
 }
 
 
@@ -249,6 +295,37 @@ function evaluate(rows, index, offsets, weights) {
   return { samples: rows.length, logLoss: loss / n, brier: brier / n, accuracy: correct / n };
 }
 
+function pairedClusterInterval(rows, index, offsets, weights, { iterations = 500 } = {}) {
+  const clusters = new Map();
+  for (const row of rows) {
+    let value = Number(row.offset) || 0;
+    for (const [slot, feature] of featuresFor(row, index, offsets)) value += weights[slot] * feature;
+    const delta = logLoss(sigmoid(value), row.win) - logLoss(sigmoid(Number(row.offset) || 0), row.win);
+    const key = row.seriesKey || `map:${row.matchId}`;
+    const current = clusters.get(key) || { sum: 0, n: 0 };
+    current.sum += delta; current.n += 1; clusters.set(key, current);
+  }
+  const groups = [...clusters.values()];
+  if (!groups.length) return null;
+  let state = 0x5eed1234;
+  const samples = [];
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    let sum = 0; let n = 0;
+    for (let index = 0; index < groups.length; index += 1) {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      const group = groups[state % groups.length];
+      sum += group.sum; n += group.n;
+    }
+    samples.push(sum / Math.max(1, n));
+  }
+  samples.sort((a, b) => a - b);
+  return {
+    clusters: groups.length, iterations,
+    lower95: samples[Math.floor(iterations * 0.025)],
+    upper95: samples[Math.min(iterations - 1, Math.floor(iterations * 0.975))],
+  };
+}
+
 /** Team strength alone, with no draft information: the bar the draft must clear. */
 function evaluateOffsetOnly(rows) {
   let loss = 0; let brier = 0; let correct = 0;
@@ -287,7 +364,9 @@ function trainCandidate(rows, candidate) {
 export function trainDraftModel(db, { nowSeconds = Date.now() / 1000, outputPath = MODEL_PATH } = {}) {
   const rows = loadDraftRows(db, { nowSeconds });
   if (rows.length < MIN_MAPS) return { ok: false, reason: "insufficient_maps", maps: rows.length, required: MIN_MAPS };
-  const offsetCoverage = attachStrengthOffsets(rows);
+  const offsetCoverage = attachProductionStrengthOffsets(rows, db, {
+    folds: Math.max(2, Number(process.env.DRAFT_STRENGTH_FOLDS || 8)),
+  });
 
   // Chronological three-way split. Validation picks the hyperparameters, the
   // test slice is only ever read once, for the publish gate.
@@ -326,9 +405,17 @@ export function trainDraftModel(db, { nowSeconds = Date.now() / 1000, outputPath
   // requires the draft to add information, not merely to be better than a coin.
   const baselineMetrics = evaluateOffsetOnly(test);
   const baselineLoss = baselineMetrics.logLoss;
-  const gatePassed = holdoutMetrics.logLoss < baselineLoss;
+  const clusterInterval = pairedClusterInterval(test, index, offsets, weights);
+  const gatePassed = holdoutMetrics.logLoss < baselineLoss
+    && holdoutMetrics.brier < baselineMetrics.brier
+    && Number(clusterInterval?.upper95) < 0;
 
-  const modelId = `draft-${new Date(nowSeconds * 1000).toISOString().slice(0, 10)}-${rows.length}`;
+  const fingerprint = createHash("sha256").update(JSON.stringify({
+    through: rows.at(-1)?.startTime, rows: rows.length, candidate: best.candidate,
+    features: [index.heroes.length, index.synergies.length, index.counters.length],
+    metrics: holdoutMetrics,
+  })).digest("hex").slice(0, 12);
+  const modelId = `draft-${new Date(nowSeconds * 1000).toISOString().slice(0, 10)}-${fingerprint}`;
   const heroes = {};
   for (const [hero, slot] of index.heroIndex) {
     heroes[String(hero)] = { coefficient: Number(weights[offsets.hero + slot].toFixed(6)), games: index.heroCounts.get(hero) || 0, roles: {} };
@@ -381,24 +468,30 @@ export function trainDraftModel(db, { nowSeconds = Date.now() / 1000, outputPath
       search: search.sort((a, b) => a.validation.logLoss - b.validation.logLoss),
       gatePassed,
       improvementNats: baselineLoss - holdoutMetrics.logLoss,
+      pairedSeriesBootstrap: clusterInterval,
+      gateCriteria: "candidate must improve log-loss and Brier; upper 95% series-cluster bootstrap bound must be below zero",
     },
     features: { heroes: index.heroes.length, synergies: Object.keys(synergy).length, counters: Object.keys(counters).length },
     heroes, synergy, counters,
   };
 
+  const versionPath = path.join(path.dirname(outputPath), "versions", `${modelId}.json`);
+  mkdirSync(path.dirname(versionPath), { recursive: true });
+  if (!existsSync(versionPath)) writeFileSync(versionPath, JSON.stringify(artifact));
+
   db.prepare(`INSERT INTO model_versions(kind, model_id, trained_at, samples, metrics_json, artifact_path, active, notes)
               VALUES('draft',?,?,?,?,?,?,?)
               ON CONFLICT(kind, model_id) DO UPDATE SET trained_at=excluded.trained_at, samples=excluded.samples,
                 metrics_json=excluded.metrics_json, active=excluded.active, notes=excluded.notes`)
-    .run(modelId, nowIso(), rows.length, JSON.stringify(artifact.validation), outputPath, gatePassed ? 1 : 0,
+    .run(modelId, nowIso(), rows.length, JSON.stringify(artifact.validation), versionPath, gatePassed ? 1 : 0,
       gatePassed ? `holdout logloss ${holdoutMetrics.logLoss.toFixed(4)} vs baseline ${baselineLoss.toFixed(4)}`
         : `gate failed: ${holdoutMetrics.logLoss.toFixed(4)} >= ${baselineLoss.toFixed(4)}`);
 
   if (!gatePassed) {
-    return { ok: false, reason: "holdout_gate_failed", modelId, validation: artifact.validation };
+    return { ok: false, reason: "holdout_gate_failed", modelId, candidatePath: versionPath, validation: artifact.validation };
   }
   db.prepare("UPDATE model_versions SET active = 0 WHERE kind = 'draft' AND model_id != ?").run(modelId);
   mkdirSync(path.dirname(outputPath), { recursive: true });
   writeFileSync(outputPath, JSON.stringify(artifact));
-  return { ok: true, modelId, maps: rows.length, validation: artifact.validation, features: artifact.features };
+  return { ok: true, modelId, artifactPath: versionPath, maps: rows.length, validation: artifact.validation, features: artifact.features };
 }

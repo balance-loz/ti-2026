@@ -184,6 +184,9 @@ export function projectTournament(db, leagueId, { iterations = ITERATIONS } = {}
   const qualified = new Map(alive.map((team) => [team.teamId, 0]));
   // Bracket: how often each team appears in each slot, and wins there.
   const slotCounts = new Map();
+  const outcomes = new Map(alive.map((team) => [team.teamId, { champion: 0, final: 0, top4: 0 }]));
+  const actualBySlot = new Map((bracket?.sections || []).flatMap((section) => section.matches)
+    .map((match) => [match.slot, match]));
 
   const rating = (teamId) => Number(ratings.ratings?.[String(teamId)]?.rating ?? 0);
 
@@ -224,12 +227,19 @@ export function projectTournament(db, leagueId, { iterations = ITERATIONS } = {}
     });
 
     if (!topology) continue;
-    // Seeding inside the bracket is not published, so the qualifiers are drawn
-    // at random; over many runs that averages the draw out rather than
-    // pretending to know it.
-    const seeds = shuffle(table.slice(0, topology.seeds).map(([teamId]) => teamId));
-    const played = playBracket(topology, seeds, (a, b, bestOf) =>
-      (random() < seriesProbability(a, b, bestOf) ? a : b));
+    // Keep the official bracket topology and deterministic seed layout. Random
+    // pairings made two otherwise identical forecasts describe different
+    // tournaments and allowed favourites to meet in an invented first round.
+    const qualifiers = table.slice(0, topology.seeds).map(([teamId]) => teamId);
+    const seeds = bracketSeedOrder(topology.seeds).map((seed) => qualifiers[seed - 1] ?? null);
+    const played = playBracket(topology, seeds, (a, b, bestOf, node) => {
+      const actual = actualBySlot.get(node.slot);
+      if (actual?.winner && actual.teamAId && actual.teamBId) {
+        const realWinner = actual.winner === 1 ? String(actual.teamAId) : String(actual.teamBId);
+        if (String(a) === realWinner || String(b) === realWinner) return String(a) === realWinner ? a : b;
+      }
+      return random() < seriesProbability(a, b, bestOf) ? a : b;
+    });
 
     for (const [slot, sides] of played.entrants) {
       const entry = slotCounts.get(slot) ?? { teams: new Map(), winners: new Map() };
@@ -241,6 +251,17 @@ export function projectTournament(db, leagueId, { iterations = ITERATIONS } = {}
       if (winner) entry.winners.set(winner, (entry.winners.get(winner) || 0) + 1);
       slotCounts.set(slot, entry);
     }
+    const finalNode = topology.nodes.at(-1);
+    const finalists = played.entrants.get(finalNode?.slot) || [];
+    for (const teamId of finalists) if (outcomes.has(teamId)) outcomes.get(teamId).final += 1;
+    if (played.champion && outcomes.has(played.champion)) outcomes.get(played.champion).champion += 1;
+    const eliminationTail = [];
+    for (const node of topology.nodes) {
+      const loser = played.losers.get(node.slot);
+      if (loser && (node.lane === "lower" || node.lane === "final")) eliminationTail.push(loser);
+    }
+    const topFour = new Set([played.champion, ...eliminationTail.slice(-3)].filter(Boolean));
+    for (const teamId of topFour) if (outcomes.has(teamId)) outcomes.get(teamId).top4 += 1;
   }
 
   const standings = alive.map((team) => {
@@ -267,6 +288,12 @@ export function projectTournament(db, leagueId, { iterations = ITERATIONS } = {}
     groupRounds,
     standings,
     bracket: bracketSlots,
+    outcomes: topology ? alive.map((team) => ({
+      teamId: team.teamId,
+      champion: 100 * outcomes.get(team.teamId).champion / iterations,
+      final: 100 * outcomes.get(team.teamId).final / iterations,
+      top4: 100 * outcomes.get(team.teamId).top4 / iterations,
+    })) : null,
     columns: topology?.columns ?? 0,
     // Said out loud on the page: this is a view, not a scored prediction.
     note: "Проекция показывает ожидаемое развитие турнира. Оценивается точность только тех прогнозов, что зафиксированы до начала конкретного матча.",

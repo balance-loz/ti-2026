@@ -192,6 +192,20 @@ test("resolving scores a prediction against the real winner", () => {
   assert.equal(series.accuracy, 1);
 });
 
+test("late fallback predictions are resolved for audit but excluded from quality metrics", () => {
+  freezePrediction(db, {
+    scope: "series", subjectKey: "900001:s:5001", leagueId: 900001,
+    modelKind: "late_fallback", modelId: "late-1", sideA: 11, sideB: 22,
+    probabilityA: 0.99, bestOf: 3, evaluationEligible: false, timingClass: "in_play_fallback",
+  });
+  resolvePredictions(db);
+  const stored = getPrediction(db, "series", "900001:s:5001", "late_fallback");
+  assert.ok(stored.resolved_at, "late calls remain auditable");
+  assert.equal(stored.evaluation_eligible, 0);
+  assert.deepEqual(accuracySummary(db, { modelKind: "late_fallback" }), []);
+  assert.equal(accuracySummary(db, { modelKind: "late_fallback", includeIneligible: true })[0].count, 1);
+});
+
 test("an undecided series leaves its prediction open", () => {
   freezePrediction(db, {
     scope: "series", subjectKey: "900002:s:6001", leagueId: 900002,
@@ -1196,7 +1210,7 @@ test("a thin team beating unknowns in a pub league does not out-rate an establis
   rebuildSeries(db, junk);
   rebuildSeries(db, pro);
 
-  const result = trainRatings(db, { nowSeconds: NOW });
+  const result = trainRatings(db, { nowSeconds: NOW, forcePromotion: true });
   assert.equal(result.ok, true, result.reason);
   invalidateRatingsCache();
 

@@ -189,9 +189,13 @@ export function explainSeries(db, { teamAId, teamBId, bestOf = 3, ratings = null
   const frozen = snapshot && Number.isFinite(Number(snapshot.ratingA)) && Number.isFinite(Number(snapshot.ratingB))
     ? {
       modelId: snapshot.modelId ?? null,
+      schemaVersion: Number(snapshot.ratingsSchemaVersion || 1),
+      config: { moderation: Number(snapshot.moderation || live?.config?.moderation || 4) },
       ratings: {
-        [String(teamAId)]: { rating: Number(snapshot.ratingA), series: Number(snapshot.seriesA || 0) },
-        [String(teamBId)]: { rating: Number(snapshot.ratingB), series: Number(snapshot.seriesB || 0) },
+        [String(teamAId)]: { rating: Number(snapshot.ratingA), series: Number(snapshot.seriesA || 0),
+          evidence: Number(snapshot.evidenceA || 0), teamPart: snapshot.teamPartA, playerPart: snapshot.playerPartA, lineup: snapshot.lineupA },
+        [String(teamBId)]: { rating: Number(snapshot.ratingB), series: Number(snapshot.seriesB || 0),
+          evidence: Number(snapshot.evidenceB || 0), teamPart: snapshot.teamPartB, playerPart: snapshot.playerPartB, lineup: snapshot.lineupB },
       },
     }
     : null;
@@ -286,11 +290,11 @@ export function explainSeries(db, { teamAId, teamBId, bestOf = 3, ratings = null
       formB: recentForm(db, teamBId),
     },
     quality: validation ? {
-      family: validation.champion?.family ?? null,
-      logLoss: round(validation.champion?.logLoss ?? 0),
-      accuracy: round(validation.champion?.accuracy ?? 0, 3),
+      family: validation.rollingOrigin ? "team_player_strength" : (validation.champion?.family ?? null),
+      logLoss: round(validation.rollingOrigin?.logLoss ?? validation.champion?.logLoss ?? 0),
+      accuracy: round(validation.rollingOrigin?.accuracy ?? validation.champion?.accuracy ?? 0, 3),
       coinflipLogLoss: round(validation.coinflipLogLoss ?? 0),
-      samples: validation.champion?.samples ?? 0,
+      samples: validation.rollingOrigin?.samples ?? validation.champion?.samples ?? 0,
       holdoutDays: validation.holdoutDays ?? null,
     } : null,
     notes: seriesNotes({ pair, roster: validation?.rosterWeighting ?? null, frozen: Boolean(frozen) }),

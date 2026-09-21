@@ -59,6 +59,8 @@ function stepMark(status: RefreshStep["status"]) {
 }
 
 function RefreshProgressPanel({ progress, running }: { progress: RefreshProgress; running: boolean }) {
+  // This is a status-age indicator, intentionally sampled on each server poll.
+  // eslint-disable-next-line react-hooks/purity
   const heartbeatAge = progress.heartbeatAt ? Date.now() - Date.parse(progress.heartbeatAt) : 0;
   const isStale = running && Number.isFinite(heartbeatAge) && heartbeatAge > 120_000;
   const logTail = (progress.log ?? "").trim().split(/\n/).slice(-12).join("\n");

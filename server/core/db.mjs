@@ -112,6 +112,8 @@ CREATE TABLE IF NOT EXISTS predictions (
   outcome INTEGER,
   brier REAL,
   log_loss REAL,
+  evaluation_eligible INTEGER NOT NULL DEFAULT 0,
+  timing_class TEXT NOT NULL DEFAULT 'unverified',
   UNIQUE(scope, subject_key, model_kind)
 );
 CREATE INDEX IF NOT EXISTS idx_predictions_open ON predictions(resolved_at, created_at);
@@ -270,8 +272,33 @@ const COLUMN_MIGRATIONS = {
     score_correct: "INTEGER",
     outcome_kind: "TEXT",
     draw_probability: "REAL",
+    evaluation_eligible: "INTEGER",
+    timing_class: "TEXT",
   },
 };
+
+function backfillPredictionEligibility(db) {
+  const rows = db.prepare(`SELECT id, scope, features_json FROM predictions
+                           WHERE evaluation_eligible IS NULL OR timing_class IS NULL`).all();
+  const update = db.prepare(`UPDATE predictions SET evaluation_eligible = ?, timing_class = ? WHERE id = ?`);
+  for (const row of rows) {
+    let features = {};
+    try { features = JSON.parse(row.features_json || "{}"); } catch { features = {}; }
+    let eligible = 0;
+    let timing = "unverified";
+    if (row.scope === "series" && features.frozenBeforeStart === true) {
+      eligible = 1;
+      timing = "pre_match";
+    } else if (row.scope === "series" && Number(features.mapsPlayedAtFreeze || 0) > 0) {
+      timing = "in_play_fallback";
+    } else if (row.scope === "map" && Number.isFinite(Number(features.gameTimeAtFreeze))) {
+      const maxSeconds = Math.max(0, Number(process.env.DRAFT_FREEZE_MAX_SECONDS || 180));
+      eligible = Number(features.gameTimeAtFreeze) <= maxSeconds ? 1 : 0;
+      timing = eligible ? "draft_on_time" : "draft_late";
+    }
+    update.run(eligible, timing, row.id);
+  }
+}
 
 // scheduled_matches originally required both team names. The table is only
 // ever rebuilt from the source, so an empty one can safely be recreated; a
@@ -302,6 +329,7 @@ export function openDb() {
   handle = new DatabaseSync(DB_PATH);
   handle.exec(SCHEMA);
   migrateColumns(handle);
+  backfillPredictionEligibility(handle);
   migrateScheduledMatches(handle);
   return handle;
 }

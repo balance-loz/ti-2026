@@ -13,7 +13,7 @@ const ITERATIONS = Math.max(2000, Number(process.env.FORECAST_ITERATIONS || 20_0
 // of data, so without this a league whose results have stopped changing would
 // keep serving the old shape for ever — a finished tournament would never get
 // the bracket wiring that makes its matches clickable.
-const PAYLOAD_VERSION = 2;
+const PAYLOAD_VERSION = 3;
 
 /**
  * Everything a forecast depends on, in one fingerprint.
@@ -59,6 +59,18 @@ export function forecastTournament(db, leagueId, { force = false, iterations = I
     projection = projectTournament(db, leagueId);
   } catch (error) {
     projection = { error: String(error?.message || error) };
+  }
+  if (Array.isArray(projection?.outcomes)) {
+    const official = new Map(projection.outcomes.map((row) => [String(row.teamId), row]));
+    for (const team of simulation.teams) {
+      const outcome = official.get(String(team.teamId));
+      if (!outcome) continue;
+      team.champion = outcome.champion;
+      team.final = outcome.final;
+      team.top4 = outcome.top4;
+    }
+    simulation.method = `${simulation.method}+official_bracket_topology`;
+    simulation.caveat = "Групповой посев моделируется; плей-офф проходит по опубликованной сетке и учитывает уже сыгранные результаты.";
   }
   const payload = {
     generatedAt: nowIso(),
