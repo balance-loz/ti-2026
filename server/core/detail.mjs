@@ -7,6 +7,8 @@ import { loadRatings } from "./ratings.mjs";
 import { heroCatalog } from "./heroes.mjs";
 import { explainSeries, explainDraft, teamLineup } from "./explain.mjs";
 import { rosterEras } from "./rosters.mjs";
+import { predictSeries } from "./predictions.mjs";
+import { nowIso } from "./db.mjs";
 
 const parseJson = (value, fallback = null) => {
   if (!value) return fallback;
@@ -265,6 +267,93 @@ export function seriesDetail(db, seriesKey) {
     maps,
     heroCatalog: heroCatalog(db),
   };
+}
+
+function virtualSeriesDetail(db, key) {
+  const index = teamIndex(db);
+  let leagueId; let teamAId; let teamBId; let bestOf = 3; let startTime = null;
+  let status = "scheduled"; let kind = "projected"; let frozen = null; let liveMap = null;
+
+  const projected = key.match(/^projected:(\d+):(\d+):(\d+):(\d+)$/);
+  const scheduled = key.match(/^sched:(\d+):(.+)$/);
+  const live = key.match(/^live-map:(\d+)$/);
+  if (projected) {
+    leagueId = Number(projected[1]);
+    teamAId = Number(projected[3]);
+    teamBId = Number(projected[4]);
+  } else if (scheduled) {
+    leagueId = Number(scheduled[1]);
+    const row = db.prepare("SELECT * FROM scheduled_matches WHERE league_id=? AND external_key=?").get(leagueId, scheduled[2]);
+    if (!row?.team_a_id || !row?.team_b_id) return null;
+    teamAId = Number(row.team_a_id); teamBId = Number(row.team_b_id);
+    bestOf = Number(row.best_of) || 3; startTime = row.start_time ?? null; kind = "scheduled";
+    frozen = db.prepare("SELECT * FROM predictions WHERE scope='series' AND subject_key=? AND model_kind='team_ratings'").get(key);
+  } else if (live) {
+    const row = db.prepare("SELECT * FROM live_games WHERE match_id=?").get(Number(live[1]));
+    if (!row) return null;
+    const payload = parseJson(row.payload_json, {});
+    leagueId = Number(row.league_id); teamAId = Number(row.radiant_team_id); teamBId = Number(row.dire_team_id);
+    status = "live"; kind = "live"; startTime = null;
+    const scheduledRow = db.prepare(`SELECT best_of FROM scheduled_matches WHERE league_id=?
+      AND ((team_a_id=? AND team_b_id=?) OR (team_a_id=? AND team_b_id=?))
+      ORDER BY ABS(COALESCE(start_time,0) - strftime('%s','now')) LIMIT 1`)
+      .get(leagueId, teamAId, teamBId, teamBId, teamAId);
+    bestOf = Number(scheduledRow?.best_of) || 3;
+    const draft = db.prepare("SELECT * FROM predictions WHERE scope='map' AND subject_key=? AND model_kind='draft'").get(String(row.match_id));
+    const radiantPicks = parseJson(row.radiant_picks_json, payload.radiantPicks ?? []);
+    const direPicks = parseJson(row.dire_picks_json, payload.direPicks ?? []);
+    const draftProbability = draft ? Number(draft.probability_a) : Number(payload.draft?.probabilityRadiant);
+    liveMap = {
+      matchId: Number(row.match_id), radiant: namedTeam(index, teamAId), dire: namedTeam(index, teamBId),
+      radiantWin: null, startTime: null, duration: Number(row.game_time) || null, patch: null,
+      radiantPicks, direPicks,
+      draftPrediction: Number.isFinite(draftProbability) ? {
+        probabilityRadiant: draftProbability,
+        capturedAt: draft?.created_at ?? row.last_seen_at,
+        modelId: draft?.model_id ?? payload.draft?.modelId ?? null,
+        correct: null,
+        features: draft ? parseJson(draft.features_json, null) : {
+          prior: payload.draft?.priorProbabilityRadiant ?? null,
+          draftDelta: payload.draft?.draftDelta ?? null,
+          liveProbabilityRadiant: payload.liveState?.liveProbabilityRadiant ?? null,
+        },
+      } : null,
+      explanation: explainDraft(db, { radiantTeamId: teamAId, direTeamId: teamBId, radiantPicks, direPicks }),
+    };
+  } else return null;
+
+  const tournamentRow = db.prepare("SELECT name, slug FROM tournaments WHERE league_id=?").get(leagueId);
+  const ratings = loadRatings();
+  const current = predictSeries(db, { teamAId, teamBId, bestOf, ratings });
+  const snapshot = frozen ? parseJson(frozen.features_json, null) : null;
+  const explanation = explainSeries(db, {
+    teamAId, teamBId, bestOf, ratings,
+    snapshot: snapshot ? { ...snapshot, modelId: frozen.model_id } : null,
+  });
+  const prediction = frozen ? {
+    probabilityA: Number(frozen.probability_a), capturedAt: frozen.created_at, modelId: frozen.model_id,
+    predictedScore: frozen.predicted_score, predictedScoreProbability: frozen.predicted_score_probability,
+    drawProbability: frozen.draw_probability, actualScore: frozen.actual_score,
+    scoreCorrect: frozen.score_correct === null ? null : Boolean(frozen.score_correct),
+    outcomeKind: frozen.outcome_kind, features: snapshot, provisional: false,
+  } : {
+    probabilityA: current.probabilityA, capturedAt: nowIso(), modelId: current.modelId,
+    predictedScore: current.exactScore?.score ?? null,
+    predictedScoreProbability: current.exactScore?.probability ?? null,
+    drawProbability: current.drawProbability ?? null, actualScore: null, scoreCorrect: null, outcomeKind: null,
+    features: { projected: kind === "projected", currentModel: true }, provisional: true,
+  };
+  return {
+    seriesKey: key, detailKind: kind,
+    tournament: tournamentRow ? { slug: tournamentRow.slug, name: tournamentRow.name } : null,
+    teamA: namedTeam(index, teamAId), teamB: namedTeam(index, teamBId),
+    scoreA: 0, scoreB: 0, bestOf, status, isDraw: false, winnerId: null, startTime,
+    prediction, explanation, maps: liveMap ? [liveMap] : [], heroCatalog: heroCatalog(db),
+  };
+}
+
+export function matchDetail(db, key) {
+  return seriesDetail(db, key) ?? virtualSeriesDetail(db, key);
 }
 
 /** Every call one model has made, newest first, with how it turned out. */

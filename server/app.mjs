@@ -7,7 +7,7 @@ import { budgetStatus, OPENDOTA_API_KEY } from "./core/opendota.mjs";
 import { tournamentBySlug, refreshTournamentAggregates, isPlayingNow } from "./core/tournaments.mjs";
 import { currentLiveGames } from "./core/live.mjs";
 import { heroCatalog } from "./core/heroes.mjs";
-import { teamDetail, seriesDetail, modelPredictions } from "./core/detail.mjs";
+import { teamDetail, matchDetail, modelPredictions } from "./core/detail.mjs";
 import { activitySnapshot } from "./core/activity.mjs";
 import { scheduledMatches } from "./jobs/sync-structure.mjs";
 import { storedBracket } from "./jobs/project-bracket.mjs";
@@ -264,7 +264,7 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname.startsWith("/api/series/")) {
       const key = decodeURIComponent(url.pathname.slice("/api/series/".length));
-      const detail = seriesDetail(db, key);
+      const detail = matchDetail(db, key);
       if (!detail) return json(res, 404, { error: "series_not_found", seriesKey: key });
       return json(res, 200, detail, { cacheSeconds: 15 });
     }

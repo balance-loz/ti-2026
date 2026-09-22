@@ -452,6 +452,8 @@ a.dp-group-cell:hover { background: color-mix(in srgb, var(--fusion-accent) 10%,
 .dp-group-win .dp-group-score { color: var(--fusion-success); }
 .dp-group-loss .dp-group-score { color: var(--fusion-danger); }
 .dp-group-live { box-shadow: inset 0 0 0 1px var(--fusion-accent); }
+.dp-group-projected { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fusion-muted) 55%, transparent); }
+.dp-group-projected .dp-group-odds { font-style: italic; }
 .dp-group-empty { text-align: center; }
 .dp-group-qualify td:first-child { box-shadow: inset 3px 0 0 var(--fusion-success); }
 .dp-group-out td:first-child { box-shadow: inset 3px 0 0 var(--fusion-danger); }

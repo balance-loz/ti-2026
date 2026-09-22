@@ -77,7 +77,7 @@ export default function TournamentsIndexPage() {
             {live.slice(0, 4).map((game) => {
               const probability = game.frozenDraftProbabilityRadiant ?? game.draft?.probabilityRadiant ?? null;
               return (
-                <a key={game.matchId} className="dp-live-chip" href={game.tournament ? `/t/${game.tournament.slug}` : "/live"}>
+                <a key={game.matchId} className="dp-live-chip" href={`/match/${encodeURIComponent(`live-map:${game.matchId}`)}`}>
                   <span className="dp-live-teams">{game.radiantTeam.name} vs {game.direTeam.name}</span>
                   <span className="dp-live-prob">
                     {probability === null ? "драфт идёт" : `${(probability * 100).toFixed(0)}% / ${((1 - probability) * 100).toFixed(0)}%`}

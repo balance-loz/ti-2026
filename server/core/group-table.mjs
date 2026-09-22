@@ -137,6 +137,90 @@ function loadFixtures(db, leagueId, stages) {
   return fixtures;
 }
 
+function projectedSwissFixtures(fixtures, { winThreshold = null, lossThreshold = null } = {}) {
+  const rounds = fixtures.map((fixture) => fixture.round).filter((round) => round != null);
+  if (!rounds.length) return [];
+  const targetRound = Math.max(...rounds);
+  const target = fixtures.filter((fixture) => fixture.round === targetRound);
+  if (!target.length) return [];
+
+  const allTeams = new Set(fixtures.flatMap((fixture) => [fixture.teamAId, fixture.teamBId]));
+  const assigned = new Set(target.flatMap((fixture) => [fixture.teamAId, fixture.teamBId]));
+  const records = new Map([...allTeams].map((teamId) => [teamId, { wins: 0, losses: 0 }]));
+  const met = new Set();
+  for (const fixture of fixtures) {
+    if (fixture.round === targetRound) continue;
+    met.add(pairKey(fixture.teamAId, fixture.teamBId));
+    const played = fixture.series;
+    if (played?.status !== "finished" || Number(played.is_draw) === 1) continue;
+    const winner = Number(played.winner_id);
+    const loser = winner === fixture.teamAId ? fixture.teamBId : fixture.teamAId;
+    if (!records.has(winner) || !records.has(loser)) continue;
+    records.get(winner).wins += 1;
+    records.get(loser).losses += 1;
+  }
+
+  const waiting = [...allTeams].filter((teamId) => {
+    if (assigned.has(teamId)) return false;
+    const record = records.get(teamId);
+    return !(winThreshold && record.wins >= winThreshold)
+      && !(lossThreshold && record.losses >= lossThreshold);
+  });
+  if (waiting.length < 2 || waiting.length % 2) return [];
+
+  const cost = (a, b) => {
+    const left = records.get(a); const right = records.get(b);
+    return (met.has(pairKey(a, b)) ? 10_000 : 0)
+      + Math.abs(left.wins - right.wins) * 100
+      + Math.abs(left.losses - right.losses) * 100
+      + Math.abs(a - b) / 1e9;
+  };
+  const solved = new Map();
+  const solve = (teams) => {
+    if (!teams.length) return { cost: 0, pairs: [] };
+    const cacheKey = teams.join(",");
+    if (solved.has(cacheKey)) return solved.get(cacheKey);
+    const [first, ...rest] = teams;
+    let best = null;
+    for (let index = 0; index < rest.length; index += 1) {
+      const second = rest[index];
+      const tail = solve(rest.filter((_, position) => position !== index));
+      const candidate = { cost: cost(first, second) + tail.cost, pairs: [[first, second], ...tail.pairs] };
+      if (!best || candidate.cost < best.cost) best = candidate;
+    }
+    solved.set(cacheKey, best);
+    return best;
+  };
+
+  const bestOf = target.find((fixture) => fixture.bestOf)?.bestOf
+    ?? fixtures.find((fixture) => fixture.bestOf)?.bestOf ?? 3;
+  return solve(waiting.sort((a, b) => a - b)).pairs.map(([teamAId, teamBId], index) => ({
+    round: targetRound,
+    startTime: null,
+    teamAId, teamBId, bestOf,
+    externalKey: `projected:${targetRound}:${index}:${teamAId}:${teamBId}`,
+    seriesKey: null, series: null, projected: true,
+  }));
+}
+
+function swissLimits(db, leagueId, analysis) {
+  const row = db.prepare("SELECT format_json FROM tournaments WHERE league_id=?").get(leagueId);
+  let format = null;
+  try { format = JSON.parse(row?.format_json || "null"); } catch { format = null; }
+  const body = JSON.stringify(format || {}).toLowerCase();
+  const shape = String(analysis?.format?.shape || "").toLowerCase();
+  if (!/swiss|швейцар/.test(`${body} ${shape}`)) return {};
+  const win = /(?:first to|after|reach(?:ing)?)\s+(\d+)\s+(?:series\s+)?wins?/.exec(body)
+    ?? /(\d+)\s+(?:series\s+)?wins?[^.]{0,50}(?:advance|qualif)/.exec(body);
+  const loss = /(?:after|reach(?:ing)?)\s+(\d+)\s+(?:series\s+)?loss/.exec(body)
+    ?? /(\d+)\s+(?:series\s+)?loss(?:es)?[^.]{0,50}eliminat/.exec(body);
+  // The common 16-team Swiss is first-to-three. This fallback is used only
+  // when the organiser explicitly called the stage Swiss but omitted the
+  // threshold from machine-readable rules.
+  const fallback = Number(analysis?.format?.teamCount) >= 12 ? 3 : null;
+  return { winThreshold: Number(win?.[1]) || fallback, lossThreshold: Number(loss?.[1]) || fallback };
+}
+
 /** Predictions frozen for this league, by whatever key they were written under. */
 function frozenProbabilities(db, leagueId) {
   const rows = db.prepare(`SELECT subject_key, side_a, probability_a FROM predictions
@@ -156,8 +240,10 @@ const orient = (frozen, teamId) =>
  */
 export function groupTable(db, leagueId, { projection = null, playoffSlots = null, ratings = null } = {}) {
   const stages = seriesStages(db, leagueId);
-  const fixtures = loadFixtures(db, leagueId, stages)
+  const analysis = analyzeTournament(db, leagueId);
+  const officialFixtures = loadFixtures(db, leagueId, stages)
     .filter((fixture) => !fixture.seriesKey || stages.byKey.get(fixture.seriesKey) === "group");
+  const fixtures = [...officialFixtures, ...projectedSwissFixtures(officialFixtures, swissLimits(db, leagueId, analysis))];
   if (!fixtures.length) return null;
 
   const ids = new Set();
@@ -257,9 +343,16 @@ export function groupTable(db, leagueId, { projection = null, playoffSlots = nul
         bestOf: fixture.bestOf,
         startTime: fixture.startTime,
         seriesKey: fixture.seriesKey,
-        href: fixture.seriesKey ? `/match/${encodeURIComponent(fixture.seriesKey)}` : null,
+        href: fixture.seriesKey
+          ? `/match/${encodeURIComponent(fixture.seriesKey)}`
+          : fixture.projected
+            ? `/match/${encodeURIComponent(`projected:${leagueId}:${fixture.round}:${fixture.teamAId}:${fixture.teamBId}`)}`
+            : fixture.externalKey
+              ? `/match/${encodeURIComponent(`sched:${leagueId}:${fixture.externalKey}`)}`
+              : null,
         probability,
-        probabilitySource,
+        probabilitySource: fixture.projected && probabilitySource === "model" ? "projected" : probabilitySource,
+        projected: Boolean(fixture.projected),
       };
     });
 
@@ -280,7 +373,7 @@ export function groupTable(db, leagueId, { projection = null, playoffSlots = nul
     || b.mapWins - a.mapWins
     || a.team.name.localeCompare(b.team.name, "ru"));
 
-  const slots = Number(playoffSlots) || Number(analyzeTournament(db, leagueId)?.format?.playoffSlots) || null;
+  const slots = Number(playoffSlots) || Number(analysis?.format?.playoffSlots) || null;
   const standings = new Map((projection?.standings ?? []).map((row) => [String(row.id), row]));
   rows.forEach((row, index) => {
     row.rank = index + 1;
@@ -314,5 +407,6 @@ export function groupTable(db, leagueId, { projection = null, playoffSlots = nul
       : "Организатор не публикует номера раундов, поэтому матчи пронумерованы по порядку для каждой команды —"
         + " при переносе или пропуске порядок может разойтись с официальным. Порядок в таблице — по разнице побед,"
         + " затем по разнице карт; бухгольц не считается.",
+    projectedPairings: fixtures.filter((fixture) => fixture.projected).length,
   };
 }

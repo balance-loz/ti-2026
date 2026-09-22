@@ -131,7 +131,8 @@ export type GroupCell = {
   seriesKey: string | null;
   href: string | null;
   probability: number | null;
-  probabilitySource: "frozen" | "model" | null;
+  probabilitySource: "frozen" | "model" | "projected" | null;
+  projected?: boolean;
 };
 
 export type GroupRow = {
@@ -158,6 +159,7 @@ export type GroupStage = {
   rounds: { round: number | null; label: string; startTime: number | null; played: number; total: number }[];
   rows: GroupRow[];
   caveat: string;
+  projectedPairings?: number;
 };
 
 export type ForecastTeam = {
@@ -437,6 +439,7 @@ export type SeriesMap = {
 
 export type SeriesDetail = {
   seriesKey: string;
+  detailKind?: "played" | "scheduled" | "projected" | "live";
   tournament: { slug: string; name: string } | null;
   teamA: TeamRef;
   teamB: TeamRef;
@@ -458,6 +461,7 @@ export type SeriesDetail = {
     scoreCorrect: boolean | null;
     outcomeKind: string | null;
     features: Record<string, unknown> | null;
+    provisional?: boolean;
   };
   explanation: SeriesExplanation;
   maps: SeriesMap[];

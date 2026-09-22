@@ -232,8 +232,17 @@ export function rebuildSeries(db, leagueId) {
     keep.add(seriesKey);
     const played = group.winsA + group.winsB;
     const declared = bestOfFromSeriesType(group.seriesType);
+    const official = db.prepare(`SELECT best_of FROM scheduled_matches
+                                 WHERE league_id = ? AND best_of IS NOT NULL
+                                   AND ((team_a_id = ? AND team_b_id = ?) OR (team_a_id = ? AND team_b_id = ?))
+                                   AND (start_time IS NULL OR ABS(start_time - ?) <= ?)
+                                 ORDER BY CASE WHEN series_key IS NOT NULL THEN 0 ELSE 1 END, ABS(COALESCE(start_time, ?) - ?) ASC
+                                 LIMIT 1`)
+      .get(leagueId, group.teamA, group.teamB, group.teamB, group.teamA,
+        group.firstStart, 24 * HOUR, group.firstStart, group.firstStart);
     // Never claim a best-of smaller than what was actually played.
-    let bestOf = declared && declared >= played ? declared : played >= 4 ? 5 : played >= 2 ? 3 : 1;
+    let bestOf = Number(official?.best_of) >= played ? Number(official.best_of)
+      : declared && declared >= played ? declared : played >= 4 ? 5 : played >= 2 ? 3 : 1;
     let needed = Math.floor(bestOf / 2) + 1;
     let decided = group.winsA >= needed || group.winsB >= needed;
 
@@ -242,7 +251,9 @@ export function rebuildSeries(db, leagueId) {
     // Two maps, one each, and nothing more coming: that is a drawn Bo2, not a
     // Bo3 waiting for a decider. The feed's series_type cannot be trusted here
     // — most of these arrive tagged as something else entirely.
-    const isDraw = !decided && settled && played === 2 && group.winsA === group.winsB;
+    const publishedBestOf = official?.best_of ?? declared ?? null;
+    const isDraw = !decided && settled && played === 2 && group.winsA === group.winsB
+      && (publishedBestOf == null || Number(publishedBestOf) % 2 === 0);
     if (isDraw) { bestOf = 2; needed = 2; decided = true; }
 
     const abandoned = !decided && settled;

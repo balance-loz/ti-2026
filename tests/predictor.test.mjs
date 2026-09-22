@@ -27,6 +27,7 @@ const { freezePrediction, getPrediction, resolvePredictions, accuracySummary, fr
 const { ratingPairProbability } = await import("../server/core/ratings.mjs");
 const { normalizeLiveRow, livePollIntervalSeconds } = await import("../server/core/live.mjs");
 const { explainSeries, explainDraft, heroContributions, teamLineup } = await import("../server/core/explain.mjs");
+const { matchDetail } = await import("../server/core/detail.mjs");
 
 const db = openDb();
 
@@ -1029,11 +1030,54 @@ test("a Swiss table is built from the published rounds and links every played ce
   assert.equal(beaten.cells[0].scoreFor, 0);
   assert.equal(beaten.cells[0].seriesKey, first.seriesKey);
 
-  // An unplayed round has no score and cannot be clicked into.
+  // An unplayed round has no score but opens the pre-match explanation.
   const upcoming = leader.cells[2];
   assert.equal(upcoming.status, "scheduled");
   assert.equal(upcoming.scoreFor, null);
-  assert.equal(upcoming.href, null);
+  assert.match(upcoming.href, /^\/match\/sched/, "a scheduled match opens both the series and model explanation");
+});
+
+test("missing Swiss pairings are projected from the current record and clearly marked", () => {
+  const leagueId = 900066;
+  const { keyOf } = seedSwissLeague(leagueId);
+  db.prepare("UPDATE tournaments SET format_json=? WHERE league_id=?").run(JSON.stringify({
+    stages: [{ name: "Swiss Stage", rules: ["After 2 series wins teams advance", "After 2 series losses teams are eliminated"] }],
+  }), leagueId);
+  addFixture(leagueId, { key: "q1", round: 1, a: 701, b: 702, startTime: NOW - 5 * DAY, seriesKey: keyOf(701, 702) });
+  addFixture(leagueId, { key: "q2", round: 1, a: 703, b: 704, startTime: NOW - 5 * DAY + HOUR, seriesKey: keyOf(703, 704) });
+  addFixture(leagueId, { key: "q3", round: 2, a: 701, b: 703, startTime: NOW - 4 * DAY, seriesKey: keyOf(701, 703) });
+  addFixture(leagueId, { key: "q4", round: 2, a: 702, b: 704, startTime: NOW - 4 * DAY + HOUR, seriesKey: keyOf(702, 704) });
+  // Only one of the two round-three pairings has been revealed.
+  addFixture(leagueId, { key: "q5", round: 3, a: 701, b: 704, startTime: NOW + DAY });
+
+  const table = groupTable(db, leagueId, { ratings: GROUP_RATINGS, playoffSlots: 2 });
+  assert.equal(table.projectedPairings, 1);
+  const projected = table.rows.find((row) => row.team.id === "702").cells[2];
+  assert.equal(projected.opponent.id, "703");
+  assert.equal(projected.projected, true);
+  assert.equal(projected.probabilitySource, "projected");
+  assert.match(projected.href, /^\/match\/projected/);
+  const key = decodeURIComponent(projected.href.slice("/match/".length));
+  const detail = matchDetail(db, key);
+  assert.equal(detail.detailKind, "projected");
+  assert.equal(detail.prediction.provisional, true);
+  assert.equal(detail.maps.length, 0);
+});
+
+test("an official Bo3 at 1-1 is never rewritten as a draw", () => {
+  const leagueId = 900067;
+  upsertTournament(db, { leagueId, name: "Official Bo3", tier: "professional" });
+  for (const id of [701, 702, 703, 704]) upsertTeam(db, { teamId: id, name: `Team ${id}` });
+  addFixture(leagueId, { key: "bo3", round: 1, a: 701, b: 702, startTime: NOW - 3 * DAY });
+  seedMap({ matchId: 9000671, leagueId, seriesId: "bo3", seriesType: null, radiant: 701, dire: 702, radiantWin: 1, startTime: NOW - 3 * DAY });
+  seedMap({ matchId: 9000672, leagueId, seriesId: "bo3", seriesType: null, radiant: 701, dire: 702, radiantWin: 0, startTime: NOW - 3 * DAY + HOUR });
+  // A later match makes the 1:1 series stale, reproducing the old bug.
+  seedMap({ matchId: 9000673, leagueId, seriesId: "later", seriesType: 1, radiant: 703, dire: 704, radiantWin: 1, startTime: NOW });
+  rebuildSeries(db, leagueId);
+  const series = db.prepare("SELECT * FROM series WHERE league_id=? AND opendota_series_id='bo3'").get(leagueId);
+  assert.equal(series.best_of, 3);
+  assert.equal(series.is_draw, 0);
+  assert.notEqual(series.status, "finished");
 });
 
 test("an unplayed cell carries the model's number, from that row's own side", () => {

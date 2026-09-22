@@ -11,6 +11,7 @@ function GameRow({ game, heroes }: { game: LiveGame; heroes: HeroCatalog }) {
   const liveProbability = game.liveState?.liveProbabilityRadiant ?? null;
   const shown = frozen ?? current;
   const leader = game.liveState?.assessment?.leader ?? null;
+  const detailHref = `/match/${encodeURIComponent(`live-map:${game.matchId}`)}`;
 
   return (
     <article className="dp-live-card dp-live-card-wide">
@@ -42,13 +43,16 @@ function GameRow({ game, heroes }: { game: LiveGame; heroes: HeroCatalog }) {
         <>
           <ProbabilityBar probabilityA={shown} />
           <dl className="dp-live-numbers">
-            <div><dt>зафиксировано по драфту</dt><dd>{probabilityPercent(frozen)}</dd></div>
-            {game.draft ? <div><dt>рейтинги до драфта</dt><dd>{probabilityPercent(game.draft.priorProbabilityRadiant)}</dd></div> : null}
-            {liveProbability !== null ? <div><dt>с учётом хода игры</dt><dd>{probabilityPercent(liveProbability)}</dd></div> : null}
+            <div><dt>зафиксировано по драфту</dt><dd><a className="dp-link" href={detailHref}>{probabilityPercent(frozen)}</a></dd></div>
+            {game.draft ? <div><dt>рейтинги до драфта</dt><dd><a className="dp-link" href={detailHref}>{probabilityPercent(game.draft.priorProbabilityRadiant)}</a></dd></div> : null}
+            {liveProbability !== null ? <div><dt>с учётом хода игры</dt><dd><a className="dp-link" href={detailHref}>{probabilityPercent(liveProbability)}</a></dd></div> : null}
           </dl>
           {game.frozenAt ? <p className="dp-muted dp-small">прогноз записан {relativeTime(game.frozenAt)} и больше не меняется</p> : null}
         </>
       )}
+      <a className="dp-link dp-small" href={detailHref}>
+        открыть матч, пики и объяснение →
+      </a>
     </article>
   );
 }

@@ -28,8 +28,10 @@ function Cell({ cell }: { cell: GroupCell | null }) {
         : (
           <span className="dp-group-odds" title={cell.probabilitySource === "frozen"
             ? "Прогноз зафиксирован до начала матча"
-            : "Текущая оценка модели"}>
-            {cell.probability === null ? "—" : `${(cell.probability * 100).toFixed(0)}%`}
+            : cell.probabilitySource === "projected"
+              ? "Предполагаемая пара и текущая оценка модели"
+              : "Текущая оценка модели"}>
+            {cell.probability === null ? "—" : `${cell.projected ? "≈" : ""}${(cell.probability * 100).toFixed(0)}%`}
           </span>
         )}
     </>
@@ -38,11 +40,12 @@ function Cell({ cell }: { cell: GroupCell | null }) {
   const className = [
     played ? RESULT_CLASS[cell.result ?? ""] ?? "" : "dp-group-upcoming",
     cell.status === "live" ? "dp-group-live" : "",
+    cell.projected ? "dp-group-projected" : "",
   ].filter(Boolean).join(" ");
 
   const title = played
     ? `${cell.opponent.name} · ${cell.scoreFor}:${cell.scoreAgainst}${cell.bestOf ? ` · Bo${cell.bestOf}` : ""}`
-    : `${cell.opponent.name} · ${formatDateTime(cell.startTime)}`;
+    : `${cell.projected ? "Предполагаемая пара · " : ""}${cell.opponent.name} · ${formatDateTime(cell.startTime)}`;
 
   return (
     <td className={className}>
@@ -107,6 +110,9 @@ export function GroupStageTable({ stage }: { stage: GroupStage }) {
           ? ` В плей-офф выходят ${stage.playoffSlots} — они отмечены зелёной полосой.`
           : " Организатор не объявил, сколько команд проходит дальше, поэтому никто не подсвечен."}
         {" У сыгранного матча показан счёт по картам, у предстоящего — оценка модели на эту команду."}
+        {stage.projectedPairings
+          ? ` ${stage.projectedPairings} ещё не объявленных пар достроены моделью по текущему Swiss-рекорду; это сценарий, а не официальное расписание.`
+          : null}
       </p>
     </>
   );

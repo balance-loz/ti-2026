@@ -98,14 +98,23 @@ export default function MatchPage() {
         </div>
         <div className="dp-hero-meta">
           <Badge tone={data.status === "finished" ? "good" : data.status === "live" ? "live" : "neutral"}>
-            {data.isDraw ? "ничья" : data.status === "finished" ? (winnerIsA ? `победа ${teamA.name}` : `победа ${teamB.name}`) : data.status === "live" ? "идёт" : "не доиграна"}
+            {data.isDraw ? "ничья"
+              : data.status === "finished" ? (winnerIsA ? `победа ${teamA.name}` : `победа ${teamB.name}`)
+                : data.status === "live" ? "идёт"
+                  : data.detailKind === "projected" ? "предполагаемая пара"
+                    : "запланирован"}
           </Badge>
           <span>Bo{data.bestOf ?? "?"}</span>
           <span className="dp-muted">{formatDateTime(data.startTime)}</span>
         </div>
       </section>
 
-      <Panel title="Что предсказала модель" subtitle="Число зафиксировано до результата и не переписывалось">
+      <Panel
+        title="Что предсказала модель"
+        subtitle={prediction?.provisional
+          ? "Текущая оценка сценария — обновится, если изменится пара или рейтинг"
+          : "Число зафиксировано до результата и не переписывалось"}
+      >
         {prediction ? (
           <>
             <ProbabilityBar probabilityA={prediction.probabilityA} />
@@ -128,12 +137,15 @@ export default function MatchPage() {
               </div>
             </dl>
             <p className="dp-caveat">
+              {prediction.provisional
+                ? <><b>Это текущий сценарный прогноз, а не зафиксированная ставка:</b> пары ещё могут измениться после следующих результатов. {" "}</>
+                : null}
               {prediction.features?.frozenBeforeStart
                 ? <><b>Записано до начала матча</b>, за {String(prediction.features.minutesBeforeStart ?? "—")} мин до официального старта.{" "}</>
                 : prediction.features?.scoreAtFreeze
                   ? <>Серия была обнаружена уже при счёте {prediction.features.scoreAtFreeze as string} — раньше её в данных не существовало.{" "}</>
                   : null}
-              Зафиксировано {relativeTime(prediction.capturedAt)}
+              {prediction.provisional ? "Рассчитано " : "Зафиксировано "}{relativeTime(prediction.capturedAt)}
               {prediction.modelId ? ` · модель ${prediction.modelId}` : null}.
               Счёт и победитель оцениваются отдельно: ошибиться в счёте гораздо легче, и это не должно
               портить показатель по победителю.
