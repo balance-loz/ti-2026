@@ -131,10 +131,10 @@ export async function collectRecent(db, { maxPages = 12, nowSeconds = Date.now()
  * API call, so the per-run cap keeps it inside the budget.
  */
 export async function fetchMissingDrafts(db, { limit = Number(process.env.DRAFT_DETAIL_LIMIT || 60), reserve = BUDGET_RESERVE } = {}) {
-  const rows = db.prepare(`SELECT match_id FROM maps
-                           WHERE detail_fetched = 0 AND radiant_team_id > 0 AND dire_team_id > 0
-                             AND radiant_win IS NOT NULL
-                           ORDER BY start_time DESC LIMIT ?`).all(limit);
+  const rows = db.prepare(`SELECT m.match_id FROM maps m LEFT JOIN tournaments t ON t.league_id=m.league_id
+                           WHERE m.detail_fetched = 0 AND m.radiant_team_id > 0 AND m.dire_team_id > 0
+                             AND m.radiant_win IS NOT NULL AND COALESCE(t.tracked,1)=1
+                           ORDER BY m.start_time DESC LIMIT ?`).all(limit);
   let fetched = 0;
   let failed = 0;
   for (const row of rows) {

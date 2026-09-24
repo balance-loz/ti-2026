@@ -74,6 +74,7 @@ export function loadTrainingSeries(db, { nowSeconds = Date.now() / 1000, windowD
                                   s.score_a, s.score_b, s.winner_id, s.is_draw, t.tier
                            FROM series s LEFT JOIN tournaments t ON t.league_id = s.league_id
                            WHERE s.status = 'finished' AND (s.winner_id IS NOT NULL OR s.is_draw = 1)
+                             AND COALESCE(t.tracked, 1) = 1
                              AND s.start_time >= ? AND s.team_a_id > 0 AND s.team_b_id > 0
                            ORDER BY s.start_time ASC, s.series_key ASC`).all(since);
   return rows.map((row) => ({

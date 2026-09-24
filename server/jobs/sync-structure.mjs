@@ -10,7 +10,10 @@ import {
   fetchTournamentCatalog, rankCatalog,
 } from "../core/liquipedia.mjs";
 
-const STRUCTURE_TTL_MS = Math.max(60 * 60_000, Number(process.env.STRUCTURE_TTL_HOURS || 6) * 60 * 60_000);
+const configuredTtlMinutes = process.env.STRUCTURE_TTL_MINUTES != null
+  ? Number(process.env.STRUCTURE_TTL_MINUTES)
+  : Number(process.env.STRUCTURE_TTL_HOURS || 0.25) * 60;
+const STRUCTURE_TTL_MS = Math.max(5 * 60_000, configuredTtlMinutes * 60_000);
 const MIN_PARTICIPANT_MATCHES = Math.max(2, Number(process.env.STRUCTURE_MIN_MATCHES || 3));
 
 // Acronyms normalisation cannot bridge. Deliberately short: anything that can
@@ -210,7 +213,7 @@ export async function resolvePage(db, tournament, { catalog = null } = {}) {
   return { page: null, reason: tried.length ? "no_page_matched_participants" : "no_candidates", tried, catalogHits };
 }
 
-function storeSchedule(db, leagueId, parsed, teams) {
+export function storeSchedule(db, leagueId, parsed, teams) {
   const at = nowIso();
   const rows = [];
 
@@ -223,6 +226,19 @@ function storeSchedule(db, leagueId, parsed, teams) {
     }
   }
   for (const match of parsed.schedule) {
+    // Liquipedia can publish the bracket shell and the actual match cards via
+    // two different templates. When the shell still says TBD but a card at the
+    // same official time already names both teams, that card belongs inside
+    // the bracket slot; treating it as a group fixture leaves the public
+    // bracket on its old hypothetical pair even while the real match is live.
+    const emptyBracketSlot = rows.find((row) => row.slot && row.startTime === match.startTime
+      && (!row.teamA || !row.teamB));
+    if (emptyBracketSlot) {
+      emptyBracketSlot.teamA = match.teamA ?? emptyBracketSlot.teamA;
+      emptyBracketSlot.teamB = match.teamB ?? emptyBracketSlot.teamB;
+      emptyBracketSlot.bestOf = match.bestOf ?? emptyBracketSlot.bestOf;
+      continue;
+    }
     // Bracket rows already cover their own matches; this adds group-stage ones.
     const key = `time:${match.startTime}:${[match.teamA, match.teamB].map(normaliseTeamName).sort().join("|")}`;
     if (rows.some((row) => row.startTime === match.startTime
@@ -240,6 +256,18 @@ function storeSchedule(db, leagueId, parsed, teams) {
       team_a_name, team_b_name, team_a_id, team_b_id, best_of, start_time, winner_slot, updated_at)
     VALUES(?, 'liquipedia', ?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(league_id, source, external_key) DO UPDATE SET
+      updated_at=CASE WHEN
+        scheduled_matches.stage IS NOT excluded.stage
+        OR scheduled_matches.lane IS NOT excluded.lane
+        OR scheduled_matches.round IS NOT COALESCE(excluded.round, scheduled_matches.round)
+        OR scheduled_matches.team_a_name IS NOT excluded.team_a_name
+        OR scheduled_matches.team_b_name IS NOT excluded.team_b_name
+        OR scheduled_matches.team_a_id IS NOT COALESCE(excluded.team_a_id, scheduled_matches.team_a_id)
+        OR scheduled_matches.team_b_id IS NOT COALESCE(excluded.team_b_id, scheduled_matches.team_b_id)
+        OR scheduled_matches.best_of IS NOT COALESCE(excluded.best_of, scheduled_matches.best_of)
+        OR scheduled_matches.start_time IS NOT excluded.start_time
+        OR scheduled_matches.winner_slot IS NOT excluded.winner_slot
+        THEN excluded.updated_at ELSE scheduled_matches.updated_at END,
       stage=excluded.stage, lane=excluded.lane,
       -- A later read that lost the heading must not erase a round we already had.
       round=COALESCE(excluded.round, scheduled_matches.round),
@@ -247,8 +275,7 @@ function storeSchedule(db, leagueId, parsed, teams) {
       team_a_id=COALESCE(excluded.team_a_id, scheduled_matches.team_a_id),
       team_b_id=COALESCE(excluded.team_b_id, scheduled_matches.team_b_id),
       best_of=COALESCE(excluded.best_of, scheduled_matches.best_of),
-      start_time=excluded.start_time, winner_slot=excluded.winner_slot,
-      updated_at=excluded.updated_at`);
+      start_time=excluded.start_time, winner_slot=excluded.winner_slot`);
 
   let stored = 0;
   let resolved = 0;

@@ -364,7 +364,10 @@ export function modelPredictions(db, modelKind, { limit = 200, resolvedOnly = fa
     : "";
   const rows = db.prepare(`SELECT p.*, t.name AS tournament_name, t.slug AS tournament_slug
                            FROM predictions p LEFT JOIN tournaments t ON t.league_id = p.league_id
-                           WHERE p.model_kind = ? ${resolvedOnly ? "AND p.resolved_at IS NOT NULL" : ""} ${versionFilter}
+                           WHERE p.model_kind = ?
+                             AND NOT EXISTS (SELECT 1 FROM tournaments excluded_t
+                                             WHERE excluded_t.league_id = p.league_id AND excluded_t.tracked = 0)
+                             ${resolvedOnly ? "AND p.resolved_at IS NOT NULL" : ""} ${versionFilter}
                            ORDER BY p.created_at DESC LIMIT ?`)
     .all(modelKind, ...(modelIds ?? []), limit);
 

@@ -39,6 +39,10 @@ function inputHash(db, leagueId, ratingsModelId) {
 
 /** Recompute one league's outlook. Skips the Monte Carlo when nothing changed. */
 export function forecastTournament(db, leagueId, { force = false, iterations = ITERATIONS } = {}) {
+  const tournament = db.prepare("SELECT tracked FROM tournaments WHERE league_id = ?").get(leagueId);
+  if (tournament && Number(tournament.tracked) !== 1) {
+    return { leagueId, skipped: true, reason: "tournament_excluded" };
+  }
   const ratings = loadRatings();
   if (!ratings) return { leagueId, skipped: true, reason: "no_ratings" };
 
@@ -115,7 +119,9 @@ export function forecastActiveTournaments(db, { force = false } = {}) {
 }
 
 export function readForecast(db, leagueId) {
-  const row = db.prepare("SELECT * FROM tournament_forecasts WHERE league_id = ?").get(leagueId);
+  const row = db.prepare(`SELECT f.* FROM tournament_forecasts f
+                          JOIN tournaments t ON t.league_id = f.league_id AND t.tracked = 1
+                          WHERE f.league_id = ?`).get(leagueId);
   if (!row) return null;
   try {
     return { ...JSON.parse(row.payload_json), iterations: Number(row.iterations) };

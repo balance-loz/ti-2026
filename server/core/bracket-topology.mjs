@@ -127,17 +127,24 @@ export function buildTopology(bracket) {
  * Play one bracket through, given a seeding and a way to decide a series.
  * Returns which team ended up in each slot and who won there.
  */
-export function playBracket(topology, seeds, decide) {
+export function playBracket(topology, seeds, decide, { entrantsBySlot = null } = {}) {
   const winners = new Map();
   const losers = new Map();
   const entrants = new Map();
   let seedIndex = 0;
 
   for (const node of topology.nodes) {
-    const sides = node.sources.map((source) => {
+    const projectedSides = node.sources.map((source) => {
       if (source.from === "seed") return seeds[seedIndex++] ?? null;
       return source.from === "winner" ? winners.get(source.slot) ?? null : losers.get(source.slot) ?? null;
     });
+    // Announced or running matches are constraints, not suggestions. Consume
+    // the topology sources above so later seed positions stay aligned, then
+    // replace the projected entrants with the organiser's known pair.
+    const official = entrantsBySlot?.get(node.slot);
+    const sides = Array.isArray(official) && official[0] && official[1]
+      ? official
+      : projectedSides;
     entrants.set(node.slot, sides);
     const [a, b] = sides;
     if (!a || !b) continue;

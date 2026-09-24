@@ -29,7 +29,7 @@ export const JOB_DEFINITIONS = {
   syncActive: { intervalMs: number(process.env.JOB_SYNC_ACTIVE_MINUTES, 15) * MINUTE, description: "Re-pull running tournaments" },
   discover: { intervalMs: number(process.env.JOB_DISCOVER_MINUTES, 60) * MINUTE, description: "Find new tournaments" },
   forecast: { intervalMs: number(process.env.JOB_FORECAST_MINUTES, 20) * MINUTE, description: "Tournament outlook Monte Carlo" },
-  structure: { intervalMs: number(process.env.JOB_STRUCTURE_MINUTES, 180) * MINUTE, description: "Tournament format, bracket and schedule" },
+  structure: { intervalMs: number(process.env.JOB_STRUCTURE_MINUTES, 15) * MINUTE, description: "Tournament format, bracket and schedule" },
   collectRecent: { intervalMs: number(process.env.JOB_COLLECT_HOURS, 3) * HOUR, description: "New finished pro matches" },
   backfill: { intervalMs: number(process.env.JOB_BACKFILL_MINUTES, 30) * MINUTE, description: "Historical match backfill" },
   draftDetail: { intervalMs: number(process.env.JOB_DRAFT_DETAIL_MINUTES, 30) * MINUTE, description: "Fetch missing pick/ban data" },
@@ -45,7 +45,7 @@ export function createScheduler(db, { enabled = true, logger = console } = {}) {
   const handlers = {
     live: async () => {
       const tracked = new Set(activeTournaments(db).map((row) => Number(row.league_id)));
-      const result = await syncLiveGames(db, { leagueFilter: tracked.size ? tracked : null });
+      const result = await syncLiveGames(db, { leagueFilter: tracked });
       const open = currentLiveGames(db);
       const nextSeconds = livePollIntervalSeconds(open, { remainingBudget: budgetStatus(db).remaining });
       state.get("live").nextIntervalMs = nextSeconds * 1000;
@@ -74,7 +74,12 @@ export function createScheduler(db, { enabled = true, logger = console } = {}) {
           results.push({ leagueId: Number(league.league_id), error: String(error?.message || error) });
         }
       }
-      return { leagues: leagues.length, results };
+      // A just-started series can identify a previously TBD playoff slot even
+      // before the structure source refreshes. Link it, then let the forecast
+      // hash decide whether a Monte Carlo rerun is actually necessary.
+      const linkage = freezeAndLink(db);
+      const forecasts = forecastActiveTournaments(db);
+      return { leagues: leagues.length, results, linkage, forecasts: { leagues: forecasts.leagues, updated: forecasts.updated } };
     },
     discover: async () => {
       const discovered = await discoverFromProMatches(db, { pages: number(process.env.JOB_DISCOVER_PAGES, 3) });
@@ -91,7 +96,14 @@ export function createScheduler(db, { enabled = true, logger = console } = {}) {
     // way to turn the account ids on every map into names on a page.
     players: async () => syncPlayers(db),
     forecast: async () => forecastActiveTournaments(db),
-    structure: async () => syncActiveStructures(db),
+    structure: async () => {
+      const structure = await syncActiveStructures(db);
+      const linkage = freezeAndLink(db);
+      // Do not wait for the independent forecast timer: official bracket
+      // changes must be reflected by the response generated from this pass.
+      const forecasts = forecastActiveTournaments(db);
+      return { ...structure, linkage, forecasts: { leagues: forecasts.leagues, updated: forecasts.updated } };
+    },
     collectRecent: async () => collectRecent(db),
     backfill: async () => backfillHistory(db, { pages: number(process.env.JOB_BACKFILL_PAGES, 40) }),
     draftDetail: async () => fetchMissingDrafts(db),
@@ -164,7 +176,7 @@ export function createScheduler(db, { enabled = true, logger = console } = {}) {
       }
       // Stagger the first run of each job so a cold start does not fire
       // everything into the API at once.
-      const order = ["importArchive", "live", "discover", "players", "syncActive", "freeze", "resolve", "forecast", "structure", "collectRecent", "draftDetail", "backfill", "retrain"];
+      const order = ["importArchive", "live", "discover", "players", "syncActive", "freeze", "resolve", "structure", "forecast", "collectRecent", "draftDetail", "backfill", "retrain"];
       order.forEach((name, index) => {
         const timer = setTimeout(async () => {
           if (stopped) return;

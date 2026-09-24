@@ -44,12 +44,12 @@ const logLoss = (probability, outcome) => {
 /** Maps with ten locked heroes and a result, oldest first. */
 export function loadDraftRows(db, { windowDays = Number(process.env.DRAFT_WINDOW_DAYS || 800), nowSeconds = Date.now() / 1000 } = {}) {
   const since = Math.floor(nowSeconds - windowDays * 86_400);
-  const rows = db.prepare(`SELECT match_id, league_id, series_id, radiant_picks_json, dire_picks_json, radiant_win, start_time, patch,
-                                  radiant_team_id, dire_team_id
-                           FROM maps
-                           WHERE radiant_win IS NOT NULL AND radiant_picks_json IS NOT NULL AND dire_picks_json IS NOT NULL
-                             AND start_time >= ?
-                           ORDER BY start_time ASC`).all(since);
+  const rows = db.prepare(`SELECT m.match_id, m.league_id, m.series_id, m.radiant_picks_json, m.dire_picks_json,
+                                  m.radiant_win, m.start_time, m.patch, m.radiant_team_id, m.dire_team_id
+                           FROM maps m LEFT JOIN tournaments t ON t.league_id = m.league_id
+                           WHERE m.radiant_win IS NOT NULL AND m.radiant_picks_json IS NOT NULL AND m.dire_picks_json IS NOT NULL
+                             AND COALESCE(t.tracked, 1) = 1 AND m.start_time >= ?
+                           ORDER BY m.start_time ASC`).all(since);
   const parsed = [];
   for (const row of rows) {
     let radiant; let dire;

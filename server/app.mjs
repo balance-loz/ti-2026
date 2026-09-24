@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { timingSafeEqual, createHash } from "node:crypto";
 import { openDb, nowIso } from "./core/db.mjs";
 import { budgetStatus, OPENDOTA_API_KEY } from "./core/opendota.mjs";
-import { tournamentBySlug, refreshTournamentAggregates, isPlayingNow } from "./core/tournaments.mjs";
+import { tournamentBySlug, refreshTournamentAggregates, isPlayingNow, applyTournamentExclusions } from "./core/tournaments.mjs";
 import { currentLiveGames } from "./core/live.mjs";
 import { heroCatalog } from "./core/heroes.mjs";
 import { teamDetail, matchDetail, modelPredictions } from "./core/detail.mjs";
@@ -36,6 +36,7 @@ const SCHEDULER_ENABLED = process.env.SCHEDULER_ENABLED !== "false";
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "";
 
 const db = openDb();
+applyTournamentExclusions(db);
 const scheduler = createScheduler(db, { enabled: SCHEDULER_ENABLED });
 
 function json(res, status, body, { cacheSeconds = 0 } = {}) {
@@ -161,6 +162,43 @@ function tournamentDetail(slug) {
   // the layout would never reach a payload written before it.
   const projection = forecast?.projection ?? null;
   if (projection?.bracket?.length) {
+    // The persisted Monte Carlo payload can be a few minutes older than the
+    // schedule. Official pairs always win at read time as a final consistency
+    // guard, so the page cannot show a hypothetical matchup after the organiser
+    // has named (or OpenDota has revealed) the real teams.
+    const officialBySlot = new Map(schedule.filter((item) => item.slot && item.teamA?.id && item.teamB?.id)
+      .map((item) => [item.slot, item]));
+    const ratings = loadRatings();
+    projection.bracket = projection.bracket.map((slot) => {
+      const official = officialBySlot.get(slot.slot);
+      if (!official) return slot;
+      const actual = official.seriesKey
+        ? db.prepare("SELECT winner_id FROM series WHERE series_key=?").get(official.seriesKey)
+        : null;
+      const current = predictSeries(db, {
+        teamAId: official.teamA.id,
+        teamBId: official.teamB.id,
+        bestOf: official.bestOf || slot.bestOf || 3,
+        ratings,
+      });
+      const winnerId = actual?.winner_id != null
+        ? String(actual.winner_id)
+        : official.winnerSlot === 1 ? official.teamA.id
+          : official.winnerSlot === 2 ? official.teamB.id
+            : current.probabilityA >= 0.5 ? official.teamA.id : official.teamB.id;
+      return {
+        ...slot,
+        teamA: official.teamA,
+        teamB: official.teamB,
+        known: true,
+        decided: actual?.winner_id != null || official.winnerSlot === 1 || official.winnerSlot === 2,
+        winner: winnerId === official.teamA.id ? official.teamA : official.teamB,
+        probabilityA: current.probabilityA,
+        bestOf: official.bestOf || slot.bestOf,
+        startTime: official.startTime || slot.startTime,
+        seriesKey: official.seriesKey || slot.seriesKey,
+      };
+    });
     const wiring = projection.bracket.every((slot) => Array.isArray(slot.sources))
       ? projection.bracket
       : buildTopology(storedBracket(db, leagueId) ?? { sections: [] })?.nodes ?? [];

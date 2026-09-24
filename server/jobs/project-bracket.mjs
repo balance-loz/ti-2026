@@ -187,6 +187,9 @@ export function projectTournament(db, leagueId, { iterations = ITERATIONS } = {}
   const outcomes = new Map(alive.map((team) => [team.teamId, { champion: 0, final: 0, top4: 0 }]));
   const actualBySlot = new Map((bracket?.sections || []).flatMap((section) => section.matches)
     .map((match) => [match.slot, match]));
+  const officialEntrants = new Map([...actualBySlot]
+    .filter(([, match]) => match.teamAId && match.teamBId)
+    .map(([slot, match]) => [slot, [String(match.teamAId), String(match.teamBId)]]));
 
   const rating = (teamId) => Number(ratings.ratings?.[String(teamId)]?.rating ?? 0);
 
@@ -239,7 +242,7 @@ export function projectTournament(db, leagueId, { iterations = ITERATIONS } = {}
         if (String(a) === realWinner || String(b) === realWinner) return String(a) === realWinner ? a : b;
       }
       return random() < seriesProbability(a, b, bestOf) ? a : b;
-    });
+    }, { entrantsBySlot: officialEntrants });
 
     for (const [slot, sides] of played.entrants) {
       const entry = slotCounts.get(slot) ?? { teams: new Map(), winners: new Map() };

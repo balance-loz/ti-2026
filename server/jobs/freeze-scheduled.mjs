@@ -19,6 +19,62 @@ const STALE_HOURS = Math.max(1, Number(process.env.FREEZE_STALE_HOURS || 6));
 export const scheduledSubjectKey = (leagueId, externalKey) => `sched:${leagueId}:${externalKey}`;
 
 /**
+ * Fill a still-TBD bracket slot from the series that actually started at its
+ * official time. This is the fallback for the interval between OpenDota seeing
+ * map one and the organiser updating the names inside the bracket template.
+ * Assignment is one-to-one and nearest-time-first so one series cannot occupy
+ * two slots.
+ */
+export function inferStartedBracketSlots(db, { nowSeconds = Date.now() / 1000, windowHours = 6 } = {}) {
+  const window = windowHours * 3600;
+  const slots = db.prepare(`SELECT * FROM scheduled_matches
+                            WHERE series_key IS NULL AND slot IS NOT NULL
+                              AND lane IN ('upper','lower','final')
+                              AND (team_a_id IS NULL OR team_b_id IS NULL)
+                              AND start_time IS NOT NULL AND start_time <= ?`).all(Math.floor(nowSeconds));
+  if (!slots.length) return { inferred: 0, considered: 0 };
+
+  const candidates = db.prepare(`SELECT s.series_key, s.league_id, s.team_a_id, s.team_b_id, s.start_time,
+                                        ta.name AS team_a_name, tb.name AS team_b_name
+                                 FROM series s
+                                 LEFT JOIN teams ta ON ta.team_id=s.team_a_id
+                                 LEFT JOIN teams tb ON tb.team_id=s.team_b_id
+                                 WHERE s.start_time IS NOT NULL
+                                   AND COALESCE(s.stage, 'playoff') != 'group'
+                                   AND NOT EXISTS (SELECT 1 FROM scheduled_matches linked
+                                                   WHERE linked.series_key=s.series_key)`).all();
+  const edges = [];
+  for (const slot of slots) {
+    for (const series of candidates) {
+      if (Number(series.league_id) !== Number(slot.league_id)) continue;
+      const difference = Math.abs(Number(series.start_time) - Number(slot.start_time));
+      if (difference > window) continue;
+      const pair = new Set([String(series.team_a_id), String(series.team_b_id)]);
+      if (slot.team_a_id && !pair.has(String(slot.team_a_id))) continue;
+      if (slot.team_b_id && !pair.has(String(slot.team_b_id))) continue;
+      edges.push({ slot, series, difference });
+    }
+  }
+  edges.sort((a, b) => a.difference - b.difference || Number(a.slot.id) - Number(b.slot.id));
+
+  const usedSlots = new Set();
+  const usedSeries = new Set();
+  const update = db.prepare(`UPDATE scheduled_matches
+                             SET team_a_id=?, team_b_id=?, team_a_name=?, team_b_name=?, updated_at=?
+                             WHERE id=? AND series_key IS NULL`);
+  let inferred = 0;
+  for (const edge of edges) {
+    if (usedSlots.has(edge.slot.id) || usedSeries.has(edge.series.series_key)) continue;
+    update.run(edge.series.team_a_id, edge.series.team_b_id,
+      edge.series.team_a_name, edge.series.team_b_name, nowIso(), edge.slot.id);
+    usedSlots.add(edge.slot.id);
+    usedSeries.add(edge.series.series_key);
+    inferred += 1;
+  }
+  return { inferred, considered: slots.length };
+}
+
+/**
  * Write pre-match predictions for scheduled matches that are about to start.
  *
  * Only entries with both teams resolved are usable: an unfilled bracket slot
@@ -31,6 +87,7 @@ export function freezeScheduledMatches(db, { nowSeconds = Date.now() / 1000 } = 
   const from = Math.floor(nowSeconds - STALE_HOURS * 3600);
   const until = Math.floor(nowSeconds + LEAD_MINUTES * 60);
   const rows = db.prepare(`SELECT s.* FROM scheduled_matches s
+                           JOIN tournaments t ON t.league_id = s.league_id AND t.tracked = 1
                            LEFT JOIN predictions p
                              ON p.scope = 'series' AND p.model_kind = 'team_ratings'
                             AND p.subject_key = 'sched:' || s.league_id || ':' || s.external_key
@@ -90,6 +147,7 @@ export function freezeScheduledMatches(db, { nowSeconds = Date.now() / 1000 } = 
  */
 export function linkScheduledToSeries(db, { nowSeconds = Date.now() / 1000, windowHours = 12 } = {}) {
   const window = windowHours * 3600;
+  const inferred = inferStartedBracketSlots(db, { nowSeconds, windowHours: Math.min(windowHours, 6) });
   const rows = db.prepare(`SELECT * FROM scheduled_matches
                            WHERE series_key IS NULL AND team_a_id IS NOT NULL AND team_b_id IS NOT NULL
                              AND start_time IS NOT NULL AND start_time <= ?`).all(Math.floor(nowSeconds));
@@ -131,12 +189,12 @@ export function linkScheduledToSeries(db, { nowSeconds = Date.now() / 1000, wind
     }
     db.prepare("UPDATE predictions SET subject_key = ? WHERE id = ?").run(series.series_key, pending.id);
   }
-  return { linked, considered: rows.length };
+  return { linked, considered: rows.length, inferred: inferred.inferred };
 }
 
 /** Scheduler entry: link what has been played, then freeze what is coming. */
 export function freezeAndLink(db) {
   const linked = linkScheduledToSeries(db);
   const frozen = freezeScheduledMatches(db);
-  return { ...frozen, linked: linked.linked };
+  return { ...frozen, linked: linked.linked, inferred: linked.inferred };
 }

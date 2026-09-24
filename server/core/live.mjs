@@ -74,6 +74,11 @@ export async function syncLiveGames(db, { leagueFilter = null, nowSeconds = Date
     // A league id is the marker of an organised match; pubs carry 0.
     if (!game.leagueId) continue;
     if (leagueFilter && !leagueFilter.has(game.leagueId)) continue;
+    // Keep this guard even when a caller deliberately asks for the full live
+    // feed: an excluded show event must never regain predictions through a
+    // direct/manual sync that bypasses the scheduler's tracked-league set.
+    const tournament = db.prepare("SELECT tracked FROM tournaments WHERE league_id = ?").get(game.leagueId);
+    if (tournament && Number(tournament.tracked) !== 1) continue;
 
     seenIds.add(game.matchId);
     upsertTeam(db, { teamId: game.radiantTeamId, name: game.radiantName });
@@ -137,8 +142,10 @@ export async function syncLiveGames(db, { leagueFilter = null, nowSeconds = Date
 /** Open live games with their stored prediction payload, newest first. */
 export function currentLiveGames(db, { leagueId = null } = {}) {
   const rows = leagueId
-    ? db.prepare("SELECT * FROM live_games WHERE closed_at IS NULL AND league_id = ? ORDER BY last_seen_at DESC").all(leagueId)
-    : db.prepare("SELECT * FROM live_games WHERE closed_at IS NULL ORDER BY last_seen_at DESC").all();
+    ? db.prepare(`SELECT l.* FROM live_games l JOIN tournaments t ON t.league_id=l.league_id
+                  WHERE l.closed_at IS NULL AND l.league_id = ? AND t.tracked=1 ORDER BY l.last_seen_at DESC`).all(leagueId)
+    : db.prepare(`SELECT l.* FROM live_games l JOIN tournaments t ON t.league_id=l.league_id
+                  WHERE l.closed_at IS NULL AND t.tracked=1 ORDER BY l.last_seen_at DESC`).all();
   return rows.map((row) => {
     let payload = null;
     try { payload = JSON.parse(row.payload_json); } catch { payload = null; }

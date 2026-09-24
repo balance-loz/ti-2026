@@ -132,6 +132,12 @@ export function freezePrediction(db, {
   predictedScore = null, predictedScoreProbability = null, drawProbability = null,
   evaluationEligible = true, timingClass = "unverified",
 }) {
+  if (leagueId != null) {
+    const tournament = db.prepare("SELECT tracked FROM tournaments WHERE league_id = ?").get(leagueId);
+    if (tournament && Number(tournament.tracked) !== 1) {
+      return { inserted: false, skipped: "tournament_excluded" };
+    }
+  }
   const probability = probabilityClamp(probabilityA);
   const info = db.prepare(`INSERT INTO predictions(scope, subject_key, league_id, model_kind, model_id, side_a, side_b,
                              probability_a, best_of, features_json, created_at,
@@ -219,7 +225,10 @@ export function resolvePredictions(db) {
 
 /** Accuracy over resolved predictions, optionally narrowed to one league. */
 export function accuracySummary(db, { leagueId = null, modelKind = null, sinceDays = null, modelIds = null, includeIneligible = false } = {}) {
-  const filters = ["resolved_at IS NOT NULL"];
+  const filters = [
+    "resolved_at IS NOT NULL",
+    "NOT EXISTS (SELECT 1 FROM tournaments excluded_t WHERE excluded_t.league_id = predictions.league_id AND excluded_t.tracked = 0)",
+  ];
   if (!includeIneligible) filters.push("evaluation_eligible = 1");
   const params = [];
   if (leagueId != null) { filters.push("league_id = ?"); params.push(leagueId); }
@@ -275,6 +284,7 @@ export function freezeUpcomingSeries(db, leagueId) {
   const ratings = loadRatings();
   if (!ratings) return { frozen: 0, reason: "no_ratings" };
   const rows = db.prepare(`SELECT s.* FROM series s
+                           JOIN tournaments t ON t.league_id = s.league_id AND t.tracked = 1
                            LEFT JOIN predictions p ON p.scope='series' AND p.subject_key = s.series_key AND p.model_kind='team_ratings'
                            WHERE s.league_id = ? AND p.id IS NULL
                              AND s.status != 'finished' AND s.winner_id IS NULL`).all(leagueId);
@@ -325,6 +335,8 @@ export function modelVersionBreakdown(db, modelKind) {
                ELSE 0.0 END) AS accuracy,
       AVG(CASE WHEN evaluation_eligible = 1 THEN brier ELSE NULL END) AS brier
     FROM predictions WHERE model_kind = ? AND model_id IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM tournaments excluded_t
+                      WHERE excluded_t.league_id = predictions.league_id AND excluded_t.tracked = 0)
     GROUP BY model_id ORDER BY MAX(created_at) DESC`).all(modelKind)
     .map((row) => ({
       modelId: row.model_id,

@@ -14,6 +14,30 @@ export const ACTIVE_WINDOW_SECONDS = Math.max(DAY, Number(process.env.TOURNAMENT
 export const TRACKED_TIERS = new Set((process.env.TOURNAMENT_TIERS || "premium,professional").split(",").map((tier) => tier.trim()).filter(Boolean));
 export const HISTORY_WINDOW_SECONDS = Math.max(30 * DAY, Number(process.env.TOURNAMENT_HISTORY_DAYS || 540) * DAY);
 
+const EXCLUDED_TOURNAMENT_PATTERNS = [
+  /\bstreamers?\s+battles?\b/i,
+  /стример(?:ск(?:ий|ая|ое|ие))?\s+батл/i,
+];
+
+export function isExcludedTournamentName(name) {
+  const normalized = String(name || "").normalize("NFKC").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  return EXCLUDED_TOURNAMENT_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+/** Keep excluded show events for audit, but remove them from every active pool. */
+export function applyTournamentExclusions(db) {
+  const rows = db.prepare("SELECT league_id, name FROM tournaments WHERE tracked=1").all();
+  const ids = rows.filter((row) => isExcludedTournamentName(row.name)).map((row) => Number(row.league_id));
+  const update = db.prepare("UPDATE tournaments SET tracked=0, updated_at=? WHERE league_id=?");
+  const closeLive = db.prepare("UPDATE live_games SET closed_at=COALESCE(closed_at, ?) WHERE league_id=?");
+  const at = nowIso();
+  for (const leagueId of ids) {
+    update.run(at, leagueId);
+    closeLive.run(at, leagueId);
+  }
+  return { untracked: ids.length, leagueIds: ids };
+}
+
 export function slugify(name, leagueId) {
   const base = String(name || "")
     .normalize("NFKD")
@@ -46,14 +70,16 @@ export function upsertTournament(db, { leagueId, name, tier = null, prizePool = 
   const existing = db.prepare("SELECT league_id, slug, name FROM tournaments WHERE league_id = ?").get(leagueId);
   const at = nowIso();
   if (existing) {
-    db.prepare("UPDATE tournaments SET name = COALESCE(?, name), tier = COALESCE(?, tier), prize_pool = COALESCE(?, prize_pool), updated_at = ? WHERE league_id = ?")
-      .run(name ?? null, tier ?? null, prizePool ?? null, at, leagueId);
+    const excluded = isExcludedTournamentName(name ?? existing.name);
+    db.prepare("UPDATE tournaments SET name = COALESCE(?, name), tier = COALESCE(?, tier), prize_pool = COALESCE(?, prize_pool), tracked = CASE WHEN ? THEN 0 ELSE tracked END, updated_at = ? WHERE league_id = ?")
+      .run(name ?? null, tier ?? null, prizePool ?? null, excluded ? 1 : 0, at, leagueId);
     return existing.slug;
   }
   const slug = uniqueSlug(db, name, leagueId);
-  db.prepare(`INSERT INTO tournaments(league_id, slug, name, tier, prize_pool, status, first_seen_at, updated_at)
-              VALUES(?,?,?,?,?,'upcoming',?,?)`)
-    .run(leagueId, slug, String(name || `League ${leagueId}`), tier, prizePool, at, at);
+  db.prepare(`INSERT INTO tournaments(league_id, slug, name, tier, prize_pool, tracked, status, first_seen_at, updated_at)
+              VALUES(?,?,?,?,?,?,'upcoming',?,?)`)
+    .run(leagueId, slug, String(name || `League ${leagueId}`), tier, prizePool,
+      isExcludedTournamentName(name) ? 0 : 1, at, at);
   return slug;
 }
 
@@ -281,6 +307,10 @@ export function rebuildSeries(db, leagueId) {
 
 /** Pull one league's full match list and refresh its derived rows. */
 export async function syncLeague(db, leagueId, { reserve = 0 } = {}) {
+  const tournament = db.prepare("SELECT tracked FROM tournaments WHERE league_id = ?").get(leagueId);
+  if (tournament && Number(tournament.tracked) !== 1) {
+    return { leagueId, maps: 0, skipped: true, reason: "tournament_excluded" };
+  }
   const rows = await opendota.leagueMatches(db, leagueId, reserve);
   if (!Array.isArray(rows)) return { leagueId, maps: 0, skipped: true };
   let stored = 0;
@@ -369,8 +399,8 @@ export async function resolveTournamentNames(db, { limit = 500 } = {}) {
     if (needsName) {
       // The slug was derived from the placeholder, so regenerate it too.
       const slug = uniqueSlug(db, name, Number(row.league_id));
-      db.prepare("UPDATE tournaments SET name = ?, slug = ?, tier = COALESCE(?, tier), updated_at = ? WHERE league_id = ?")
-        .run(name, slug, tier, nowIso(), row.league_id);
+      db.prepare("UPDATE tournaments SET name = ?, slug = ?, tier = COALESCE(?, tier), tracked = CASE WHEN ? THEN 0 ELSE tracked END, updated_at = ? WHERE league_id = ?")
+        .run(name, slug, tier, isExcludedTournamentName(name) ? 1 : 0, nowIso(), row.league_id);
       renamed += 1;
     } else {
       db.prepare("UPDATE tournaments SET tier = COALESCE(?, tier), updated_at = ? WHERE league_id = ?")
@@ -382,12 +412,13 @@ export async function resolveTournamentNames(db, { limit = 500 } = {}) {
 
 /** Drop tournaments whose tier is outside the tracked set. */
 export function untrackOutOfScopeTournaments(db, { tiers = TRACKED_TIERS } = {}) {
-  if (!tiers.size) return { untracked: 0 };
+  const excluded = applyTournamentExclusions(db);
+  if (!tiers.size) return excluded;
   const placeholders = [...tiers].map(() => "?").join(",");
   const info = db.prepare(`UPDATE tournaments SET tracked = 0, updated_at = ?
                            WHERE tracked = 1 AND tier IS NOT NULL AND tier NOT IN (${placeholders})`)
     .run(nowIso(), ...tiers);
-  return { untracked: Number(info.changes) };
+  return { untracked: Number(info.changes) + excluded.untracked, excluded: excluded.untracked };
 }
 
 /** Tournaments worth polling: anything live or recently active. */
@@ -398,6 +429,6 @@ export function activeTournaments(db, { nowSeconds = Date.now() / 1000 } = {}) {
 }
 
 export function tournamentBySlug(db, slug) {
-  return db.prepare("SELECT * FROM tournaments WHERE slug = ?").get(slug)
-    ?? (/^\d+$/.test(String(slug)) ? db.prepare("SELECT * FROM tournaments WHERE league_id = ?").get(Number(slug)) : undefined);
+  return db.prepare("SELECT * FROM tournaments WHERE tracked=1 AND slug = ?").get(slug)
+    ?? (/^\d+$/.test(String(slug)) ? db.prepare("SELECT * FROM tournaments WHERE tracked=1 AND league_id = ?").get(Number(slug)) : undefined);
 }

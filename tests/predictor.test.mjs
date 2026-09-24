@@ -20,11 +20,13 @@ process.env.IMPORT_EXTRA_PATHS = "";
 const { openDb, closeDb, getJsonSetting, setJsonSetting } = await import("../server/core/db.mjs");
 const {
   slugify, tournamentStatus, isPlayingNow, upsertTournament, upsertMap, upsertTeam,
-  rebuildSeries, refreshTournamentAggregates, tournamentBySlug,
+  rebuildSeries, refreshTournamentAggregates, tournamentBySlug, isExcludedTournamentName,
+  applyTournamentExclusions,
 } = await import("../server/core/tournaments.mjs");
 const { analyzeTournament, simulateTournament } = await import("../server/core/format.mjs");
 const { freezePrediction, getPrediction, resolvePredictions, accuracySummary, freezeUpcomingSeries } = await import("../server/core/predictions.mjs");
-const { ratingPairProbability } = await import("../server/core/ratings.mjs");
+const { ratingPairProbability, loadTrainingSeries } = await import("../server/core/ratings.mjs");
+const { loadDraftRows } = await import("../server/core/draft-model.mjs");
 const { normalizeLiveRow, livePollIntervalSeconds } = await import("../server/core/live.mjs");
 const { explainSeries, explainDraft, heroContributions, teamLineup } = await import("../server/core/explain.mjs");
 const { matchDetail } = await import("../server/core/detail.mjs");
@@ -60,6 +62,39 @@ test("slug is stable, url-safe and never collapses to nothing", () => {
   assert.equal(slugify("肛宝联赛", 19066), "league-19066");
   assert.equal(slugify("", 7), "league-7");
   assert.match(slugify("Anything!!", 1), /^[a-z0-9-]+$/);
+});
+
+test("streamer show tournaments are excluded from every model data pool", () => {
+  for (const name of [
+    "BETBOOM Streamers Battle Dota 15",
+    "BetBoom Streamer Battle 8",
+    "Стримерский батл",
+  ]) assert.equal(isExcludedTournamentName(name), true, name);
+  assert.equal(isExcludedTournamentName("Battle of the Champions"), false);
+
+  const leagueId = 900000;
+  upsertTournament(db, { leagueId, name: "BETBOOM Streamers Battle Dota 15", tier: "professional" });
+  const tournament = db.prepare("SELECT tracked, slug FROM tournaments WHERE league_id = ?").get(leagueId);
+  assert.equal(tournament.tracked, 0);
+  assert.equal(tournamentBySlug(db, tournament.slug), undefined, "excluded tournaments must not have public pages");
+
+  seedMap({ matchId: 9000001, leagueId, seriesId: "show-1", radiant: 901, dire: 902, radiantWin: 1, startTime: NOW - HOUR });
+  seedMap({ matchId: 9000002, leagueId, seriesId: "show-1", radiant: 901, dire: 902, radiantWin: 1, startTime: NOW - 30 * 60 });
+  db.prepare(`UPDATE maps SET radiant_picks_json='[1,2,3,4,5]', dire_picks_json='[6,7,8,9,10]'
+              WHERE league_id=?`).run(leagueId);
+  rebuildSeries(db, leagueId);
+
+  assert.equal(loadTrainingSeries(db, { nowSeconds: NOW, windowDays: 30 }).some((row) => row.leagueId === leagueId), false);
+  assert.equal(loadDraftRows(db, { nowSeconds: NOW, windowDays: 30 }).some((row) => row.matchId === 9000001), false);
+  assert.deepEqual(freezePrediction(db, {
+    scope: "series", subjectKey: "show-prediction", leagueId, modelKind: "team_ratings",
+    modelId: "should-not-run", sideA: 901, sideB: 902, probabilityA: 0.8,
+  }), { inserted: false, skipped: "tournament_excluded" });
+
+  db.prepare("UPDATE tournaments SET tracked=1 WHERE league_id=?").run(leagueId);
+  const reapplied = applyTournamentExclusions(db);
+  assert.ok(reapplied.leagueIds.includes(leagueId));
+  assert.equal(db.prepare("SELECT tracked FROM tournaments WHERE league_id=?").get(leagueId).tracked, 0);
 });
 
 test("a tournament is live while maps keep landing and finished once they stop", () => {
@@ -522,6 +557,63 @@ test("a scheduled match is predicted before it starts, then follows its series",
   assert.equal(scored.actual_score, "2:0");
 });
 
+test("an announced match card fills the playoff slot at the same official time", async () => {
+  const { storeSchedule } = await import("../server/jobs/sync-structure.mjs");
+  const leagueId = 900031;
+  upsertTournament(db, { leagueId, name: "Published Bracket Cup", tier: "professional" });
+  const teams = [
+    { team_id: 511, name: "Announced Alpha", tag: "AAA" },
+    { team_id: 512, name: "Announced Beta", tag: "BBB" },
+  ];
+  teams.forEach((team) => upsertTeam(db, { teamId: team.team_id, name: team.name }));
+  const startTime = new Date((NOW + HOUR) * 1000).toISOString();
+  const parsed = {
+    bracket: { sections: [{ name: "Upper Bracket Quarterfinals", lane: "upper", matches: [{
+      slot: "R1M1", teamA: null, teamB: null, bestOf: 3, startTime, winner: null,
+    }] }] },
+    schedule: [{ teamA: "Announced Alpha", teamB: "Announced Beta", bestOf: 3, startTime }],
+  };
+
+  storeSchedule(db, leagueId, parsed, teams);
+  const rows = db.prepare("SELECT * FROM scheduled_matches WHERE league_id=?").all(leagueId);
+  assert.equal(rows.length, 1, "the match card must not become a duplicate group fixture");
+  assert.equal(rows[0].slot, "R1M1");
+  assert.equal(rows[0].lane, "upper");
+  assert.equal(rows[0].team_a_id, 511);
+  assert.equal(rows[0].team_b_id, 512);
+
+  db.prepare("UPDATE scheduled_matches SET updated_at='unchanged-sentinel' WHERE id=?").run(rows[0].id);
+  storeSchedule(db, leagueId, parsed, teams);
+  assert.equal(db.prepare("SELECT updated_at FROM scheduled_matches WHERE id=?").get(rows[0].id).updated_at,
+    "unchanged-sentinel", "an unchanged source must not invalidate the forecast cache");
+});
+
+test("a started series fills a still-TBD playoff slot before the bracket source catches up", async () => {
+  const { inferStartedBracketSlots, linkScheduledToSeries } = await import("../server/jobs/freeze-scheduled.mjs");
+  const leagueId = 900032;
+  upsertTournament(db, { leagueId, name: "Live Bracket Cup", tier: "professional" });
+  upsertTeam(db, { teamId: 521, name: "Live Alpha" });
+  upsertTeam(db, { teamId: 522, name: "Live Beta" });
+  db.prepare(`INSERT INTO scheduled_matches(league_id, source, external_key, slot, stage, lane,
+      best_of, start_time, updated_at)
+    VALUES(?, 'liquipedia', 'bracket:R1M1', 'R1M1', 'Upper Bracket Quarterfinals', 'upper', 3, ?, ?)`)
+    .run(leagueId, NOW - 60, new Date().toISOString());
+  seedMap({ matchId: 950101, leagueId, seriesId: "live-playoff", radiant: 521, dire: 522,
+    radiantWin: true, startTime: NOW });
+  rebuildSeries(db, leagueId);
+
+  const inferred = inferStartedBracketSlots(db, { nowSeconds: NOW + 120 });
+  assert.equal(inferred.inferred, 1);
+  const filled = db.prepare("SELECT * FROM scheduled_matches WHERE league_id=? AND slot='R1M1'").get(leagueId);
+  assert.equal(filled.team_a_id, 521);
+  assert.equal(filled.team_b_id, 522);
+
+  const linked = linkScheduledToSeries(db, { nowSeconds: NOW + 120 });
+  assert.equal(linked.linked, 1);
+  assert.ok(db.prepare("SELECT series_key FROM scheduled_matches WHERE id=?").get(filled.id).series_key);
+  assert.equal(db.prepare("SELECT stage FROM series WHERE league_id=?").get(leagueId).stage, "playoff");
+});
+
 test("patch distance weights maps by how far the balance has moved", async () => {
   const { attachPatchWeights } = await import("../server/core/draft-model.mjs");
   const rows = [
@@ -644,6 +736,12 @@ test("a double-elimination bracket's wiring is derived from its rounds", async (
   assert.equal(played.champion, "s1");
   assert.equal(played.winners.get("R4M1"), "s1", "the top seed reaches the upper final");
   assert.equal(played.winners.get("R4M2"), "s2", "the second seed comes back through the lower bracket");
+
+  const constrained = playBracket(topology, seeds, (a, b) => (rank(a) <= rank(b) ? a : b), {
+    entrantsBySlot: new Map([["R1M1", ["s8", "s7"]]]),
+  });
+  assert.deepEqual(constrained.entrants.get("R1M1"), ["s8", "s7"], "an official pair replaces projected seeds");
+  assert.equal(constrained.winners.get("R1M1"), "s7");
 
   // A shape that is not double elimination is refused rather than mis-drawn.
   assert.equal(buildTopology({ sections: [section("Odd", "upper", ["A1", "A2", "A3"]), section("Next", "upper", ["B1", "B2"])] }), null);
