@@ -15,8 +15,20 @@ export const TRACKED_TIERS = new Set((process.env.TOURNAMENT_TIERS || "premium,p
 export const HISTORY_WINDOW_SECONDS = Math.max(30 * DAY, Number(process.env.TOURNAMENT_HISTORY_DAYS || 540) * DAY);
 
 const EXCLUDED_TOURNAMENT_PATTERNS = [
-  /\bstreamers?\s+battles?\b/i,
-  /стример(?:ск(?:ий|ая|ое|ие))?\s+батл/i,
+  // English names used by recurring creator/show circuits.
+  /\bstreamers?\b/i,
+  /\bmedia\s*(?:e-?\s*)?(?:league|cup|tournament|battle)\b/i,
+  /\bcontent\s*creators?\b/i,
+  /\binfluencers?\b/i,
+  /\bcelebrity\s+(?:showmatch|match|cup|tournament)\b/i,
+  /\bshow\s*-?\s*matches?\b/i,
+  // Russian variants seen in local organiser titles.
+  /стример/i,
+  /медиа\s*-?\s*(?:лига|кубок|турнир|батл)/i,
+  /шоу\s*-?\s*матч/i,
+  /инфлюенсер/i,
+  /контент\s*-?\s*мейкер/i,
+  /(?:матч|кубок|турнир|лига)\s+блогер/i,
 ];
 
 export function isExcludedTournamentName(name) {
@@ -24,7 +36,7 @@ export function isExcludedTournamentName(name) {
   return EXCLUDED_TOURNAMENT_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-/** Keep excluded show events for audit, but remove them from every active pool. */
+/** Keep excluded creator/media events for audit, but remove them from every active pool. */
 export function applyTournamentExclusions(db) {
   const rows = db.prepare("SELECT league_id, name FROM tournaments WHERE tracked=1").all();
   const ids = rows.filter((row) => isExcludedTournamentName(row.name)).map((row) => Number(row.league_id));

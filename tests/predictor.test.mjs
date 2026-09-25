@@ -68,9 +68,15 @@ test("streamer show tournaments are excluded from every model data pool", () => 
   for (const name of [
     "BETBOOM Streamers Battle Dota 15",
     "BetBoom Streamer Battle 8",
+    "1win Streamers League #1",
+    "FONBET MEDIA ELEAGUE SEASON 4 DOTA2 2026",
+    "Celebrity Showmatch Cup",
+    "Кубок блогеров",
     "Стримерский батл",
   ]) assert.equal(isExcludedTournamentName(name), true, name);
   assert.equal(isExcludedTournamentName("Battle of the Champions"), false);
+  assert.equal(isExcludedTournamentName("REDRAGON Battle Series DOTA2"), false);
+  assert.equal(isExcludedTournamentName("Esports World Cup 2026"), false);
 
   const leagueId = 900000;
   upsertTournament(db, { leagueId, name: "BETBOOM Streamers Battle Dota 15", tier: "professional" });
